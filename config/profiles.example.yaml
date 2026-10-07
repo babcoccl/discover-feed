@@ -1,0 +1,70 @@
+# Example profiles. Copy to config/profiles.yaml (git-ignored) and edit.
+# Any value may reference environment variables: ${VAR} or ${VAR:-default}.
+# Never put real API keys in this file.
+
+profiles:
+  - id: personal-reader
+    name: Personal Reader
+    description: Long-form tech, science and culture reading, summarised daily.
+    topics: [technology, science, programming, design]
+    keywords: [python, open source, space, climate]
+    sources:
+      - name: Hacker News
+        type: rss
+        url: https://hnrss.org/frontpage
+        poll_interval_minutes: 30
+        tags: [tech]
+      - name: Ars Technica
+        type: rss
+        url: https://feeds.arstechnica.com/arstechnica/index
+        tags: [tech, science]
+      - name: Quanta Magazine
+        type: rss
+        url: https://www.quantamagazine.org/feed/
+        poll_interval_minutes: 120
+        tags: [science]
+    alert_rules:
+      - name: Python releases
+        keywords: [python, release]
+        match: all
+        sources: [Hacker News]
+    llm:
+      base_url: https://api.openai.com/v1
+      api_key: ${OPENAI_API_KEY:-}
+      model: gpt-4o-mini
+
+  - id: market-monitor
+    name: Market Monitor
+    description: Watches markets and macro news, alerting on high-signal events.
+    topics: [markets, macroeconomics, earnings, central banks]
+    keywords: [fed, rate cut, inflation, earnings, guidance]
+    sources:
+      - name: Federal Reserve press releases
+        type: rss
+        url: https://www.federalreserve.gov/feeds/press_all.xml
+        poll_interval_minutes: 15
+        tags: [macro]
+      - name: SEC press releases
+        type: rss
+        url: https://www.sec.gov/news/pressreleases.rss
+        tags: [regulation]
+      - name: CNBC Markets
+        type: rss
+        url: https://www.cnbc.com/id/20910258/device/rss/rss.html
+        poll_interval_minutes: 10
+        tags: [markets]
+    alert_rules:
+      - name: Rate decisions
+        keywords: [fomc, rate decision, federal funds rate]
+        match: any
+        min_score: 0.7
+        sources: [Federal Reserve press releases, CNBC Markets]
+      - name: Enforcement actions
+        keywords: [charges, settlement, enforcement]
+        sources: [SEC press releases]
+    llm:
+      # Any OpenAI-compatible server works, e.g. a local Ollama / vLLM instance.
+      base_url: ${LOCAL_LLM_BASE_URL:-http://localhost:11434/v1}
+      api_key: ${LOCAL_LLM_API_KEY:-}
+      model: ${LOCAL_LLM_MODEL:-llama3.1:8b}
+      temperature: 0.0

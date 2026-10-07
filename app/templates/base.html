@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Discover Feed{% endblock %}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/htmx.org@2.0.3" crossorigin="anonymous"></script>
+</head>
+<body class="bg-slate-50 text-slate-900 min-h-screen">
+  <header class="border-b bg-white">
+    <div class="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
+      <a href="/" class="text-xl font-semibold">Discover Feed</a>
+      <nav class="text-sm space-x-4 text-slate-600">
+        <a href="/docs" class="hover:text-slate-900">API docs</a>
+        <a href="/health" class="hover:text-slate-900">Health</a>
+      </nav>
+    </div>
+  </header>
+  <main class="max-w-4xl mx-auto px-4 py-8">
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="max-w-4xl mx-auto px-4 py-6 text-xs text-slate-400">v{{ version }}</footer>
+</body>
+</html>
