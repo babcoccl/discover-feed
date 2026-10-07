@@ -12,7 +12,7 @@ profiles:
       - name: Hacker News
         type: rss
         url: https://hnrss.org/frontpage
-        poll_interval_minutes: 30
+        refresh_minutes: 30
         tags: [tech]
       - name: Ars Technica
         type: rss
@@ -21,7 +21,7 @@ profiles:
       - name: Quanta Magazine
         type: rss
         url: https://www.quantamagazine.org/feed/
-        poll_interval_minutes: 120
+        refresh_minutes: 120
         tags: [science]
     alert_rules:
       - name: Python releases
@@ -42,7 +42,7 @@ profiles:
       - name: Federal Reserve press releases
         type: rss
         url: https://www.federalreserve.gov/feeds/press_all.xml
-        poll_interval_minutes: 15
+        refresh_minutes: 15
         tags: [macro]
       - name: SEC press releases
         type: rss
@@ -51,7 +51,7 @@ profiles:
       - name: CNBC Markets
         type: rss
         url: https://www.cnbc.com/id/20910258/device/rss/rss.html
-        poll_interval_minutes: 10
+        refresh_minutes: 10
         tags: [markets]
     alert_rules:
       - name: Rate decisions

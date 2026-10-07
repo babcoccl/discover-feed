@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+     xmlns:dc="http://purl.org/dc/elements/1.1/"
+     xmlns:media="http://search.yahoo.com/mrss/"
+     xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>Example Tech Daily</title>
+    <link>https://www.example-tech.com/</link>
+    <description>Technology news, analysis and reviews.</description>
+    <language>en-us</language>
+    <lastBuildDate>Tue, 06 Oct 2026 18:30:00 +0000</lastBuildDate>
+    <item>
+      <title>Python 3.15 &amp; the new JIT: what changes for you</title>
+      <link>https://www.example-tech.com/2026/10/python-315-jit/</link>
+      <guid isPermaLink="false">example-tech-90210</guid>
+      <dc:creator>Ada Lovelace</dc:creator>
+      <pubDate>Tue, 06 Oct 2026 17:00:00 +0000</pubDate>
+      <description><![CDATA[<p>The <strong>new JIT</strong> lands in 3.15.</p><p>Benchmarks show a <a href="https://example-tech.com/bench">10&ndash;30% speedup</a>.</p><script>trackView()</script>]]></description>
+      <media:content url="https://cdn.example-tech.com/img/python-jit.jpg" medium="image" width="1200" height="630"/>
+    </item>
+    <item>
+      <title>   Open-source maintainers get a new funding model   </title>
+      <link>https://www.example-tech.com/2026/10/oss-funding?ref=rss</link>
+      <guid isPermaLink="false">example-tech-90211</guid>
+      <dc:creator>Grace Hopper</dc:creator>
+      <pubDate>Tue, 06 Oct 2026 15:45:00 +0200</pubDate>
+      <description><![CDATA[<div class="lede">
+        Foundations   pool money
+        for critical   infrastructure.
+      </div><img src="https://cdn.example-tech.com/img/oss.png" alt="">]]></description>
+    </item>
+    <item>
+      <title>Review: the Framework Laptop 16, two years on</title>
+      <link>https://www.example-tech.com/reviews/framework-16/</link>
+      <guid isPermaLink="false">example-tech-90212</guid>
+      <pubDate>Mon, 05 Oct 2026 09:00:00 GMT</pubDate>
+      <description>Still the most repairable laptop you can buy.</description>
+      <enclosure url="https://cdn.example-tech.com/img/framework.webp" type="image/webp" length="48213"/>
+    </item>
+  </channel>
+</rss>

@@ -1,7 +1,9 @@
 from pathlib import Path
 
+import httpx
 from fastapi.testclient import TestClient
 
+from app.ingest import Ingestor
 from app.main import create_app
 from app.settings import Settings
 
@@ -26,7 +28,7 @@ def test_home_lists_profiles(client: TestClient) -> None:
 def test_openapi_docs(client: TestClient) -> None:
     assert client.get("/docs").status_code == 200
     schema = client.get("/openapi.json").json()
-    assert "/health" in schema["paths"]
+    assert {"/health", "/api/articles", "/api/admin/refresh"} <= set(schema["paths"])
 
 
 def test_missing_config_starts_empty(tmp_path: Path) -> None:
@@ -51,3 +53,81 @@ def test_scheduler_starts_and_stops(tmp_path: Path) -> None:
     with TestClient(app):
         assert app.state.scheduler.running
     assert not app.state.scheduler.running
+
+
+def _refresh_transport() -> httpx.MockTransport:
+    from tests.conftest import fixture_bytes
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "hnrss.org":
+            return httpx.Response(200, content=fixture_bytes("tech_rss.xml"))
+        if request.url.host == "www.quantamagazine.org":
+            return httpx.Response(200, content=fixture_bytes("science_atom.xml"))
+        return httpx.Response(500)
+
+    return httpx.MockTransport(handler)
+
+
+def test_refresh_and_list_articles(client: TestClient) -> None:
+    app = client.app
+    app.state.ingestor = Ingestor(app.state.session_factory, transport=_refresh_transport())
+
+    resp = client.post("/api/admin/refresh")
+    assert resp.status_code == 200
+    results = {r["source_id"]: r for r in resp.json()["results"]}
+    assert len(results) == 6
+    assert results["hacker-news"]["new_articles"] == 3
+    assert results["quanta-magazine"]["new_articles"] == 2
+    assert results["ars-technica"]["status"] == "error"
+
+    body = client.get("/api/articles").json()
+    assert len(body) == 5
+    published = [a["published_at"] for a in body]
+    assert published == sorted(published, reverse=True)
+    assert set(body[0]) == {
+        "id",
+        "source_id",
+        "canonical_url",
+        "title",
+        "summary_raw",
+        "author",
+        "published_at",
+        "fetched_at",
+        "image_url",
+        "content_hash",
+    }
+    assert body[0]["title"] == "Webb spots water vapour on a temperate exoplanet"
+    assert body[0]["published_at"] == "2026-10-06T18:30:00Z"
+
+    assert len(client.get("/api/articles?limit=2").json()) == 2
+    only = client.get("/api/articles?source_id=quanta-magazine").json()
+    assert {a["source_id"] for a in only} == {"quanta-magazine"} and len(only) == 2
+    since = client.get("/api/articles", params={"since": "2026-10-06T00:00:00Z"}).json()
+    assert len(since) == 3
+    assert client.get("/api/articles?limit=0").status_code == 422
+
+
+def test_refresh_single_source(client: TestClient) -> None:
+    app = client.app
+    app.state.ingestor = Ingestor(app.state.session_factory, transport=_refresh_transport())
+
+    resp = client.post("/api/admin/refresh", params={"source_id": "hacker-news"})
+    assert resp.status_code == 200
+    assert [r["source_id"] for r in resp.json()["results"]] == ["hacker-news"]
+    assert client.post("/api/admin/refresh?source_id=nope").status_code == 404
+
+
+def test_scheduler_registers_ingestion_jobs(tmp_path: Path) -> None:
+    from tests.conftest import EXAMPLE_CONFIG
+
+    settings = Settings(
+        config_path=EXAMPLE_CONFIG,
+        database_url=f"sqlite:///{tmp_path / 'test.db'}",
+        scheduler_enabled=True,
+    )
+    app = create_app(settings)
+    with TestClient(app):
+        app.state.scheduler.pause()
+        ids = {job.id for job in app.state.scheduler.get_jobs()}
+        assert ids == {f"ingest:{s.id}" for s in app.state.config.all_sources()}
+        assert len(ids) == 6

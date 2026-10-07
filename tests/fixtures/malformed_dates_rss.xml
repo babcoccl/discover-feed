@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Local Gazette</title>
+    <link>http://gazette.example.net</link>
+    <description>Community news.</description>
+    <item>
+      <title>Council approves new bike lanes</title>
+      <link>http://gazette.example.net/news/bike-lanes</link>
+      <pubDate>Thursday, 32 Smarch 2026 25:61:00 PST</pubDate>
+      <description>The vote passed 7-2.</description>
+    </item>
+    <item>
+      <title>Library extends weekend hours</title>
+      <link>http://gazette.example.net/news/library-hours</link>
+      <description>Open until 8pm on Saturdays.</description>
+    </item>
+    <item>
+      <title>Farmers market returns</title>
+      <link>http://gazette.example.net/news/farmers-market</link>
+      <pubDate>Sun, 04 Oct 2026 07:30:00 -0700</pubDate>
+      <description>Every Sunday through November.</description>
+    </item>
+  </channel>
+</rss>

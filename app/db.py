@@ -24,6 +24,8 @@ def make_session_factory(engine: Engine) -> sessionmaker:
 
 
 def init_db(engine: Engine) -> None:
+    from app import models  # noqa: F401  (registers tables on Base.metadata)
+
     Base.metadata.create_all(engine)
 
 

@@ -13,7 +13,15 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, SecretStr, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    SecretStr,
+    model_validator,
+)
 
 _SLUG = r"^[a-z0-9][a-z0-9_-]*$"
 _ENV_VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
@@ -40,13 +48,34 @@ class SourceType(StrEnum):
     API = "api"
 
 
+def slugify(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+
+
 class Source(_Model):
+    id: str = Field(
+        default="",
+        pattern=r"^$|" + _SLUG,
+        description="Stable source id shared across profiles; defaults to a slug of `name`.",
+    )
     name: str = Field(min_length=1)
     type: SourceType = SourceType.RSS
     url: HttpUrl
     enabled: bool = True
-    poll_interval_minutes: int = Field(default=60, ge=1)
+    refresh_minutes: int = Field(
+        default=30,
+        ge=1,
+        validation_alias=AliasChoices("refresh_minutes", "poll_interval_minutes"),
+    )
     tags: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _default_id(self) -> "Source":
+        if not self.id:
+            self.id = slugify(self.name)
+        if not self.id:
+            raise ValueError(f"cannot derive an id from source name {self.name!r}; set `id`")
+        return self
 
 
 class MatchMode(StrEnum):
@@ -100,7 +129,28 @@ class AppConfig(_Model):
         dupes = {i for i in ids if ids.count(i) > 1}
         if dupes:
             raise ValueError(f"duplicate profile ids: {sorted(dupes)}")
+        seen: dict[str, Source] = {}
+        for profile in self.profiles:
+            for source in profile.sources:
+                other = seen.setdefault(source.id, source)
+                if (other.url, other.type) != (source.url, source.type):
+                    raise ValueError(
+                        f"source id {source.id!r} is used for different feeds; "
+                        "give one of them an explicit `id`"
+                    )
         return self
+
+    def all_sources(self, *, enabled_only: bool = True) -> list[Source]:
+        """Unique sources across all profiles, keyed by source id (first definition wins)."""
+        unique: dict[str, Source] = {}
+        for profile in self.profiles:
+            for source in profile.sources:
+                if source.enabled or not enabled_only:
+                    unique.setdefault(source.id, source)
+        return list(unique.values())
+
+    def get_source(self, source_id: str) -> Source | None:
+        return next((s for s in self.all_sources(enabled_only=False) if s.id == source_id), None)
 
     def get_profile(self, profile_id: str) -> Profile | None:
         return next((p for p in self.profiles if p.id == profile_id), None)
