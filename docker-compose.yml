@@ -1,0 +1,21 @@
+services:
+  app:
+    build: .
+    image: discover-feed:local
+    ports:
+      - "8000:8000"
+    environment:
+      # Falls back to the example profiles until you create config/profiles.yaml.
+      DISCOVER_CONFIG_PATH: ${DISCOVER_CONFIG_PATH:-/app/config/profiles.example.yaml}
+      DISCOVER_LOG_LEVEL: ${DISCOVER_LOG_LEVEL:-info}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-}
+      LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:-}
+      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-}
+    volumes:
+      - discover-data:/data
+      - ./config:/app/config:ro
+    restart: unless-stopped
+
+volumes:
+  discover-data:
