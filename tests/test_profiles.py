@@ -401,7 +401,7 @@ def test_demo_builds_isolated_db_with_enough_articles_and_visible_topic_spread(
     tmp_path: Path,
 ) -> None:
     settings, results = build_demo(tmp_path / "demo.db")
-    assert settings.database_url == f"sqlite:///{tmp_path / 'demo.db'}"
+    assert settings.database_url == f"sqlite:///{(tmp_path / 'demo.db').as_posix()}"
     assert not settings.scheduler_enabled
     assert len(results) == 6 and all(r.status == "ok" and r.new_articles >= 7 for r in results)
     from app.db import make_engine, make_session_factory

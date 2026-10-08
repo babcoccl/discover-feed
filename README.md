@@ -60,6 +60,20 @@ A topic is a feed tab: an article matches when any `include` keyword appears as 
 make demo   # throwaway DB + fixture feeds (no network) on http://localhost:8000
 ```
 
+### Demo on Windows (no make)
+
+Install [Python 3.12+](https://www.python.org/downloads/) (tick "Add python.exe to PATH"), then
+double-click `demo.cmd` in the repo folder, or run it from a terminal:
+
+```bat
+demo.cmd                 :: http://localhost:8000, opens your browser
+demo.cmd --port 8001 --no-open
+```
+
+The first run creates `.venv` and installs the dependencies (needs internet). Later runs
+reinstall only when `pyproject.toml` changes. Press Ctrl+C to stop. The same launcher works
+anywhere: `python scripts/demo.py`.
+
 ## Development
 
 ```bash
@@ -69,6 +83,10 @@ make lint
 make test
 make run
 ```
+
+Without make (e.g. Windows), run the same commands directly from the activated venv
+(`.venv\Scripts\activate`): `python -m pip install -e ".[dev]"`, `python -m ruff check .`,
+`python -m ruff format --check .`, `python -m pytest`, `python -m uvicorn app.main:app --reload`.
 
 ## Configuration
 

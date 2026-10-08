@@ -1,4 +1,4 @@
-"""`make demo`: a throwaway DB seeded from the example profiles and loaded from fixture feeds.
+"""Throwaway demo DB seeded from the example profiles and fixture feeds (`make demo`, demo.cmd).
 
 No network is used for feeds: every source URL is served from ``tests/fixtures/demo/<id>.xml``
 through ``httpx.MockTransport``. The DB lives in ``.demo/`` and is recreated on every run,
@@ -7,6 +7,8 @@ so the real database (``./data`` or the Docker volume) is never touched.
 
 import argparse
 import asyncio
+import threading
+import webbrowser
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -47,11 +49,16 @@ def build_demo(
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     for suffix in ("", "-journal", "-wal", "-shm"):
-        Path(f"{db_path}{suffix}").unlink(missing_ok=True)
+        try:
+            Path(f"{db_path}{suffix}").unlink(missing_ok=True)
+        except PermissionError as exc:  # Windows keeps files open by a running demo locked
+            raise SystemExit(
+                f"Cannot replace {db_path}: is another demo still running? Stop it and retry."
+            ) from exc
 
     settings = Settings(
         config_path=config_path,
-        database_url=f"sqlite:///{db_path}",
+        database_url=f"sqlite:///{db_path.as_posix()}",
         scheduler_enabled=False,
     )
     engine = make_engine(settings.database_url)
@@ -76,12 +83,21 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument(
+        "--open",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="open the demo in the default browser once it starts",
+    )
     args = parser.parse_args()
 
     settings, results = build_demo()
     for r in results:
         print(f"  {r.source_id:<32} {r.status:<6} {r.new_articles} articles")
-    print(f"Demo DB: {DEMO_DB}\nOpen http://localhost:{args.port}/")
+    url = f"http://localhost:{args.port}/"
+    print(f"Demo DB: {DEMO_DB}\nOpen {url}  (Ctrl+C to stop)")
+    if args.open:
+        threading.Timer(1.5, webbrowser.open, args=(url,)).start()
     uvicorn.run(create_app(settings), host=args.host, port=args.port)
 
 
