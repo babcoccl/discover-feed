@@ -12,7 +12,8 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 from app.sources.base import RawArticle
 
-_TRACKING_PARAMS = {"fbclid", "gclid", "dclid", "msclkid", "mc_cid", "mc_eid", "igshid"}
+# Only these (plus utm_*) are dropped from the dedup key; every other param can matter.
+_TRACKING_PARAMS = {"fbclid", "gclid", "mc_cid", "mc_eid", "ref", "ref_src"}
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 _WS = re.compile(r"\s+")
 _DOMAIN_PREFIXES = ("www.", "m.", "amp.", "mobile.")
@@ -61,12 +62,17 @@ def strip_html(value: str | None) -> str:
     return clean_text("".join(parser.parts))
 
 
-def canonicalize_url(url: str, base: str | None = None) -> str:
-    """Lowercase scheme/host; drop default ports, tracking params, fragments, trailing slashes."""
+def clean_url(url: str, base: str | None = None) -> str:
+    """The feed's permalink with minimal cleanup: trimmed and resolved against the feed URL."""
     url = url.strip()
-    if base:
-        url = urljoin(base, url)
-    parts = urlsplit(url)
+    return urljoin(base, url) if base else url
+
+
+def canonicalize_url(url: str, base: str | None = None) -> str:
+    """Dedup key only, never a link: lowercase scheme/host, drop default port, fragment and
+    tracking params (utm_*, fbclid, ...). The path (trailing slash included) and all other
+    params are kept; params are sorted."""
+    parts = urlsplit(clean_url(url, base))
     scheme = parts.scheme.lower()
     host = (parts.hostname or "").lower()
     if parts.port and parts.port != _DEFAULT_PORTS.get(scheme):
@@ -74,7 +80,7 @@ def canonicalize_url(url: str, base: str | None = None) -> str:
     if parts.username:
         userinfo = parts.username + (f":{parts.password}" if parts.password else "")
         host = f"{userinfo}@{host}"
-    path = re.sub(r"/{2,}", "/", parts.path).rstrip("/") or "/"
+    path = parts.path or "/"
     query = sorted(
         (k, v)
         for k, v in parse_qsl(parts.query, keep_blank_values=True)
@@ -122,6 +128,7 @@ def parse_date(value: str | None) -> datetime | None:
 @dataclass(frozen=True)
 class NormalizedArticle:
     source_id: str
+    url: str
     canonical_url: str
     title: str
     summary_raw: str
@@ -139,21 +146,23 @@ def normalize(
     """Returns None if the item has no usable http(s) URL (it can't be deduplicated)."""
     if not raw.url or not raw.url.strip():
         return None
-    url = canonicalize_url(raw.url, base_url)
-    if urlsplit(url).scheme not in ("http", "https"):
+    url = clean_url(raw.url, base_url)
+    if urlsplit(url).scheme.lower() not in ("http", "https"):
         return None
+    canonical = canonicalize_url(url)
     title = strip_html(raw.title)
     published = raw.published_at and to_utc(raw.published_at)
     image_url = urljoin(base_url or "", raw.image_url.strip()) if raw.image_url else None
     return NormalizedArticle(
         source_id=source_id,
-        canonical_url=url,
+        url=url,
+        canonical_url=canonical,
         title=title,
         summary_raw=strip_html(raw.summary),
         author=clean_text(raw.author) or None,
         published_at=published or parse_date(raw.published_raw) or to_utc(fetched_at),
         fetched_at=to_utc(fetched_at),
         image_url=image_url,
-        content_hash=content_hash(title, url),
+        content_hash=content_hash(title, canonical),
         raw_json=raw.raw,
     )

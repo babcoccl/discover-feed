@@ -83,7 +83,8 @@ def test_ingests_and_normalizes_all_fixtures(session_factory) -> None:
         "wire": ("ok", 2),
     }
     stored = {a.canonical_url: a for a in articles(session_factory)}
-    jit = stored["https://www.example-tech.com/2026/10/python-315-jit"]
+    jit = stored["https://www.example-tech.com/2026/10/python-315-jit/"]
+    assert jit.url == "https://www.example-tech.com/2026/10/python-315-jit/"
     assert jit.title == "Python 3.15 & the new JIT: what changes for you"
     assert jit.summary_raw == "The new JIT lands in 3.15. Benchmarks show a 10\u201330% speedup."
     assert jit.published_at == datetime(2026, 10, 6, 17, 0, tzinfo=UTC)
@@ -98,7 +99,8 @@ def test_ingests_and_normalizes_all_fixtures(session_factory) -> None:
     market = stored["http://gazette.example.net/news/farmers-market"]
     assert market.published_at == datetime(2026, 10, 4, 14, 30, tzinfo=UTC)
 
-    webb = stored["https://science.example.org/articles/webb-water-vapour"]
+    webb = stored["https://science.example.org/articles/webb-water-vapour/"]
+    assert webb.url == "https://Science.Example.org/articles/webb-water-vapour/#comments"
     assert webb.title == "Webb spots water vapour on a temperate exoplanet"
     assert webb.published_at == datetime(2026, 10, 6, 18, 30, tzinfo=UTC)
 
@@ -123,7 +125,11 @@ def test_urls_differing_only_by_tracking_params_produce_one_article(session_fact
 
     fed = [a for a in articles(session_factory) if a.title.startswith("Fed holds")]
     assert len(fed) == 1
-    assert fed[0].canonical_url == "https://www.markets-wire.example.com/news/fed-holds-rates"
+    assert fed[0].canonical_url == "https://www.markets-wire.example.com/news/fed-holds-rates/"
+    assert fed[0].url == (
+        "https://www.markets-wire.example.com/news/fed-holds-rates/"
+        "?utm_source=rss&utm_medium=feed&utm_campaign=markets"
+    )
 
 
 def test_tracking_param_duplicates_across_sources_and_runs(session_factory) -> None:
@@ -132,7 +138,7 @@ def test_tracking_param_duplicates_across_sources_and_runs(session_factory) -> N
     urls = iter(
         [
             b"https://news.example/story?utm_source=a&amp;utm_medium=rss",
-            b"https://news.example/story/?utm_source=b&amp;utm_campaign=c#x",
+            b"https://news.example/story?utm_source=b&amp;utm_campaign=c#x",
         ]
     )
     ingestor = make_ingestor(

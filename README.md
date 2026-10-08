@@ -55,6 +55,9 @@ A topic is a feed tab: an article matches when any `include` keyword appears as 
   `GET /api/profiles/{slug}/feed?topic=&limit=&cursor=&time_field=published|fetched`
   (pass the returned `next_cursor` to get the next page), and
   `POST /api/profiles/{slug}/topics`, `PUT`/`DELETE /api/profiles/{slug}/topics/{id}`.
+- Articles carry two URLs: `url` is the feed's own permalink (trimmed, relative links resolved)
+  and is what cards and the API expose as the link; `canonical_url` (lowercased host, no fragment,
+  `utm_*`/`fbclid`/`gclid`/`mc_cid`/`mc_eid`/`ref`/`ref_src` removed) is only the dedup key.
 
 ```bash
 make demo   # throwaway DB + fixture feeds (no network) on http://localhost:8000

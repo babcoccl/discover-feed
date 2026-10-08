@@ -4,6 +4,7 @@ import pytest
 
 from app.normalize import (
     canonicalize_url,
+    clean_url,
     content_hash,
     normalize,
     parse_date,
@@ -18,10 +19,10 @@ FETCHED = datetime(2026, 10, 7, 12, 0, tzinfo=UTC)
 @pytest.mark.parametrize(
     ("url", "expected"),
     [
-        ("HTTPS://WWW.Example.COM/Path/", "https://www.example.com/Path"),
+        ("HTTPS://WWW.Example.COM/Path/", "https://www.example.com/Path/"),
         ("https://example.com", "https://example.com/"),
         ("https://example.com/", "https://example.com/"),
-        ("https://example.com:443/a//b/", "https://example.com/a/b"),
+        ("https://example.com:443/a//b/", "https://example.com/a//b/"),
         ("http://example.com:8080/a", "http://example.com:8080/a"),
         ("https://example.com/a#section-2", "https://example.com/a"),
         (
@@ -39,7 +40,61 @@ def test_canonicalize_url(url: str, expected: str) -> None:
 def test_canonicalize_resolves_relative_urls() -> None:
     assert (
         canonicalize_url("/news/x/", base="https://site.example/feed.xml")
-        == "https://site.example/news/x"
+        == "https://site.example/news/x/"
+    )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://example.com/a/",
+        "https://example.com/a/b/",
+        "https://example.com/a/?page=2",
+        "https://example.com/",
+    ],
+)
+def test_canonicalize_keeps_trailing_slash(url: str) -> None:
+    assert canonicalize_url(url) == url
+
+
+@pytest.mark.parametrize(
+    "param",
+    [
+        "utm_source",
+        "utm_medium",
+        "utm_campaign",
+        "utm_term",
+        "utm_content",
+        "UTM_Source",
+        "fbclid",
+        "gclid",
+        "mc_cid",
+        "mc_eid",
+        "ref",
+        "ref_src",
+    ],
+)
+def test_canonicalize_drops_each_tracking_param(param: str) -> None:
+    assert canonicalize_url(f"https://example.com/a/?{param}=x&page=2") == (
+        "https://example.com/a/?page=2"
+    )
+
+
+@pytest.mark.parametrize(
+    "query",
+    ["id=7", "v=abc", "page=2", "source=rss", "referrer=x", "share=1", "dclid=1", "p=123"],
+)
+def test_canonicalize_keeps_other_params(query: str) -> None:
+    assert canonicalize_url(f"https://example.com/a?{query}&utm_source=x") == (
+        f"https://example.com/a?{query}"
+    )
+
+
+def test_clean_url_only_trims_and_resolves() -> None:
+    raw = "  https://Example.com/Story/?utm_source=rss&id=1#c  "
+    assert clean_url(raw) == "https://Example.com/Story/?utm_source=rss&id=1#c"
+    assert clean_url("/news/x/?a=1", "https://site.example/feed.xml") == (
+        "https://site.example/news/x/?a=1"
     )
 
 
@@ -89,7 +144,8 @@ def test_normalize_falls_back_to_fetched_at_and_trims() -> None:
     )
     item = normalize(raw, source_id="s", fetched_at=FETCHED, base_url="https://example.com/feed")
     assert item is not None
-    assert item.canonical_url == "https://example.com/story"
+    assert item.url == "https://Example.com/story/?utm_source=x"
+    assert item.canonical_url == "https://example.com/story/"
     assert item.title == "Big news"
     assert item.summary_raw == "Some text"
     assert item.author == "Jane Doe"

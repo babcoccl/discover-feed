@@ -90,6 +90,7 @@ def test_refresh_and_list_articles(client: TestClient) -> None:
     assert set(body[0]) == {
         "id",
         "source_id",
+        "url",
         "canonical_url",
         "title",
         "summary_raw",

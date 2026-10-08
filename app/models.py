@@ -46,7 +46,10 @@ class Article(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     source_id: Mapped[str] = mapped_column(String(100), index=True)
+    url: Mapped[str] = mapped_column(String(2048), default="", server_default="")
+    """The feed's permalink: what users see and click."""
     canonical_url: Mapped[str] = mapped_column(String(2048), unique=True)
+    """Normalized URL used only for deduplication."""
     title: Mapped[str] = mapped_column(Text, default="")
     summary_raw: Mapped[str] = mapped_column(Text, default="")
     author: Mapped[str | None] = mapped_column(String(500))
