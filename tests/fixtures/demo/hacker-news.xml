@@ -7,7 +7,7 @@
     <lastBuildDate>Wed, 07 Oct 2026 15:30:00 +0000</lastBuildDate>
     <item>
       <title>Show HN: A local LLM that runs on a Raspberry Pi 5</title>
-      <link>https://github.com/pi-llm/pi-llm</link>
+      <link>https://github.com/ggml-org/llama.cpp</link>
       <guid isPermaLink="false">hacker-news-1</guid>
       <pubDate>Wed, 07 Oct 2026 15:00:00 +0000</pubDate>
       <dc:creator>user7</dc:creator>
@@ -16,7 +16,7 @@
     </item>
     <item>
       <title>Why airline seat maps lie to you</title>
-      <link>https://www.seatmath.net/blog/seat-maps</link>
+      <link>https://en.wikipedia.org/wiki/Airline_seat</link>
       <guid isPermaLink="false">hacker-news-2</guid>
       <pubDate>Wed, 07 Oct 2026 08:30:00 +0000</pubDate>
       <dc:creator>user8</dc:creator>
@@ -25,7 +25,7 @@
     </item>
     <item>
       <title>Ask HN: How do you organize homework for a kids' coding club?</title>
-      <link>https://news.ycombinator.com/item?id=41800001</link>
+      <link>https://scratch.mit.edu/</link>
       <guid isPermaLink="false">hacker-news-3</guid>
       <pubDate>Wed, 07 Oct 2026 02:00:00 +0000</pubDate>
       <dc:creator>user9</dc:creator>
@@ -34,7 +34,7 @@
     </item>
     <item>
       <title>The economics of heat pump retrofits in old homes</title>
-      <link>https://www.buildingscience.blog/heat-pump-retrofits</link>
+      <link>https://en.wikipedia.org/wiki/Heat_pump</link>
       <guid isPermaLink="false">hacker-news-4</guid>
       <pubDate>Tue, 06 Oct 2026 19:30:00 +0000</pubDate>
       <dc:creator>user10</dc:creator>
@@ -52,7 +52,7 @@
     </item>
     <item>
       <title>Training a neural network to read train timetables</title>
-      <link>https://blog.railhacks.dev/timetable-ocr</link>
+      <link>https://en.wikipedia.org/wiki/Optical_character_recognition</link>
       <guid isPermaLink="false">hacker-news-6</guid>
       <pubDate>Tue, 06 Oct 2026 06:30:00 +0000</pubDate>
       <dc:creator>user12</dc:creator>
@@ -61,7 +61,7 @@
     </item>
     <item>
       <title>Mail carriers said the new handheld scanners slow them down</title>
-      <link>https://www.postaltimes.example.org/scanners</link>
+      <link>https://en.wikipedia.org/wiki/United_States_Postal_Service</link>
       <guid isPermaLink="false">hacker-news-7</guid>
       <pubDate>Tue, 06 Oct 2026 00:00:00 +0000</pubDate>
       <dc:creator>user13</dc:creator>

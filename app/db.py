@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from sqlalchemy import Engine, create_engine, text
+from sqlalchemy import Engine, create_engine, inspect, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
@@ -27,6 +27,28 @@ def init_db(engine: Engine) -> None:
     from app import models  # noqa: F401  (registers tables on Base.metadata)
 
     Base.metadata.create_all(engine)
+    _add_article_url(engine)
+
+
+def _add_article_url(engine: Engine) -> None:
+    """Pre-`url` DBs: add the column, backfilled from the stored feed entry's link, else from
+    canonical_url."""
+    with engine.begin() as conn:
+        if "url" in {c["name"] for c in inspect(conn).get_columns("articles")}:
+            return
+        conn.execute(text("ALTER TABLE articles ADD COLUMN url VARCHAR(2048) NOT NULL DEFAULT ''"))
+        conn.execute(
+            text(
+                """
+                UPDATE articles SET url = CASE
+                    WHEN json_valid(raw_json)
+                         AND lower(trim(json_extract(raw_json, '$.link'))) LIKE 'http%'
+                    THEN trim(json_extract(raw_json, '$.link'))
+                    ELSE canonical_url
+                END
+                """
+            )
+        )
 
 
 def ping(engine: Engine) -> bool:

@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
@@ -434,3 +435,46 @@ def test_settings_reject_poll_interval_alias_and_default_time_field(client: Test
     time_field = next(p for p in params if p["name"] == "time_field")
     assert time_field["schema"]["default"] == "published"
     assert Settings(contact_email="me@example.com").contact_email == "me@example.com"
+
+
+RAW_LINK = "https://News.Example.com/2026/10/raw-link-story/?utm_source=rss&id=42#comments"
+
+
+def _ingest_raw_link(client: TestClient) -> None:
+    import asyncio
+
+    from app.ingest import Ingestor
+
+    feed = (
+        '<rss version="2.0"><channel><title>t</title><item><title>Raw link story</title>'
+        f"<link> {RAW_LINK.replace('&', '&amp;')} </link>"
+        "<pubDate>Wed, 07 Oct 2026 23:00:00 GMT</pubDate></item></channel></rss>"
+    )
+    factory = client.app.state.session_factory
+    with factory() as session:
+        source = next(s for s in active_sources(session) if s.id == "hacker-news")
+    transport = httpx.MockTransport(lambda r: httpx.Response(200, content=feed.encode()))
+    asyncio.run(Ingestor(factory, transport=transport).run([source], force=True))
+
+
+def test_card_href_is_the_feeds_raw_link(demo_client: TestClient) -> None:
+    _ingest_raw_link(demo_client)
+    html = demo_client.get("/p/personal-reader").text
+    href = RAW_LINK.replace("&", "&amp;")
+    assert html.count(f'href="{href}" target="_blank" rel="noopener noreferrer"') == 3
+    assert "raw-link-story?" not in html  # never the canonical (dedup) form
+
+
+def test_articles_api_returns_url_and_canonical_url(demo_client: TestClient) -> None:
+    _ingest_raw_link(demo_client)
+    item = next(
+        a
+        for a in demo_client.get("/api/articles?limit=100").json()
+        if a["title"] == "Raw link story"
+    )
+    assert item["url"] == RAW_LINK
+    assert item["canonical_url"] == "https://news.example.com/2026/10/raw-link-story/?id=42"
+    feed = demo_client.get("/api/profiles/personal-reader/feed?limit=100").json()["items"]
+    assert next(i for i in feed if i["title"] == "Raw link story")["url"] == RAW_LINK
+    schema = demo_client.get("/openapi.json").json()["components"]["schemas"]["ArticleOut"]
+    assert "link to show users" in schema["properties"]["url"]["description"].lower()

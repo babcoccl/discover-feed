@@ -18,7 +18,10 @@ class ArticleOut(BaseModel):
 
     id: int
     source_id: str
-    canonical_url: str
+    url: str = Field(description="Link to show users: the feed's own permalink for the article.")
+    canonical_url: str = Field(
+        description="Normalized URL used only for deduplication; don't link to it."
+    )
     title: str
     summary_raw: str
     author: str | None
