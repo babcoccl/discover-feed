@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.config import AppConfig, Source
@@ -307,3 +307,165 @@ def _like(keyword: str):
         Article.title.ilike(pattern, escape="\\"),
         Article.summary_raw.ilike(pattern, escape="\\"),
     )
+
+
+# --- story feed ----------------------------------------------------------------------------
+
+
+@dataclass
+class StoryItem:
+    """A story as seen from one profile: only members from sources the profile follows.
+
+    Articles not clustered yet are single-member items with ``story_id=None``.
+    """
+
+    story_id: int | None
+    members: list[Article]
+    """Oldest first."""
+    representative: Article
+
+    @property
+    def title(self) -> str:
+        return self.representative.title
+
+    @property
+    def first_seen_at(self) -> datetime:
+        return self.members[0].published_at
+
+    @property
+    def last_updated_at(self) -> datetime:
+        return max(m.published_at for m in self.members)
+
+    @property
+    def source_ids(self) -> list[str]:
+        return list(dict.fromkeys(m.source_id for m in self.members))
+
+    @property
+    def source_count(self) -> int:
+        return len(self.source_ids)
+
+    @property
+    def image_url(self) -> str | None:
+        if self.representative.image_url:
+            return self.representative.image_url
+        return next((m.image_url for m in self.members if m.image_url), None)
+
+    @property
+    def snippet_source(self) -> str:
+        return self.representative.summary_raw or next(
+            (m.summary_raw for m in self.members if m.summary_raw), ""
+        )
+
+    @property
+    def sources(self) -> list[Article]:
+        """First (earliest) article from each source, in order of first coverage."""
+        seen: dict[str, Article] = {}
+        for member in self.members:
+            seen.setdefault(member.source_id, member)
+        return list(seen.values())
+
+
+@dataclass
+class StoryPage:
+    items: list[StoryItem]
+    next_cursor: str | None
+
+
+def story_item(story_id: int | None, members: Sequence[Article]) -> StoryItem:
+    from app.cluster import representative
+    from app.cluster.service import doc
+
+    ordered = sorted(members, key=lambda m: (m.published_at, m.id))
+    rep_id = representative([doc(m) for m in ordered]).id
+    return StoryItem(
+        story_id=story_id,
+        members=ordered,
+        representative=next(m for m in ordered if m.id == rep_id),
+    )
+
+
+def get_story(session: Session, story_id: int, profile: ProfileRecord | None = None):
+    """A story with all its members, or only the profile's members (None if none are left)."""
+    stmt = select(Article).where(Article.story_id == story_id)
+    if profile is not None:
+        stmt = stmt.where(Article.source_id.in_([s.id for s in profile.sources]))
+    members = list(session.scalars(stmt))
+    return story_item(story_id, members) if members else None
+
+
+def story_feed_page(
+    session: Session,
+    profile: ProfileRecord,
+    topic: Topic | None = None,
+    *,
+    limit: int = 24,
+    cursor: str | None = None,
+) -> StoryPage:
+    """Newest-first stories (by latest visible member) from the profile's sources.
+
+    A story matches ``topic`` when any of its visible members (the representative included)
+    matches. Unclustered articles are listed as single-article items.
+    """
+    rule = topic_rule(topic) if topic else TopicRule()
+    profile_source_ids = {s.id for s in profile.sources}
+    source_ids = sorted(
+        profile_source_ids & set(rule.source_ids) if rule.source_ids else profile_source_ids
+    )
+    if not source_ids:
+        return StoryPage(items=[], next_cursor=None)
+
+    # Group key: story id, or -article id for an article not clustered yet.
+    key = case((Article.story_id.is_(None), -Article.id), else_=Article.story_id)
+    latest = func.max(Article.published_at)
+    base = select(key.label("key"), latest.label("latest")).where(Article.source_id.in_(source_ids))
+    base = base.group_by(key)
+    if rule.include and all(keyword.isascii() for keyword in rule.include):
+        hit = or_(*(_like(keyword) for keyword in rule.include))
+        base = base.having(func.max(case((hit, 1), else_=0)) == 1)
+    base = base.order_by(latest.desc(), key.desc())
+
+    position = decode_cursor(cursor) if cursor else None
+    batch_size = max(limit * 3, 100)
+    found: list[tuple[datetime, int, StoryItem]] = []
+    while len(found) <= limit:
+        stmt = base.limit(batch_size)
+        if position is not None:
+            at, last_key = position
+            stmt = stmt.having(or_(latest < at, and_(latest == at, key < last_key)))
+        rows = session.execute(stmt).all()
+        members = _group_members(session, [row.key for row in rows], source_ids)
+        for row in rows:
+            group = members.get(row.key, [])
+            if group and any(
+                matches(rule, title=m.title, summary=m.summary_raw, source_id=m.source_id)
+                for m in group
+            ):
+                found.append(
+                    (row.latest, row.key, story_item(row.key if row.key > 0 else None, group))
+                )
+                if len(found) > limit:
+                    break
+        if len(rows) < batch_size:
+            break
+        position = (rows[-1].latest, rows[-1].key)
+
+    items = found[:limit]
+    next_cursor = encode_cursor(items[-1][0], items[-1][1]) if len(found) > limit else None
+    return StoryPage(items=[item for _, _, item in items], next_cursor=next_cursor)
+
+
+def _group_members(
+    session: Session, keys: Sequence[int], source_ids: Sequence[str]
+) -> dict[int, list[Article]]:
+    story_ids = [k for k in keys if k > 0]
+    article_ids = [-k for k in keys if k < 0]
+    if not keys:
+        return {}
+    stmt = select(Article).where(
+        Article.source_id.in_(source_ids),
+        or_(Article.story_id.in_(story_ids), Article.id.in_(article_ids)),
+    )
+    groups: dict[int, list[Article]] = {}
+    for article in session.scalars(stmt):
+        groups.setdefault(article.story_id or -article.id, []).append(article)
+    return groups

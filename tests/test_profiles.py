@@ -209,6 +209,8 @@ def test_profiles_api(client: TestClient) -> None:
         "hacker-news",
         "ars-technica",
         "quanta-magazine",
+        "the-verge",
+        "techcrunch",
     }
     assert detail["topics"][0]["include_keywords"][0] == "AI"
     assert client.get("/api/profiles/nope").status_code == 404
@@ -216,31 +218,52 @@ def test_profiles_api(client: TestClient) -> None:
 
 def test_feed_api_filters_paginates_and_names_sources(demo_client: TestClient) -> None:
     base = "/api/profiles/personal-reader"
-    all_items = demo_client.get(f"{base}/feed", params={"limit": 100}).json()["items"]
+    all_items = demo_client.get(f"{base}/feed", params={"group": "articles", "limit": 100}).json()[
+        "items"
+    ]
     assert len(all_items) >= 15
     assert {i["source_name"] for i in all_items} == {
         "Hacker News",
         "Ars Technica",
         "Quanta Magazine",
+        "The Verge",
+        "TechCrunch",
     }
     ai = next(t for t in demo_client.get(base).json()["topics"] if t["name"] == "AI")
-    ai_feed = demo_client.get(f"{base}/feed", params={"topic": ai["id"], "limit": 100}).json()
+    ai_feed = demo_client.get(
+        f"{base}/feed", params={"group": "articles", "topic": ai["id"], "limit": 100}
+    ).json()
     assert ai_feed["topic"]["name"] == "AI"
     assert 0 < len(ai_feed["items"]) < len(all_items)
 
-    first = demo_client.get(f"{base}/feed", params={"limit": 5}).json()
+    first = demo_client.get(f"{base}/feed", params={"group": "articles", "limit": 5}).json()
     second = demo_client.get(
-        f"{base}/feed", params={"limit": 5, "cursor": first["next_cursor"]}
+        f"{base}/feed", params={"group": "articles", "limit": 5, "cursor": first["next_cursor"]}
     ).json()
     assert [i["id"] for i in first["items"] + second["items"]] == [i["id"] for i in all_items[:10]]
     published = [i["published_at"] for i in all_items]
     assert published == sorted(published, reverse=True)
-    fetched = demo_client.get(f"{base}/feed", params={"time_field": "fetched", "limit": 3})
+    fetched = demo_client.get(
+        f"{base}/feed", params={"group": "articles", "time_field": "fetched", "limit": 3}
+    )
     assert fetched.status_code == 200 and len(fetched.json()["items"]) == 3
 
-    assert demo_client.get(f"{base}/feed", params={"cursor": "garbage"}).status_code == 422
-    assert demo_client.get(f"{base}/feed", params={"topic": 9999}).status_code == 404
-    assert demo_client.get(f"{base}/feed", params={"time_field": "nope"}).status_code == 422
+    assert (
+        demo_client.get(
+            f"{base}/feed", params={"group": "articles", "cursor": "garbage"}
+        ).status_code
+        == 422
+    )
+    assert (
+        demo_client.get(f"{base}/feed", params={"group": "articles", "topic": 9999}).status_code
+        == 404
+    )
+    assert (
+        demo_client.get(
+            f"{base}/feed", params={"group": "articles", "time_field": "nope"}
+        ).status_code
+        == 422
+    )
 
 
 def test_topic_crud_api_changes_feed_immediately(demo_client: TestClient) -> None:
@@ -252,7 +275,9 @@ def test_topic_crud_api_changes_feed_immediately(demo_client: TestClient) -> Non
     assert resp.status_code == 201
     topic = resp.json()
     assert topic["position"] == 3 and topic["enabled"] is True
-    items = demo_client.get(f"{base}/feed", params={"topic": topic["id"]}).json()["items"]
+    items = demo_client.get(
+        f"{base}/feed", params={"group": "articles", "topic": topic["id"]}
+    ).json()["items"]
     assert [i["title"] for i in items] == ["NASA's Artemis III crew begins final training"]
 
     resp = demo_client.put(
@@ -262,7 +287,9 @@ def test_topic_crud_api_changes_feed_immediately(demo_client: TestClient) -> Non
     assert resp.status_code == 200
     names = [t["name"] for t in demo_client.get(base).json()["topics"]]
     assert names == ["Science", "AI", "Home", "Travel"]
-    items = demo_client.get(f"{base}/feed", params={"topic": topic["id"]}).json()["items"]
+    items = demo_client.get(
+        f"{base}/feed", params={"group": "articles", "topic": topic["id"]}
+    ).json()["items"]
     assert items and all("physics" in (i["title"] + i["summary_raw"]).lower() for i in items)
 
     assert demo_client.post(f"{base}/topics", json={"name": "ai"}).status_code == 409
@@ -303,7 +330,7 @@ def test_profile_page_renders_tabs_cards_and_switcher(demo_client: TestClient) -
     for text in ('aria-current="page"', ">All</a>", ">AI</a>", ">Home</a>", ">Travel</a>"):
         assert text in html
     assert 'id="profile-switcher"' in html and "Market Monitor" in html
-    assert html.count("<article") == 21
+    assert html.count("<article") == 24
     assert 'target="_blank" rel="noopener noreferrer"' in html
     assert "https://picsum.photos/seed/ars-technica-1/800/450" in html
     assert "Read on Hacker News" in html
@@ -404,7 +431,7 @@ def test_demo_builds_isolated_db_with_enough_articles_and_visible_topic_spread(
     settings, results = build_demo(tmp_path / "demo.db")
     assert settings.database_url == f"sqlite:///{(tmp_path / 'demo.db').as_posix()}"
     assert not settings.scheduler_enabled
-    assert len(results) == 6 and all(r.status == "ok" and r.new_articles >= 7 for r in results)
+    assert len(results) == 10 and all(r.status == "ok" and r.new_articles >= 3 for r in results)
     from app.db import make_engine, make_session_factory
 
     engine = make_engine(settings.database_url)
@@ -421,7 +448,7 @@ def test_demo_builds_isolated_db_with_enough_articles_and_visible_topic_spread(
 
     # Rebuilding starts from scratch (throwaway DB).
     _, again = build_demo(tmp_path / "demo.db")
-    assert sum(r.new_articles for r in again) == 42
+    assert sum(r.new_articles for r in again) == 66
 
 
 def test_settings_reject_poll_interval_alias_and_default_time_field(client: TestClient) -> None:
@@ -474,7 +501,7 @@ def test_articles_api_returns_url_and_canonical_url(demo_client: TestClient) -> 
     )
     assert item["url"] == RAW_LINK
     assert item["canonical_url"] == "https://news.example.com/2026/10/raw-link-story/?id=42"
-    feed = demo_client.get("/api/profiles/personal-reader/feed?limit=100").json()["items"]
-    assert next(i for i in feed if i["title"] == "Raw link story")["url"] == RAW_LINK
+    feed = demo_client.get("/api/profiles/personal-reader/feed?group=articles&limit=100").json()
+    assert next(i for i in feed["items"] if i["title"] == "Raw link story")["url"] == RAW_LINK
     schema = demo_client.get("/openapi.json").json()["components"]["schemas"]["ArticleOut"]
     assert "link to show users" in schema["properties"]["url"]["description"].lower()

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:media="http://search.yahoo.com/mrss/">
+  <channel>
+    <title>The Verge</title>
+    <link>https://www.theverge.com</link>
+    <description>Demo fixture feed for the-verge.</description>
+    <lastBuildDate>Wed, 07 Oct 2026 19:30:00 +0000</lastBuildDate>
+    <item>
+      <title>Apple's M5 MacBook Pro is here with a brighter display and 24-hour battery life</title>
+      <link>https://www.theverge.com/news/2026/10/7/apple-m5-macbook-pro-announced</link>
+      <guid isPermaLink="false">the-verge-1</guid>
+      <pubDate>Wed, 07 Oct 2026 17:05:00 +0000</pubDate>
+      <description><![CDATA[<p>Apple has refreshed the 14-inch and 16-inch MacBook Pro with M5, M5 Pro and M5 Max chips, a brighter mini-LED screen and up to 24 hours of battery life.</p>]]></description>
+      <media:content url="https://picsum.photos/seed/the-verge-1/800/450" medium="image" width="800" height="450"/>
+    </item>
+    <item>
+      <title>Apple recalls Beats Pill speakers over overheating batteries</title>
+      <link>https://www.theverge.com/news/2026/10/7/beats-pill-recall-battery-overheating</link>
+      <guid isPermaLink="false">the-verge-2</guid>
+      <pubDate>Wed, 07 Oct 2026 15:10:00 +0000</pubDate>
+      <description><![CDATA[<p>Apple is recalling about 200,000 Beats Pill speakers after reports that the battery can overheat while charging.</p>]]></description>
+      <media:content url="https://picsum.photos/seed/the-verge-2/800/450" medium="image" width="800" height="450"/>
+    </item>
+    <item>
+      <title>Amazon Web Services is down, taking a big chunk of the internet with it</title>
+      <link>https://www.theverge.com/news/2026/10/7/aws-amazon-web-services-outage-down</link>
+      <guid isPermaLink="false">the-verge-3</guid>
+      <pubDate>Wed, 07 Oct 2026 09:55:00 +0000</pubDate>
+      <description><![CDATA[<p>An AWS outage in the US-EAST-1 region is breaking apps and websites, from Slack and Venmo to Ring doorbells and Fortnite.</p>]]></description>
+      <media:content url="https://picsum.photos/seed/the-verge-3/800/450" medium="image" width="800" height="450"/>
+    </item>
+    <item>
+      <title>Valve's Steam Frame headset gets a November release date</title>
+      <link>https://www.theverge.com/news/2026/10/7/valve-steam-frame-release-date</link>
+      <guid isPermaLink="false">the-verge-4</guid>
+      <pubDate>Wed, 07 Oct 2026 12:20:00 +0000</pubDate>
+      <description><![CDATA[<p>Valve's standalone VR headset will ship on November 12th, starting at $599 for the 256GB model.</p>]]></description>
+      <media:content url="https://picsum.photos/seed/the-verge-4/800/450" medium="image" width="800" height="450"/>
+    </item>
+  </channel>
+</rss>

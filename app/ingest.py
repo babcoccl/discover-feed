@@ -18,6 +18,7 @@ from sqlalchemy.orm import sessionmaker
 from app.config import Source
 from app.models import Article, SourceStatus, utcnow
 from app.normalize import NormalizedArticle, normalize, normalize_title
+from app.runs import record_run
 from app.sources import FetchState, RawArticle, create_adapter
 
 logger = logging.getLogger(__name__)
@@ -105,7 +106,23 @@ class Ingestor:
         ``force`` ignores the failure backoff (used for manual refreshes).
         """
         async with self._client() as client:
-            return list(await asyncio.gather(*(self._run_one(client, s, force) for s in sources)))
+            results = list(
+                await asyncio.gather(*(self._run_one(client, s, force) for s in sources))
+            )
+        try:
+            record_run(
+                self.session_factory,
+                "ingest",
+                {
+                    "sources": [r.source_id for r in results],
+                    "ok": sum(r.status == "ok" for r in results),
+                    "errors": sum(r.status == "error" for r in results),
+                    "new_articles": sum(r.new_articles or 0 for r in results),
+                },
+            )
+        except Exception:
+            logger.exception("could not record ingestion run")
+        return results
 
     def run_blocking(self, sources: Sequence[Source], *, force: bool = False) -> None:
         """Entry point for scheduler threads."""

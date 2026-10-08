@@ -1,0 +1,39 @@
+{%- macro run_cell(name) -%}
+{%- set run = runs.get(name) -%}
+{% if run and run.last_run_at %}<time datetime="{{ run.last_run_at.isoformat() }}" title="{{ run.last_run_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ run.last_run_at | reltime }}</time>{% else %}<span class="text-slate-400">not yet</span>{% endif %}
+{%- endmacro -%}
+{%- set ingest = (runs.get("ingest").last_result if runs.get("ingest") else {}) or {} -%}
+{%- set extract = (runs.get("extract").last_result if runs.get("extract") else {}) or {} -%}
+{%- set cluster = (runs.get("cluster").last_result if runs.get("cluster") else {}) or {} -%}
+<dl class="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+  {% for status in ("ok", "pending", "failed", "skipped") %}
+  <div class="rounded-xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-800 dark:bg-slate-900">
+    <dt class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Text {{ status }}</dt>
+    <dd class="text-xl font-semibold">{{ text_counts[status] }}</dd>
+  </div>
+  {% endfor %}
+</dl>
+<div class="overflow-x-auto rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+  <table class="min-w-full text-left text-sm">
+    <thead class="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500 dark:border-slate-800 dark:text-slate-400">
+      <tr><th class="px-4 py-2 font-medium">Step</th><th class="px-4 py-2 font-medium">Last run</th><th class="px-4 py-2 font-medium">Result</th></tr>
+    </thead>
+    <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+      <tr>
+        <td class="px-4 py-2 font-medium">Ingestion</td>
+        <td class="whitespace-nowrap px-4 py-2">{{ run_cell("ingest") }}</td>
+        <td class="px-4 py-2 text-slate-600 dark:text-slate-400">{% if ingest %}{{ ingest.sources | length }} source(s), {{ ingest.new_articles }} new article(s){% if ingest.errors %}, {{ ingest.errors }} error(s){% endif %}{% endif %}</td>
+      </tr>
+      <tr>
+        <td class="px-4 py-2 font-medium">Text extraction</td>
+        <td class="whitespace-nowrap px-4 py-2">{{ run_cell("extract") }}</td>
+        <td class="px-4 py-2 text-slate-600 dark:text-slate-400">{% if extract %}{{ extract.processed }} processed: {{ extract.ok }} ok, {{ extract.failed }} failed, {{ extract.skipped }} skipped{% endif %}</td>
+      </tr>
+      <tr>
+        <td class="px-4 py-2 font-medium">Story clustering</td>
+        <td class="whitespace-nowrap px-4 py-2">{{ run_cell("cluster") }}</td>
+        <td class="px-4 py-2 text-slate-600 dark:text-slate-400">{% if cluster %}{{ cluster.processed }} article(s) assigned{% if cluster.rebuild %} (rebuild){% endif %}; {{ cluster.stories }} stories, {{ cluster.multi_source_stories }} with 2+ sources{% endif %}</td>
+      </tr>
+    </tbody>
+  </table>
+</div>

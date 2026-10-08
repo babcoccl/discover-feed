@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any
 
 from sqlalchemy import (
@@ -58,6 +59,49 @@ class Article(Base):
     image_url: Mapped[str | None] = mapped_column(String(2048))
     content_hash: Mapped[str] = mapped_column(String(64), index=True)
     raw_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    text: Mapped[str | None] = mapped_column(Text)
+    """Extracted article body. Internal only (clustering, later summaries); never displayed."""
+    text_status: Mapped[str] = mapped_column(
+        String(10), default="pending", server_default="pending", index=True
+    )
+    text_fetched_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    word_count: Mapped[int | None] = mapped_column(Integer)
+    story_id: Mapped[int | None] = mapped_column(
+        ForeignKey("stories.id", ondelete="SET NULL"), index=True
+    )
+
+
+class TextStatus(StrEnum):
+    PENDING = "pending"
+    OK = "ok"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+class Story(Base):
+    """A group of articles about the same event, from one or more sources (profile-agnostic)."""
+
+    __tablename__ = "stories"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(Text, default="")
+    representative_article_id: Mapped[int | None] = mapped_column(Integer)
+    first_seen_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    """Earliest member published_at."""
+    last_updated_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+    """Latest member published_at."""
+    article_count: Mapped[int] = mapped_column(Integer, default=0)
+    source_count: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class PipelineRun(Base):
+    """Last run of each pipeline step (ingest, extract, cluster)."""
+
+    __tablename__ = "pipeline_runs"
+
+    name: Mapped[str] = mapped_column(String(20), primary_key=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    last_result: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
 class SourceStatus(Base):

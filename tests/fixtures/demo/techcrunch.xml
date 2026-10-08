@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:media="http://search.yahoo.com/mrss/">
+  <channel>
+    <title>TechCrunch</title>
+    <link>https://techcrunch.com</link>
+    <description>Demo fixture feed for techcrunch.</description>
+    <lastBuildDate>Wed, 07 Oct 2026 19:30:00 +0000</lastBuildDate>
+    <item>
+      <title>Apple refreshes MacBook Pro lineup with M5 chips, starting at $1,599</title>
+      <link>https://techcrunch.com/2026/10/07/apple-refreshes-macbook-pro-lineup-with-m5-chips/</link>
+      <guid isPermaLink="false">techcrunch-1</guid>
+      <pubDate>Wed, 07 Oct 2026 17:20:00 +0000</pubDate>
+      <description><![CDATA[<p>The new 14- and 16-inch MacBook Pro models get Apple's M5 family of chips, Thunderbolt 5 across the board and a brighter display. They ship October 15.</p>]]></description>
+      <media:content url="https://picsum.photos/seed/techcrunch-1/800/450" medium="image" width="800" height="450"/>
+    </item>
+    <item>
+      <title>AWS outage in US-EAST-1 knocks Slack, Venmo and Ring offline</title>
+      <link>https://techcrunch.com/2026/10/07/aws-outage-us-east-1-slack-venmo-ring/</link>
+      <guid isPermaLink="false">techcrunch-2</guid>
+      <pubDate>Wed, 07 Oct 2026 09:40:00 +0000</pubDate>
+      <description><![CDATA[<p>A major Amazon Web Services outage centered on its US-EAST-1 region in northern Virginia is disrupting Slack, Venmo, Ring, Fortnite and many other apps.</p>]]></description>
+      <media:content url="https://picsum.photos/seed/techcrunch-2/800/450" medium="image" width="800" height="450"/>
+    </item>
+    <item>
+      <title>AWS launches Graviton5 servers promising 40% better price performance</title>
+      <link>https://techcrunch.com/2026/10/07/aws-graviton5-ec2-instances-launch/</link>
+      <guid isPermaLink="false">techcrunch-3</guid>
+      <pubDate>Wed, 07 Oct 2026 16:30:00 +0000</pubDate>
+      <description><![CDATA[<p>Amazon Web Services has made its Arm-based Graviton5 chips generally available in new EC2 instances, claiming 40% better price performance.</p>]]></description>
+      <media:content url="https://picsum.photos/seed/techcrunch-3/800/450" medium="image" width="800" height="450"/>
+    </item>
+    <item>
+      <title>Crypto lending startup Nimbus and its CEO charged with fraud by the SEC</title>
+      <link>https://techcrunch.com/2026/10/06/nimbus-crypto-lending-sec-charges/</link>
+      <guid isPermaLink="false">techcrunch-4</guid>
+      <pubDate>Tue, 06 Oct 2026 16:10:00 +0000</pubDate>
+      <description><![CDATA[<p>Nimbus, a venture-backed crypto lending startup, and its founder Mark Ellery were charged by the SEC over a $1.2 billion scheme involving its Yield Vault product.</p>]]></description>
+      <media:content url="https://picsum.photos/seed/techcrunch-4/800/450" medium="image" width="800" height="450"/>
+    </item>
+    <item>
+      <title>Rivian opens its first fast-charging hub in Europe</title>
+      <link>https://techcrunch.com/2026/10/07/rivian-europe-charging-hub/</link>
+      <guid isPermaLink="false">techcrunch-5</guid>
+      <pubDate>Wed, 07 Oct 2026 08:15:00 +0000</pubDate>
+      <description><![CDATA[<p>Rivian's first Adventure Network site outside North America opens near Amsterdam with 24 chargers open to all electric vehicles.</p>]]></description>
+      <media:content url="https://picsum.photos/seed/techcrunch-5/800/450" medium="image" width="800" height="450"/>
+    </item>
+  </channel>
+</rss>

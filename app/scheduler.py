@@ -7,6 +7,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from app.config import Source
 from app.ingest import Ingestor
+from app.pipeline import Pipeline
 
 
 def create_scheduler() -> BackgroundScheduler:
@@ -39,3 +40,23 @@ def schedule_ingestion(
             max_instances=1,
             next_run_time=now + timedelta(seconds=random.uniform(1, max(jitter, 1))),
         )
+
+
+def schedule_pipeline(
+    scheduler: BackgroundScheduler,
+    pipeline: Pipeline,
+    *,
+    interval_minutes: int = 15,
+    first_run_delay_seconds: int = 120,
+) -> None:
+    """Extract + cluster on its own interval; the first run waits for the initial ingestion."""
+    scheduler.add_job(
+        pipeline.run_blocking,
+        trigger=IntervalTrigger(minutes=interval_minutes),
+        id="pipeline",
+        name="Extract text and cluster stories",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+        next_run_time=datetime.now(UTC) + timedelta(seconds=first_run_delay_seconds),
+    )

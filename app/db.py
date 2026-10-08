@@ -28,6 +28,7 @@ def init_db(engine: Engine) -> None:
 
     Base.metadata.create_all(engine)
     _add_article_url(engine)
+    _add_article_pipeline_columns(engine)
 
 
 def _add_article_url(engine: Engine) -> None:
@@ -49,6 +50,28 @@ def _add_article_url(engine: Engine) -> None:
                 """
             )
         )
+
+
+_PIPELINE_COLUMNS = {
+    "text": "TEXT",
+    "text_status": "VARCHAR(10) NOT NULL DEFAULT 'pending'",
+    "text_fetched_at": "DATETIME",
+    "word_count": "INTEGER",
+    "story_id": "INTEGER REFERENCES stories(id) ON DELETE SET NULL",
+}
+
+
+def _add_article_pipeline_columns(engine: Engine) -> None:
+    """Pre-extraction DBs: add the text/story columns (existing rows start as `pending`)."""
+    with engine.begin() as conn:
+        existing = {c["name"] for c in inspect(conn).get_columns("articles")}
+        for name, ddl in _PIPELINE_COLUMNS.items():
+            if name not in existing:
+                conn.execute(text(f"ALTER TABLE articles ADD COLUMN {name} {ddl}"))
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_articles_text_status ON articles (text_status)")
+        )
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_articles_story_id ON articles (story_id)"))
 
 
 def ping(engine: Engine) -> bool:

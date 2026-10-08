@@ -17,6 +17,20 @@ class Settings(BaseSettings):
     contact_email: str | None = None
     log_level: str = "info"
 
+    # Text extraction (app/extract.py)
+    extract_interval_minutes: int = 15
+    extract_max_articles: int = 50
+    extract_timeout_seconds: float = 10.0
+    extract_max_bytes: int = 2 * 1024 * 1024
+    extract_min_words: int = 80
+    extract_domain_delay_seconds: float = 2.0
+
+    # Story clustering (app/cluster); see README "Tuning clustering"
+    cluster_threshold: float = 0.45
+    cluster_window_hours: float = 72
+    cluster_same_source_threshold: float = 0.7
+    cluster_min_shared_tokens: int = 2
+
 
 @lru_cache
 def get_settings() -> Settings:

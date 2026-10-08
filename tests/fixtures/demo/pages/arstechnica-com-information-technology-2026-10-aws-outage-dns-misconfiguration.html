@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Amazon blames DNS misconfiguration for hours-long AWS outage | ars-technica</title>
+  <meta name="description" content="Amazon says a faulty DNS update for DynamoDB in US-EAST-1 triggered the outage that took Slack, Venmo and Ring offline for hours.">
+</head>
+<body>
+  <header>
+    <a href="/">ars-technica</a>
+    <nav><a href="/news">News</a> <a href="/tech">Tech</a> <a href="/business">Business</a> <a href="/newsletters">Newsletters</a> <a href="/subscribe">Subscribe</a></nav>
+  </header>
+  <main>
+    <article>
+      <h1>Amazon blames DNS misconfiguration for hours-long AWS outage</h1>
+      <p class="byline">Published 2026-10-07 14:10 UTC</p>
+      <p>Amazon has published a preliminary explanation of Wednesday's AWS outage: an automated DNS update left the endpoint for DynamoDB in the US-EAST-1 region resolving to an empty record. Services that depend on DynamoDB, including EC2 and Lambda, began failing, and the outage spread to customer apps such as Slack, Venmo, Ring and Fortnite.</p>
+      <p>AWS engineers corrected the DNS record within about two hours, but the full recovery took nearly seven hours because of throttled EC2 launches and a large backlog of queued requests in northern Virginia.</p>
+      <p>Amazon says it has disabled the automation that made the change and will add safeguards before re-enabling it. Critics point out that many companies still run critical systems only in US-EAST-1, so a failure in one AWS region can take a large part of the internet offline.</p>
+    </article>
+    <aside>
+      <h2>Most popular</h2>
+      <ul><li><a href="/1">The best laptops to buy right now</a></li><li><a href="/2">Sign up for our daily newsletter</a></li></ul>
+    </aside>
+  </main>
+  <footer>&copy; 2026 ars-technica. <a href="/terms">Terms of use</a> <a href="/privacy">Privacy policy</a> <a href="#">Cookie settings</a></footer>
+</body>
+</html>
