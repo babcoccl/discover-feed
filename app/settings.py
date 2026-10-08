@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     scheduler_enabled: bool = True
     fetch_timeout_seconds: float = 10.0
     refresh_jitter_seconds: int = 60
+    contact_email: str | None = None
     log_level: str = "info"
 
 

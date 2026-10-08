@@ -14,7 +14,6 @@ from typing import Any
 
 import yaml
 from pydantic import (
-    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
@@ -62,11 +61,7 @@ class Source(_Model):
     type: SourceType = SourceType.RSS
     url: HttpUrl
     enabled: bool = True
-    refresh_minutes: int = Field(
-        default=30,
-        ge=1,
-        validation_alias=AliasChoices("refresh_minutes", "poll_interval_minutes"),
-    )
+    refresh_minutes: int = Field(default=30, ge=1)
     tags: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")

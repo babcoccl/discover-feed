@@ -57,7 +57,14 @@ class SourceAdapter(ABC):
 
     @abstractmethod
     async def fetch(self, source: Source, state: FetchState | None = None) -> list[RawArticle]:
-        """Fetch the current items of ``source``. Raises on failure."""
+        """Fetch the current items of ``source``. Raises (ideally ``FetchError``) on failure.
+
+        ``state`` carries the HTTP validators (ETag / Last-Modified) persisted for this source.
+        HTTP feed adapters send them as conditional-request headers, store the new validators
+        on it, and set ``state.not_modified = True`` (returning ``[]``) on a 304. Adapters with
+        no conditional-request support (e.g. JSON APIs) may ignore ``state`` entirely; the
+        caller then always treats the returned items as a full fetch and deduplicates them.
+        """
 
 
 _REGISTRY: dict[SourceType, type[SourceAdapter]] = {}

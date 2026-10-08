@@ -8,6 +8,7 @@ services:
       # Falls back to the example profiles until you create config/profiles.yaml.
       DISCOVER_CONFIG_PATH: ${DISCOVER_CONFIG_PATH:-/app/config/profiles.example.yaml}
       DISCOVER_LOG_LEVEL: ${DISCOVER_LOG_LEVEL:-info}
+      DISCOVER_CONTACT_EMAIL: ${DISCOVER_CONTACT_EMAIL:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-}
       LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:-}

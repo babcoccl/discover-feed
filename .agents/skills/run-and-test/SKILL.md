@@ -36,7 +36,9 @@ Notes:
 - DB: `DISCOVER_DATABASE_URL` (default `sqlite:///./data/discover.db`; `/data` volume in Docker).
 - YAML values support `${VAR}` / `${VAR:-default}`; keep API keys in env / `.env`, never in the repo.
 - Endpoints: `/` placeholder page, `/health`, `/docs`, `/openapi.json`,
-  `GET /api/articles?limit=&source_id=&since=`, `POST /api/admin/refresh[?source_id=]`.
+  `GET /api/articles?limit=&source_id=&since=&time_field=published|fetched`, `POST /api/admin/refresh[?source_id=]`.
+- `DISCOVER_CONTACT_EMAIL` is appended to the fetch User-Agent; startup logs a warning if an
+  SEC source is configured without it.
 - With the scheduler enabled the app fetches every configured feed within
   `DISCOVER_REFRESH_JITTER_SECONDS` (60) of startup. Tests never hit the network: they use
   `httpx.MockTransport` + `tests/fixtures/*.xml`; keep it that way.

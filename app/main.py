@@ -11,7 +11,7 @@ from fastapi.templating import Jinja2Templates
 from app.api import router as api_router
 from app.config import AppConfig, load_config
 from app.db import init_db, make_engine, make_session_factory, ping
-from app.ingest import Ingestor
+from app.ingest import Ingestor, build_user_agent, sources_requiring_contact
 from app.scheduler import create_scheduler, schedule_ingestion
 from app.settings import Settings, get_settings
 
@@ -35,6 +35,18 @@ def _load_profiles(settings: Settings) -> AppConfig:
     return config
 
 
+def _warn_missing_contact(config: AppConfig, settings: Settings) -> None:
+    if settings.contact_email:
+        return
+    for source in sources_requiring_contact(config.all_sources()):
+        logger.warning(
+            "Source %r (%s) expects a contact in the User-Agent and may block requests "
+            "without one; set DISCOVER_CONTACT_EMAIL",
+            source.id,
+            source.url.host,
+        )
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
 
@@ -48,8 +60,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.session_factory = make_session_factory(engine)
         app.state.config = _load_profiles(settings)
         app.state.ingestor = Ingestor(
-            app.state.session_factory, timeout=settings.fetch_timeout_seconds
+            app.state.session_factory,
+            timeout=settings.fetch_timeout_seconds,
+            user_agent=build_user_agent(settings.contact_email),
         )
+        _warn_missing_contact(app.state.config, settings)
         scheduler = create_scheduler()
         if settings.scheduler_enabled:
             schedule_ingestion(

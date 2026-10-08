@@ -30,11 +30,13 @@ back off exponentially.
 curl -X POST localhost:8000/api/admin/refresh                     # all sources now
 curl -X POST 'localhost:8000/api/admin/refresh?source_id=hacker-news'
 curl 'localhost:8000/api/articles?limit=5&source_id=hacker-news&since=2026-10-01T00:00:00Z'
+curl 'localhost:8000/api/articles?since=2026-10-07T08:00:00Z&time_field=fetched'  # new since last look
 ```
 
 A source's id defaults to a slug of its `name` (set `id:` explicitly to keep it stable
 across renames). New source kinds plug in via `app/sources/base.py` (`SourceAdapter` +
-`@register(SourceType...)`).
+`@register(SourceType...)`). The optional `state` argument of `fetch()` carries
+ETag/Last-Modified for conditional requests; adapters without them can ignore it.
 
 ## Development
 
@@ -61,3 +63,4 @@ make run
 | `DISCOVER_LOG_LEVEL` | `info` |
 | `DISCOVER_FETCH_TIMEOUT_SECONDS` | `10` |
 | `DISCOVER_REFRESH_JITTER_SECONDS` | `60` |
+| `DISCOVER_CONTACT_EMAIL` | unset; appended to the fetch User-Agent. Set it if you use SEC feeds (startup warns otherwise). |

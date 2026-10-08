@@ -17,6 +17,7 @@ profiles:
       - name: Ars Technica
         type: rss
         url: https://feeds.arstechnica.com/arstechnica/index
+        # refresh_minutes defaults to 30
         tags: [tech, science]
       - name: Quanta Magazine
         type: rss
@@ -44,6 +45,7 @@ profiles:
         url: https://www.federalreserve.gov/feeds/press_all.xml
         refresh_minutes: 15
         tags: [macro]
+      # sec.gov asks for a contact in the User-Agent: set DISCOVER_CONTACT_EMAIL.
       - name: SEC press releases
         type: rss
         url: https://www.sec.gov/news/pressreleases.rss
