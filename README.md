@@ -5,7 +5,7 @@ news-feed monitor driven by **profiles** (topics, sources, keywords, alert rules
 and an OpenAI-compatible LLM endpoint).
 
 Stack: Python 3.12, FastAPI, SQLAlchemy + SQLite, APScheduler, Jinja2 + HTMX +
-Tailwind (CDN). Ingestion and LLM calls are not implemented yet.
+Tailwind (CDN). RSS/Atom ingestion is implemented; LLM calls are not yet.
 
 ## Quick start
 
@@ -15,6 +15,26 @@ curl localhost:8000/health
 ```
 
 Then open http://localhost:8000 (placeholder page) or http://localhost:8000/docs.
+
+## Ingestion
+
+Every enabled source in every profile gets an APScheduler job that runs every
+`refresh_minutes` (default 30, plus jitter). Feeds are fetched with `httpx`
+(10s timeout, conditional GETs via ETag/Last-Modified), parsed with `feedparser`,
+normalized (HTML stripped, URLs canonicalized, dates in UTC) and stored in the
+`articles` table, deduplicated on `canonical_url` and on a title + domain
+`content_hash`. Per-source health lives in `source_status`; repeated failures
+back off exponentially.
+
+```bash
+curl -X POST localhost:8000/api/admin/refresh                     # all sources now
+curl -X POST 'localhost:8000/api/admin/refresh?source_id=hacker-news'
+curl 'localhost:8000/api/articles?limit=5&source_id=hacker-news&since=2026-10-01T00:00:00Z'
+```
+
+A source's id defaults to a slug of its `name` (set `id:` explicitly to keep it stable
+across renames). New source kinds plug in via `app/sources/base.py` (`SourceAdapter` +
+`@register(SourceType...)`).
 
 ## Development
 
@@ -39,3 +59,5 @@ make run
 | `DISCOVER_DATABASE_URL` | `sqlite:///./data/discover.db` (`/data/discover.db` in Docker) |
 | `DISCOVER_SCHEDULER_ENABLED` | `true` |
 | `DISCOVER_LOG_LEVEL` | `info` |
+| `DISCOVER_FETCH_TIMEOUT_SECONDS` | `10` |
+| `DISCOVER_REFRESH_JITTER_SECONDS` | `60` |

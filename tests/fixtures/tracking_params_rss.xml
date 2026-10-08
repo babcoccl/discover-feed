@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Markets Wire</title>
+    <link>https://www.markets-wire.example.com</link>
+    <description>Markets and macro headlines.</description>
+    <item>
+      <title>Fed holds rates steady, signals cuts later this year</title>
+      <link>https://www.markets-wire.example.com/news/fed-holds-rates/?utm_source=rss&amp;utm_medium=feed&amp;utm_campaign=markets</link>
+      <guid isPermaLink="false">mw-1001</guid>
+      <pubDate>Wed, 07 Oct 2026 14:00:00 GMT</pubDate>
+      <description>Policymakers left the federal funds rate unchanged.</description>
+    </item>
+    <item>
+      <title>Fed holds rates steady, signals cuts later this year</title>
+      <link>https://WWW.Markets-Wire.example.com/news/fed-holds-rates?fbclid=IwAR0abc123&amp;utm_content=social#top</link>
+      <guid isPermaLink="false">mw-1001-social</guid>
+      <pubDate>Wed, 07 Oct 2026 14:05:00 GMT</pubDate>
+      <description>Policymakers left the federal funds rate unchanged.</description>
+    </item>
+    <item>
+      <title>Oil climbs as supply concerns mount</title>
+      <link>https://www.markets-wire.example.com/news/oil-climbs?id=77&amp;gclid=Cj0KCQ</link>
+      <guid isPermaLink="false">mw-1002</guid>
+      <pubDate>Wed, 07 Oct 2026 12:30:00 GMT</pubDate>
+      <description>Brent crude rose 2%.</description>
+    </item>
+    <item>
+      <title>Oil Climbs As Supply Concerns Mount!</title>
+      <link>https://markets-wire.example.com/2026/10/07/oil-climbs-as-supply-concerns-mount</link>
+      <guid isPermaLink="false">mw-1002-alt</guid>
+      <pubDate>Wed, 07 Oct 2026 12:31:00 GMT</pubDate>
+      <description>Brent crude rose 2%.</description>
+    </item>
+  </channel>
+</rss>

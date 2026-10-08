@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     config_path: Path = Path("config/profiles.yaml")
     database_url: str = "sqlite:///./data/discover.db"
     scheduler_enabled: bool = True
+    fetch_timeout_seconds: float = 10.0
+    refresh_jitter_seconds: int = 60
     log_level: str = "info"
 
 

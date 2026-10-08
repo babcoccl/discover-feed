@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:media="http://search.yahoo.com/mrss/">
+  <title>Orbital Science Journal</title>
+  <subtitle>Space and physics, explained.</subtitle>
+  <link href="https://science.example.org/" rel="alternate"/>
+  <link href="https://science.example.org/feed.atom" rel="self"/>
+  <id>tag:science.example.org,2026:feed</id>
+  <updated>2026-10-06T20:00:00Z</updated>
+  <entry>
+    <title type="html">Webb spots water vapour on a &lt;em&gt;temperate&lt;/em&gt; exoplanet</title>
+    <link href="https://Science.Example.org/articles/webb-water-vapour/#comments" rel="alternate"/>
+    <link href="https://science.example.org/media/webb.jpg" rel="enclosure" type="image/jpeg" length="102400"/>
+    <id>tag:science.example.org,2026:webb-water</id>
+    <published>2026-10-06T14:30:00-04:00</published>
+    <updated>2026-10-06T19:00:00Z</updated>
+    <author><name>Vera Rubin</name></author>
+    <summary type="html">&lt;p&gt;Spectra from &lt;b&gt;JWST&lt;/b&gt; point to a water-rich atmosphere.&lt;/p&gt;</summary>
+  </entry>
+  <entry>
+    <title>Muon g-2: the final result is in</title>
+    <link href="/articles/muon-g2-final" rel="alternate"/>
+    <id>tag:science.example.org,2026:muon-g2</id>
+    <updated>2026-10-05T08:15:00Z</updated>
+    <author><name>Chien-Shiung Wu</name></author>
+    <content type="html">&lt;p&gt;After two decades, the anomaly &lt;i&gt;narrows&lt;/i&gt;.&lt;/p&gt;</content>
+    <media:thumbnail url="https://science.example.org/media/muon-thumb.jpg"/>
+  </entry>
+</feed>

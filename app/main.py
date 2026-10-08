@@ -8,9 +8,11 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
+from app.api import router as api_router
 from app.config import AppConfig, load_config
 from app.db import init_db, make_engine, make_session_factory, ping
-from app.scheduler import create_scheduler
+from app.ingest import Ingestor
+from app.scheduler import create_scheduler, schedule_ingestion
 from app.settings import Settings, get_settings
 
 logger = logging.getLogger("discover_feed")
@@ -45,8 +47,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.engine = engine
         app.state.session_factory = make_session_factory(engine)
         app.state.config = _load_profiles(settings)
+        app.state.ingestor = Ingestor(
+            app.state.session_factory, timeout=settings.fetch_timeout_seconds
+        )
         scheduler = create_scheduler()
         if settings.scheduler_enabled:
+            schedule_ingestion(
+                scheduler,
+                app.state.config.all_sources(),
+                app.state.ingestor,
+                jitter_seconds=settings.refresh_jitter_seconds,
+            )
             scheduler.start()
         app.state.scheduler = scheduler
         try:
@@ -62,6 +73,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         description="Personal Discover-style news-feed monitor.",
         lifespan=lifespan,
     )
+    app.include_router(api_router)
 
     @app.get("/health", tags=["meta"])
     def health(request: Request) -> JSONResponse:

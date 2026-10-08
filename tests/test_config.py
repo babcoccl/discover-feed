@@ -83,3 +83,47 @@ def test_unknown_fields_rejected() -> None:
 def test_alert_rule_requires_keywords() -> None:
     with pytest.raises(ValidationError):
         AlertRule(name="r", keywords=[])
+
+
+def test_source_id_defaults_to_slug_and_refresh_defaults_to_30() -> None:
+    from app.config import Source
+
+    src = Source(name="Federal Reserve: Press Releases", url="https://fed.example/rss")
+    assert src.id == "federal-reserve-press-releases"
+    assert src.refresh_minutes == 30
+    assert Source(name="x", url="https://x.example/", poll_interval_minutes=5).refresh_minutes == 5
+
+
+def test_all_sources_are_unique_across_profiles() -> None:
+    text = f"""
+profiles:
+  - id: a
+    name: A
+    {MINIMAL_LLM}
+    sources:
+      - {{name: Feed, url: 'https://example.com/rss'}}
+      - {{name: Paused, url: 'https://p.example/', enabled: false}}
+  - id: b
+    name: B
+    {MINIMAL_LLM}
+    sources: [{{name: Feed, url: 'https://example.com/rss'}}]
+"""
+    config = parse_config(text)
+    assert [s.id for s in config.all_sources()] == ["feed"]
+    assert config.get_source("paused") is not None
+
+
+def test_conflicting_source_ids_rejected() -> None:
+    text = f"""
+profiles:
+  - id: a
+    name: A
+    {MINIMAL_LLM}
+    sources: [{{name: Feed, url: 'https://example.com/rss'}}]
+  - id: b
+    name: B
+    {MINIMAL_LLM}
+    sources: [{{name: Feed, url: 'https://other.example/rss'}}]
+"""
+    with pytest.raises(ValidationError, match="source id 'feed'"):
+        parse_config(text)
