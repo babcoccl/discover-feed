@@ -1,11 +1,14 @@
+import logging
 from pathlib import Path
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
-from app.ingest import Ingestor
+from app.ingest import USER_AGENT, Ingestor
 from app.main import create_app
 from app.settings import Settings
+from tests.conftest import EXAMPLE_CONFIG
 
 
 def test_health(client: TestClient) -> None:
@@ -104,6 +107,13 @@ def test_refresh_and_list_articles(client: TestClient) -> None:
     assert {a["source_id"] for a in only} == {"quanta-magazine"} and len(only) == 2
     since = client.get("/api/articles", params={"since": "2026-10-06T00:00:00Z"}).json()
     assert len(since) == 3
+    fetched = client.get(
+        "/api/articles", params={"since": "2026-10-06T00:00:00Z", "time_field": "fetched"}
+    ).json()
+    assert len(fetched) == 5
+    future = {"since": "2999-01-01T00:00:00Z", "time_field": "fetched"}
+    assert client.get("/api/articles", params=future).json() == []
+    assert client.get("/api/articles?time_field=updated").status_code == 422
     assert client.get("/api/articles?limit=0").status_code == 422
 
 
@@ -131,3 +141,29 @@ def test_scheduler_registers_ingestion_jobs(tmp_path: Path) -> None:
         ids = {job.id for job in app.state.scheduler.get_jobs()}
         assert ids == {f"ingest:{s.id}" for s in app.state.config.all_sources()}
         assert len(ids) == 6
+
+
+def test_warns_when_sec_source_has_no_contact_email(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("DISCOVER_CONTACT_EMAIL", raising=False)
+    base = {
+        "config_path": EXAMPLE_CONFIG,
+        "database_url": f"sqlite:///{tmp_path}/t.db",
+        "scheduler_enabled": False,
+    }
+    with (
+        caplog.at_level(logging.WARNING, logger="discover_feed"),
+        TestClient(create_app(Settings(**base))) as c,
+    ):
+        assert c.app.state.ingestor.user_agent == USER_AGENT
+    assert "sec-press-releases" in caplog.text and "DISCOVER_CONTACT_EMAIL" in caplog.text
+
+    caplog.clear()
+    settings = Settings(**base, contact_email="me@example.com")
+    with (
+        caplog.at_level(logging.WARNING, logger="discover_feed"),
+        TestClient(create_app(settings)) as c,
+    ):
+        assert c.app.state.ingestor.user_agent.endswith("; me@example.com)")
+    assert "DISCOVER_CONTACT_EMAIL" not in caplog.text

@@ -6,7 +6,7 @@ import httpx
 from sqlalchemy import func, select
 
 from app.config import Source
-from app.ingest import Ingestor, backoff_delay
+from app.ingest import Ingestor, backoff_delay, build_user_agent, sources_requiring_contact
 from app.models import Article, SourceStatus
 from tests.conftest import fixture_bytes
 
@@ -261,3 +261,24 @@ def test_timeout_and_user_agent_are_configured(session_factory) -> None:
         "write": 10.0,
         "pool": 10.0,
     }
+
+
+def test_contact_email_is_appended_to_user_agent(session_factory) -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return fixture_handler(request)
+
+    ua = build_user_agent("ops@example.com")
+    assert ua.startswith("discover-feed/") and ua.endswith("; ops@example.com)")
+    assert build_user_agent("  ") == build_user_agent(None)
+    ingestor = Ingestor(session_factory, user_agent=ua, transport=httpx.MockTransport(handler))
+    run(ingestor, TECH)
+    assert seen[0].headers["User-Agent"] == ua
+
+
+def test_sources_requiring_contact_matches_sec_hosts() -> None:
+    sec = Source(name="SEC", url="https://www.sec.gov/news/pressreleases.rss")
+    lookalike = Source(name="Not SEC", url="https://notsec.gov.example/rss")
+    assert sources_requiring_contact([sec, lookalike, TECH]) == [sec]

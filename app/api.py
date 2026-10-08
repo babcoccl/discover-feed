@@ -1,5 +1,5 @@
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict
@@ -42,15 +42,24 @@ def list_articles(
     source_id: Annotated[str | None, Query(description="Only articles from this source.")] = None,
     since: Annotated[
         datetime | None,
-        Query(description="Only articles published at or after this ISO 8601 time (UTC if naive)."),
+        Query(description="Only articles at or after this ISO 8601 time (UTC if naive)."),
     ] = None,
+    time_field: Annotated[
+        Literal["published", "fetched"],
+        Query(
+            description="Timestamp `since` filters on: `published` (feed date) or `fetched` "
+            "(when this app first stored the article, i.e. new since you last looked). "
+            "Results are always ordered by published time, newest first."
+        ),
+    ] = "published",
 ) -> list[Article]:
     stmt = select(Article).order_by(Article.published_at.desc(), Article.id.desc()).limit(limit)
     if source_id:
         stmt = stmt.where(Article.source_id == source_id)
     if since:
         since = since.replace(tzinfo=UTC) if since.tzinfo is None else since.astimezone(UTC)
-        stmt = stmt.where(Article.published_at >= since)
+        column = Article.fetched_at if time_field == "fetched" else Article.published_at
+        stmt = stmt.where(column >= since)
     with request.app.state.session_factory() as session:
         return list(session.scalars(stmt))
 

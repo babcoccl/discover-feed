@@ -28,6 +28,23 @@ except PackageNotFoundError:  # pragma: no cover
     _VERSION = "0.0.0"
 
 USER_AGENT = f"discover-feed/{_VERSION} (+https://github.com/babcoccl/discover-feed)"
+# Hosts whose fair-access policy requires a contact in the User-Agent.
+CONTACT_REQUIRED_HOSTS = ("sec.gov",)
+
+
+def build_user_agent(contact_email: str | None = None) -> str:
+    contact = (contact_email or "").strip()
+    return f"{USER_AGENT[:-1]}; {contact})" if contact else USER_AGENT
+
+
+def sources_requiring_contact(sources: Sequence[Source]) -> list[Source]:
+    def needs(source: Source) -> bool:
+        host = (source.url.host or "").lower()
+        return any(host == h or host.endswith("." + h) for h in CONTACT_REQUIRED_HOSTS)
+
+    return [s for s in sources if needs(s)]
+
+
 MAX_BACKOFF = timedelta(hours=24)
 
 
@@ -58,11 +75,13 @@ class Ingestor:
         session_factory: sessionmaker,
         *,
         timeout: float = 10.0,
+        user_agent: str = USER_AGENT,
         transport: httpx.AsyncBaseTransport | None = None,
         clock: Callable[[], datetime] = utcnow,
     ) -> None:
         self.session_factory = session_factory
         self.timeout = timeout
+        self.user_agent = user_agent
         self.transport = transport
         self.clock = clock
         self._locks: dict[str, threading.Lock] = {}
@@ -71,7 +90,7 @@ class Ingestor:
     def _client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(
             timeout=self.timeout,
-            headers={"User-Agent": USER_AGENT},
+            headers={"User-Agent": self.user_agent},
             follow_redirects=True,
             transport=self.transport,
         )
