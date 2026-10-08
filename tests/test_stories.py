@@ -18,8 +18,20 @@ EXTRACTED_ONLY = "third-generation 3-nanometer process"  # appears only in a fix
 @pytest.fixture(scope="module")
 def app_client(tmp_path_factory):
     build = build_demo(tmp_path_factory.mktemp("stories") / "demo.db")
-    with TestClient(create_app(build.settings)) as c:
+    with TestClient(create_app(build.settings, llm_transport=build.llm_transport)) as c:
         yield c
+
+
+def _article_text_keys(data, path="") -> list[str]:
+    """Paths of any ``text`` key outside a generated ``summary`` object."""
+    if isinstance(data, list):
+        return [p for i, v in enumerate(data) for p in _article_text_keys(v, f"{path}[{i}]")]
+    if not isinstance(data, dict):
+        return []
+    found = [f"{path}.text"] if "text" in data else []
+    return found + [
+        p for k, v in data.items() if k != "summary" for p in _article_text_keys(v, f"{path}.{k}")
+    ]
 
 
 def _story(items, source_count):
@@ -100,7 +112,9 @@ def test_extracted_text_never_public(app_client: TestClient) -> None:
     for resp in responses:
         assert resp.status_code == 200
         assert EXTRACTED_ONLY not in resp.text
-        assert '"text"' not in resp.text and '"text_status"' not in resp.text
+        assert '"text_status"' not in resp.text
+        if resp.headers["content-type"].startswith("application/json"):
+            assert not _article_text_keys(resp.json())
 
     articles = app_client.get("/api/profiles/personal-reader/feed?group=articles&limit=100")
     aid = next(a["id"] for a in articles.json()["items"] if "M5 MacBook Pro is here" in a["title"])

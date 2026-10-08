@@ -11,7 +11,9 @@ from app import profiles as repo
 from app.cluster.service import ClusterRunResult
 from app.extract import ExtractRunResult
 from app.ingest import SourceRunResult
-from app.models import Article, ProfileRecord
+from app.models import Article, ProfileRecord, Story
+from app.summarize.views import SummaryView, summary_views
+from app.summarize.worker import SummarizeRunResult, WorkerStatus
 from app.web import snippet
 
 router = APIRouter(prefix="/api")
@@ -107,11 +109,57 @@ class StorySourceOut(BaseModel):
     published_at: datetime
 
 
+class CitationOut(BaseModel):
+    index: int = Field(description="The [n] marker used in the summary.")
+    source: str
+    headline: str
+    url: str = Field(description="The cited article's own permalink (never the canonical URL).")
+
+
+class SummarySentenceOut(BaseModel):
+    text: str
+    citations: list[int] = Field(description="Indexes [n] of the sources this sentence cites.")
+
+
+class SummaryOut(BaseModel):
+    text: str = Field(description="The summary with [n] markers after each sentence.")
+    citations: list[CitationOut] = Field(description="Numbered sources, [1] first.")
+    sentences: list[SummarySentenceOut]
+    basis: Literal["full_text", "feed_summary", "mixed"] = Field(
+        description="What the model read: extracted article text, feed snippets, or both."
+    )
+    model: str
+    generated_at: datetime
+
+
+def _summary_out(view: SummaryView | None) -> SummaryOut | None:
+    if view is None:
+        return None
+    return SummaryOut(
+        text=view.marked_text,
+        citations=[
+            CitationOut(index=c.index, source=c.source, headline=c.headline, url=c.url)
+            for c in view.citations
+        ],
+        sentences=[
+            SummarySentenceOut(text=s.text, citations=[c.index for c in s.citations])
+            for s in view.sentences
+        ],
+        basis=view.basis,
+        model=view.model,
+        generated_at=view.generated_at,
+    )
+
+
+_SUMMARY_FIELD = Field(description="Latest generated summary; null until one is generated.")
+
+
 class StoryItemOut(BaseModel):
     id: int | None = Field(description="Story id; null for an article not clustered yet.")
     title: str
     image_url: str | None
-    snippet: str
+    snippet: str = Field(description="The feed's own summary (fallback when `summary` is null).")
+    summary: SummaryOut | None = _SUMMARY_FIELD
     sources: list[StorySourceOut]
     source_count: int
     first_seen_at: datetime
@@ -143,6 +191,7 @@ class StoryOut(BaseModel):
     source_count: int
     first_seen_at: datetime
     last_updated_at: datetime
+    summary: SummaryOut | None = _SUMMARY_FIELD
     members: list[StoryMemberOut] = Field(description="Oldest first.")
 
 
@@ -273,10 +322,11 @@ def profile_feed(
                 stories = repo.story_feed_page(
                     session, profile, selected, limit=limit, cursor=cursor
                 )
+                summaries = summary_views(session, [i.story_id for i in stories.items], names)
                 return StoryFeedOut(
                     profile=profile.slug,
                     topic=topic_out,
-                    items=[_story_item_out(item, names) for item in stories.items],
+                    items=[_story_item_out(item, names, summaries) for item in stories.items],
                     next_cursor=stories.next_cursor,
                 )
             page = repo.feed_page(
@@ -298,12 +348,15 @@ def profile_feed(
     )
 
 
-def _story_item_out(item: repo.StoryItem, names: dict[str, str]) -> StoryItemOut:
+def _story_item_out(
+    item: repo.StoryItem, names: dict[str, str], summaries: dict[int, SummaryView]
+) -> StoryItemOut:
     return StoryItemOut(
         id=item.story_id,
         title=item.title,
         image_url=item.image_url,
         snippet=snippet(item.snippet_source),
+        summary=_summary_out(summaries.get(item.story_id)),
         sources=[
             StorySourceOut(
                 name=names.get(a.source_id, a.source_id), url=a.url, published_at=a.published_at
@@ -330,6 +383,7 @@ def get_story(
         if item is None:
             raise HTTPException(status_code=404, detail=f"unknown story {story_id}")
         names = repo.source_names(session)
+        summary = summary_views(session, [story_id], names).get(story_id)
     return StoryOut(
         id=story_id,
         title=item.title,
@@ -337,6 +391,7 @@ def get_story(
         source_count=item.source_count,
         first_seen_at=item.first_seen_at,
         last_updated_at=item.last_updated_at,
+        summary=_summary_out(summary),
         members=[
             StoryMemberOut(
                 id=m.id,
@@ -380,6 +435,49 @@ async def cluster(
     ] = False,
 ) -> ClusterRunResult:
     return await run_in_threadpool(request.app.state.pipeline.cluster, rebuild=rebuild)
+
+
+class SummarizeOut(BaseModel):
+    started: bool = Field(description="A background run was started (no `story_id`/`wait`).")
+    result: SummarizeRunResult | None = Field(description="Set when the run was awaited.")
+    status: WorkerStatus
+
+
+@router.post(
+    "/admin/summarize",
+    response_model=SummarizeOut,
+    tags=["admin"],
+    summary="Summarize queued stories now, or one story",
+)
+async def summarize(
+    request: Request,
+    story_id: Annotated[
+        int | None, Query(description="Summarize only this story (always awaited).")
+    ] = None,
+    force: Annotated[
+        bool, Query(description="Regenerate even if the input is unchanged (all stories if no id).")
+    ] = False,
+    wait: Annotated[bool, Query(description="Wait for the run instead of starting it.")] = False,
+) -> SummarizeOut:
+    worker = request.app.state.summaries
+    if not worker.enabled:
+        raise HTTPException(status_code=409, detail="no summarizer configured")
+    if story_id is not None:
+        with _session(request) as session:
+            if session.get(Story, story_id) is None:
+                raise HTTPException(status_code=404, detail=f"unknown story {story_id}")
+        worker.enqueue([story_id], force=force)
+        result = await worker.run(story_id=story_id, manual=True)
+        return SummarizeOut(started=False, result=result, status=worker.status())
+    if force:
+        worker.enqueue_all(force=True)
+    else:
+        worker.enqueue_missing()
+    if wait:
+        result = await worker.run(manual=True)
+        return SummarizeOut(started=False, result=result, status=worker.status())
+    started = worker.start(manual=True)
+    return SummarizeOut(started=started, result=None, status=worker.status())
 
 
 @router.get(

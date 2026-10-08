@@ -3,6 +3,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from importlib.metadata import PackageNotFoundError, version
 
+import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
@@ -12,9 +13,19 @@ from app.config import AppConfig, Source, load_config
 from app.db import init_db, make_engine, make_session_factory, ping
 from app.ingest import Ingestor, build_user_agent, sources_requiring_contact
 from app.models import ProfileRecord
-from app.pipeline import Pipeline, clusterer_from_settings, extractor_from_settings
+from app.pipeline import (
+    Pipeline,
+    clusterer_from_settings,
+    extractor_from_settings,
+    summary_worker_from_settings,
+)
 from app.profiles import active_sources, seed_from_config
-from app.scheduler import create_scheduler, schedule_ingestion, schedule_pipeline
+from app.scheduler import (
+    create_scheduler,
+    schedule_ingestion,
+    schedule_pipeline,
+    schedule_summaries,
+)
 from app.settings import Settings, get_settings
 from app.web import router as web_router
 
@@ -48,7 +59,10 @@ def _warn_missing_contact(sources: list[Source], settings: Settings) -> None:
         )
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None, *, llm_transport: httpx.AsyncBaseTransport | None = None
+) -> FastAPI:
+    """``llm_transport`` replaces the summarizer's network calls (the demo's fake LLM)."""
     settings = settings or get_settings()
 
     @asynccontextmanager
@@ -77,7 +91,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 user_agent=build_user_agent(settings.contact_email),
             ),
             clusterer_from_settings(settings),
+            summary_worker_from_settings(
+                app.state.session_factory, settings, app.state.config, transport=llm_transport
+            ),
         )
+        app.state.summaries = app.state.pipeline.summaries
+        if app.state.summaries.enabled:
+            app.state.summaries.enqueue_missing()
         _warn_missing_contact(sources, settings)
         scheduler = create_scheduler()
         if settings.scheduler_enabled:
@@ -92,6 +112,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 app.state.pipeline,
                 interval_minutes=settings.extract_interval_minutes,
             )
+            if app.state.summaries.enabled:
+                schedule_summaries(
+                    scheduler,
+                    app.state.summaries,
+                    interval_minutes=settings.summarize_interval_minutes,
+                )
             scheduler.start()
         app.state.scheduler = scheduler
         try:

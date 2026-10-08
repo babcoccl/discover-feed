@@ -23,8 +23,9 @@ run:
 	$(PYTHON) -m uvicorn app.main:app --reload --host $(HOST) --port $(PORT)
 
 # Throwaway demo DB (.demo/) seeded from the example profiles + fixture feeds; no network.
+# Fake LLM by default; real endpoint: make demo DEMO_ARGS="--real-llm --model <name>"
 demo:
-	$(PYTHON) -m app.demo --host $(DEMO_HOST) --port $(PORT)
+	$(PYTHON) -m app.demo --host $(DEMO_HOST) --port $(PORT) $(DEMO_ARGS)
 
 docker-up:
 	docker compose up --build

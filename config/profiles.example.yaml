@@ -46,10 +46,23 @@ profiles:
         keywords: [python, release]
         match: all
         sources: [Hacker News]
+    # LLM roles: `summarizer` writes story summaries, `chat` is for story Q&A (next phase).
+    # Any OpenAI-compatible server works; providers differ only in these settings.
+    # This profile uses a local llama.cpp llama-server: set LOCAL_LLM_BASE_URL (e.g.
+    # http://<lan-host>:8080/v1) and LOCAL_LLM_API_KEY (if started with --api-key) in .env.
     llm:
-      base_url: https://api.openai.com/v1
-      api_key: ${OPENAI_API_KEY:-}
-      model: gpt-4o-mini
+      summarizer:
+        base_url: ${LOCAL_LLM_BASE_URL:-http://localhost:8080/v1}
+        api_key: ${LOCAL_LLM_API_KEY:-}
+        model: ${LOCAL_LLM_MODEL:-local}
+        # Defaults: temperature 0.2, max_tokens 600, timeout_seconds 120,
+        # structured_output json_schema (json_object | none), disable_thinking true
+        # (sends chat_template_kwargs {"enable_thinking": false}).
+      chat:
+        base_url: ${LOCAL_LLM_BASE_URL:-http://localhost:8080/v1}
+        api_key: ${LOCAL_LLM_API_KEY:-}
+        model: ${LOCAL_LLM_MODEL:-local}
+        temperature: 0.3
 
   - id: market-monitor
     name: Market Monitor
@@ -100,8 +113,11 @@ profiles:
         keywords: [charges, settlement, enforcement]
         sources: [SEC press releases]
     llm:
-      # Any OpenAI-compatible server works, e.g. a local Ollama / vLLM instance.
-      base_url: ${LOCAL_LLM_BASE_URL:-http://localhost:11434/v1}
-      api_key: ${LOCAL_LLM_API_KEY:-}
-      model: ${LOCAL_LLM_MODEL:-llama3.1:8b}
-      temperature: 0.0
+      # A cloud OpenAI-style provider: same client as llama.cpp, different settings.
+      summarizer:
+        base_url: https://api.openai.com/v1
+        api_key: ${OPENAI_API_KEY:-}
+        model: gpt-4o-mini
+        temperature: 0.0
+        timeout_seconds: 60
+        disable_thinking: false  # OpenAI rejects llama.cpp's chat_template_kwargs

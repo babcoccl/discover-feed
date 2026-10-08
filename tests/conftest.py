@@ -40,3 +40,21 @@ def session_factory(tmp_path: Path):
     init_db(engine)
     yield make_session_factory(engine)
     engine.dispose()
+
+
+@pytest.fixture(autouse=True)
+def _no_real_llm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tests never reach a real LLM: an LLMClient without a fake transport fails loudly."""
+    import httpx
+
+    from app.llm import client
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"test tried to call a real LLM at {request.url}")
+
+    original = client.LLMClient.__init__
+
+    def guarded(self, role, *, transport=None):
+        original(self, role, transport=transport or httpx.MockTransport(refuse))
+
+    monkeypatch.setattr(client.LLMClient, "__init__", guarded)

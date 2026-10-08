@@ -147,6 +147,112 @@ formal FOMC statement, which shares too little wording with the press coverage o
 (cosine about 0.33). Reaching 100% recall would need a threshold of about 0.30, which leaves too
 little margin against false merges on live feeds.
 
+## Story summaries
+
+Every story gets a short (2-3 sentence) neutral summary with `[n]` citations, written by an
+OpenAI-compatible chat completions endpoint (llama.cpp `llama-server`, vLLM, Ollama, OpenAI...).
+Cards show it instead of the feed snippet, each `[n]` links to that article's own permalink
+(`Article.url`), and the story page lists the numbered sources and `Summarized by <model>`.
+Cards without a summary show the raw feed text labelled **Feed snippet**.
+
+How it works (`app/summarize/`):
+
+- After clustering, new stories and stories that gained members are queued (`summary_jobs`).
+  A background worker (`DISCOVER_SUMMARIZE_INTERVAL_MINUTES`, default 5, plus right after each
+  pipeline run) summarizes the newest stories first, `DISCOVER_SUMMARIZE_CONCURRENCY` (1) at a
+  time and at most `DISCOVER_SUMMARIZE_MAX_PER_RUN` (25) per run. It runs in its own thread, so
+  ingestion, extraction and clustering never wait for the LLM.
+- Input: up to `DISCOVER_SUMMARIZE_MAX_ARTICLES_PER_STORY` (5) members, numbered `[1]..[k]`
+  (one per source first), each with title, source and the first
+  `DISCOVER_SUMMARIZE_MAX_WORDS_PER_ARTICLE` (1200) words of extracted text, or the feed
+  summary when extraction didn't succeed.
+- The answer must be JSON (`response_format` JSON schema; code fences/prose around it are
+  tolerated) with one citation list per sentence, indexes within `1..k`, at most 70 words,
+  and every number (digits, %, amounts) present in a source that sentence cites. A rejected
+  answer is retried once with the error; if that fails too the story keeps its feed snippet
+  (`status=fallback`, with the reason). Endpoint errors (HTTP 5xx, timeouts) are `failed`, are
+  retried later with backoff, and after `DISCOVER_SUMMARIZE_FAILURE_LIMIT` (3) in a row the
+  worker pauses for `DISCOVER_SUMMARIZE_PAUSE_MINUTES` (10).
+- Every version is kept in `story_summaries` (text, citations, the article id behind each
+  `[n]`, basis, model, prompt version, tokens, latency). `input_hash` covers member ids, source
+  text hashes, `PROMPT_VERSION` and model: unchanged input means no LLM call. A story is
+  re-summarized at most once per `DISCOVER_SUMMARIZE_RESUMMARIZE_MIN_MINUTES` (30).
+- Settings > Pipeline shows the queue, running state, last error and tokens/sec, with a
+  **Summarize now** button. API: `POST /api/admin/summarize` (all queued stories in the
+  background; `?story_id=` one story, awaited; `?force=true` ignores the cache; `?wait=true`).
+- Story feed items and `GET /api/stories/{id}` have `summary`: `{text, citations: [{index,
+  source, headline, url}], sentences, basis: full_text|feed_summary|mixed, model,
+  generated_at}` or `null`. Extracted article text is never returned.
+
+### Configuring the endpoint
+
+Each profile has two LLM roles, `summarizer` (used now) and `chat` (story Q&A, next phase).
+The worker uses `DISCOVER_SUMMARIZE_PROFILE`'s summarizer (default: the first profile);
+`DISCOVER_SUMMARIZE_ENABLED=false` turns summaries off.
+
+```yaml
+llm:
+  summarizer:
+    base_url: ${LOCAL_LLM_BASE_URL:-http://localhost:8080/v1}
+    api_key: ${LOCAL_LLM_API_KEY:-}
+    model: ${LOCAL_LLM_MODEL:-local}
+    temperature: 0.2           # defaults shown
+    max_tokens: 600
+    timeout_seconds: 120
+    structured_output: json_schema   # or json_object / none
+    disable_thinking: true     # sends chat_template_kwargs {"enable_thinking": false}
+```
+
+Cloud providers use the same code with different settings (see `market-monitor` in
+`config/profiles.example.yaml`; set `disable_thinking: false` where unknown parameters are
+rejected). Start llama.cpp so other machines can reach it, with a key, enough context for 5
+articles, and parallel slots matching `DISCOVER_SUMMARIZE_CONCURRENCY`:
+
+```bash
+llama-server -m model.gguf --host 0.0.0.0 --port 8080 --api-key <key> -c 16384 -np 1
+```
+
+(`-c` is the total context, split across the `-np` slots: use `-c 32768 -np 2` for
+concurrency 2.)
+
+### Demo and evaluation
+
+The demo and tests use a deterministic in-process fake LLM (no network); about one story in
+five gets an invented number so fallbacks show up. To use your server instead:
+
+```bash
+export LOCAL_LLM_BASE_URL=http://<llm-host>:8080/v1 LOCAL_LLM_API_KEY=<key>
+make demo DEMO_ARGS="--real-llm --model <model>"     # summarizes the newest 10 at startup
+```
+
+```powershell
+$env:LOCAL_LLM_BASE_URL = "http://<llm-host>:8080/v1"; $env:LOCAL_LLM_API_KEY = "<key>"
+.\demo.cmd --real-llm --model <model>
+```
+
+Evaluate the real model (nothing is stored; `--db .demo/demo.db` reads the demo's stories,
+`--fake` runs offline). On Windows use `.venv\Scripts\python` instead of `python`:
+
+```bash
+python -m app.summarize.smoke --profile personal-reader --limit 5 --db .demo/demo.db
+python -m app.summarize.compare --stories 20 --markdown --db .demo/demo.db \
+  --endpoints qwen=http://<host>:8080/v1:qwen3,gemma=http://<host2>:8080/v1:gemma3
+python -m app.summarize.capture --out tests/fixtures/llm/real_response.json --db .demo/demo.db
+```
+
+`smoke` prints each summary with citations, latency, tokens/sec and the validation result;
+`compare` prints pass rate, fallbacks, median latency, tokens/sec and the summaries side by
+side (API keys: `LLM_API_KEY_<NAME>`, else `LOCAL_LLM_API_KEY`); `capture` saves one raw
+response that `tests/test_summarizer.py` then parses (skipped when absent). Only the fake LLM
+is tested here; real-model quality is unverified until you run these.
+
+### Next phase: story Q&A
+
+`story_context(session, story_id)` (`app/summarize/context.py`) already assembles a story's
+sources and latest summary into a prompt-ready bundle with the summary's `[n]` numbering.
+Planned: `POST /api/stories/{id}/ask` streaming over SSE with the `chat` role, answers grounded
+in the story's sources with the same citations.
+
 ## Development
 
 ```bash

@@ -31,6 +31,20 @@ class Settings(BaseSettings):
     cluster_same_source_threshold: float = 0.7
     cluster_min_shared_tokens: int = 2
 
+    # Story summaries (app/summarize); the LLM endpoint is the profile's `llm.summarizer`
+    summarize_enabled: bool = True
+    summarize_profile: str | None = None
+    """Profile slug whose `llm.summarizer` endpoint is used; default: the first profile."""
+    summarize_interval_minutes: int = 5
+    summarize_concurrency: int = 1
+    summarize_max_per_run: int = 25
+    summarize_resummarize_min_minutes: float = 30
+    summarize_max_articles_per_story: int = 5
+    summarize_max_words_per_article: int = 1200
+    summarize_failure_limit: int = 3
+    """Consecutive endpoint failures before the worker pauses."""
+    summarize_pause_minutes: float = 10
+
 
 @lru_cache
 def get_settings() -> Settings:
