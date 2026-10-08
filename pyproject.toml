@@ -20,6 +20,8 @@ dependencies = [
     "httpx>=0.27",
     "feedparser>=6.0",
     "python-multipart>=0.0.9",
+    "trafilatura>=2.0",
+    "scikit-learn>=1.5",
 ]
 
 [project.optional-dependencies]

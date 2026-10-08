@@ -33,6 +33,14 @@ profiles:
         url: https://www.quantamagazine.org/feed/
         refresh_minutes: 120
         tags: [science]
+      - name: The Verge
+        type: rss  # Atom feeds use the same adapter
+        url: https://www.theverge.com/rss/index.xml
+        tags: [tech]
+      - name: TechCrunch
+        type: rss
+        url: https://techcrunch.com/feed/
+        tags: [tech]
     alert_rules:
       - name: Python releases
         keywords: [python, release]
@@ -73,6 +81,14 @@ profiles:
         type: rss
         url: https://www.cnbc.com/id/20910258/device/rss/rss.html
         refresh_minutes: 10
+        tags: [markets]
+      - name: Guardian Business
+        type: rss
+        url: https://www.theguardian.com/uk/business/rss
+        tags: [markets]
+      - name: BBC Business
+        type: rss
+        url: https://feeds.bbci.co.uk/news/business/rss.xml
         tags: [markets]
     alert_rules:
       - name: Rate decisions

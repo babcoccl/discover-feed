@@ -49,4 +49,19 @@
     </table>
   </div>
 </section>
+
+<section class="mt-10" aria-labelledby="pipeline-heading">
+  <h2 id="pipeline-heading" class="mb-1 text-lg font-semibold">Pipeline</h2>
+  <p class="mb-4 max-w-3xl text-sm text-slate-600 dark:text-slate-400">
+    Articles are ingested from each feed, their pages fetched to extract text (used internally,
+    not displayed), then grouped into stories. Counts cover every source, not only this profile's.
+  </p>
+  <div class="mb-4 flex flex-wrap gap-2" hx-on::after-request="htmx.trigger('#pipeline', 'refresh')">
+    {% for endpoint, label in (("refresh", "Run ingestion"), ("extract", "Run extraction"), ("cluster", "Run clustering")) %}
+    <button type="button" hx-post="/api/admin/{{ endpoint }}" hx-swap="none" hx-disabled-elt="this"
+            class="rounded-full border border-slate-300 bg-white px-4 py-1.5 text-sm font-medium shadow-sm hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800">{{ label }}</button>
+    {% endfor %}
+  </div>
+  <div id="pipeline" hx-get="/p/{{ profile.slug }}/settings/pipeline" hx-trigger="refresh">{% include "_pipeline.html" %}</div>
+</section>
 {% endblock %}

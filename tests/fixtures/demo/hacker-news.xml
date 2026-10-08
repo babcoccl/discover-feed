@@ -68,5 +68,19 @@
       <comments>https://news.ycombinator.com/item?id=41800106</comments>
       <description>Workers said route times grew by 20 minutes after the rollout.</description>
     </item>
+    <item>
+      <title>Apple introduces MacBook Pro with M5, M5 Pro and M5 Max</title>
+      <link>https://www.apple.com/newsroom/2026/10/apple-introduces-macbook-pro-with-m5-m5-pro-and-m5-max/</link>
+      <guid isPermaLink="false">hacker-news-8</guid>
+      <pubDate>Wed, 07 Oct 2026 17:30:00 +0000</pubDate>
+      <description><![CDATA[<p>Apple Newsroom: the new 14- and 16-inch MacBook Pro with M5 chips, available to order today.</p>]]></description>
+    </item>
+    <item>
+      <title>AWS Health Dashboard: Increased error rates and latencies in US-EAST-1</title>
+      <link>https://health.aws.amazon.com/health/status?eventID=arn-aws-health-us-east-1-20261007</link>
+      <guid isPermaLink="false">hacker-news-9</guid>
+      <pubDate>Wed, 07 Oct 2026 10:05:00 +0000</pubDate>
+      <description><![CDATA[<p>Amazon Web Services is investigating increased error rates and latencies for multiple AWS services in the US-EAST-1 Region, including DynamoDB, EC2 and Lambda. Slack, Venmo and Ring report outage impact.</p>]]></description>
+    </item>
   </channel>
 </rss>

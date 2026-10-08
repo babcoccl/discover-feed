@@ -78,7 +78,7 @@ def test_refresh_and_list_articles(client: TestClient) -> None:
     resp = client.post("/api/admin/refresh")
     assert resp.status_code == 200
     results = {r["source_id"]: r for r in resp.json()["results"]}
-    assert len(results) == 6
+    assert len(results) == 10
     assert results["hacker-news"]["new_articles"] == 3
     assert results["quanta-magazine"]["new_articles"] == 2
     assert results["ars-technica"]["status"] == "error"
@@ -140,8 +140,8 @@ def test_scheduler_registers_ingestion_jobs(tmp_path: Path) -> None:
     with TestClient(app):
         app.state.scheduler.pause()
         ids = {job.id for job in app.state.scheduler.get_jobs()}
-        assert ids == {f"ingest:{s.id}" for s in app.state.config.all_sources()}
-        assert len(ids) == 6
+        assert ids == {f"ingest:{s.id}" for s in app.state.config.all_sources()} | {"pipeline"}
+        assert len(ids) == 11
 
 
 def test_warns_when_sec_source_has_no_contact_email(

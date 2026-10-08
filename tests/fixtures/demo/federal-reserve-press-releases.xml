@@ -6,13 +6,6 @@
     <description>Demo fixture feed for federal-reserve-press-releases.</description>
     <lastBuildDate>Wed, 07 Oct 2026 15:30:00 +0000</lastBuildDate>
     <item>
-      <title>Federal Reserve issues FOMC statement</title>
-      <link>https://www.federalreserve.gov/monetarypolicy.htm</link>
-      <guid isPermaLink="false">federal-reserve-press-releases-1</guid>
-      <pubDate>Wed, 07 Oct 2026 14:30:00 +0000</pubDate>
-      <description>The Committee decided to lower the target range for the federal funds rate; markets had largely priced in the move.</description>
-    </item>
-    <item>
       <title>Federal Reserve Board announces approval of application by First Midwest Bancorp</title>
       <link>https://www.federalreserve.gov/newsevents/pressreleases.htm</link>
       <guid isPermaLink="false">federal-reserve-press-releases-2</guid>
@@ -53,6 +46,14 @@
       <guid isPermaLink="false">federal-reserve-press-releases-7</guid>
       <pubDate>Mon, 05 Oct 2026 14:30:00 +0000</pubDate>
       <description>The statement clarifies expectations for bank partnerships with fintech firms.</description>
+    </item>
+    <item>
+      <title>Federal Reserve issues FOMC statement</title>
+      <link>https://www.federalreserve.gov/newsevents/pressreleases/monetary20261007a.htm</link>
+      <guid isPermaLink="false">federal-reserve-press-releases-8</guid>
+      <pubDate>Wed, 07 Oct 2026 18:00:00 +0000</pubDate>
+      <description><![CDATA[<p>The Federal Open Market Committee decided to lower the target range for the federal funds rate by 1/4 percentage point to 3-1/4 to 3-1/2 percent.</p>]]></description>
+      <media:content url="https://picsum.photos/seed/federal-reserve-press-releases-8/800/450" medium="image" width="800" height="450"/>
     </item>
   </channel>
 </rss>

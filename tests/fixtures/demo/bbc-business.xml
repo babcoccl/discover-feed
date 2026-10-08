@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:media="http://search.yahoo.com/mrss/">
+  <channel>
+    <title>BBC News - Business</title>
+    <link>https://www.bbc.co.uk/news/business</link>
+    <description>Demo fixture feed for bbc-business.</description>
+    <lastBuildDate>Wed, 07 Oct 2026 19:30:00 +0000</lastBuildDate>
+    <item>
+      <title>US central bank cuts rates again as jobs market cools</title>
+      <link>https://www.bbc.co.uk/news/articles/c4fed2026cuts</link>
+      <guid isPermaLink="false">bbc-business-1</guid>
+      <pubDate>Wed, 07 Oct 2026 19:15:00 +0000</pubDate>
+      <description><![CDATA[<p>The Federal Reserve has cut US interest rates by 0.25 percentage points, to between 3.25% and 3.5%, as the Fed tries to support a slowing jobs market.</p>]]></description>
+      <media:content url="https://picsum.photos/seed/bbc-business-1/800/450" medium="image" width="800" height="450"/>
+    </item>
+    <item>
+      <title>UK house prices rise at fastest pace in two years, says Halifax</title>
+      <link>https://www.bbc.co.uk/news/articles/c8halifax2026</link>
+      <guid isPermaLink="false">bbc-business-2</guid>
+      <pubDate>Wed, 07 Oct 2026 07:05:00 +0000</pubDate>
+      <description><![CDATA[<p>UK house prices rose 0.9% in September, the biggest monthly increase in two years, according to the Halifax.</p>]]></description>
+      <media:content url="https://picsum.photos/seed/bbc-business-2/800/450" medium="image" width="800" height="450"/>
+    </item>
+    <item>
+      <title>Shein to open first permanent UK store in Manchester</title>
+      <link>https://www.bbc.co.uk/news/articles/c2shein2026</link>
+      <guid isPermaLink="false">bbc-business-3</guid>
+      <pubDate>Tue, 06 Oct 2026 10:00:00 +0000</pubDate>
+      <description><![CDATA[<p>The online fast fashion retailer will open a permanent shop in Manchester's Arndale centre next month.</p>]]></description>
+      <media:content url="https://picsum.photos/seed/bbc-business-3/800/450" medium="image" width="800" height="450"/>
+    </item>
+  </channel>
+</rss>

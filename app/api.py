@@ -2,13 +2,17 @@ from datetime import UTC, datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import profiles as repo
+from app.cluster.service import ClusterRunResult
+from app.extract import ExtractRunResult
 from app.ingest import SourceRunResult
 from app.models import Article, ProfileRecord
+from app.web import snippet
 
 router = APIRouter(prefix="/api")
 
@@ -92,8 +96,64 @@ class FeedItem(ArticleOut):
 class FeedOut(BaseModel):
     profile: str
     topic: TopicOut | None
+    group: Literal["articles"] = "articles"
     items: list[FeedItem]
     next_cursor: str | None = Field(description="Pass as `cursor` to get the next page.")
+
+
+class StorySourceOut(BaseModel):
+    name: str
+    url: str = Field(description="The publisher's own permalink for this source's article.")
+    published_at: datetime
+
+
+class StoryItemOut(BaseModel):
+    id: int | None = Field(description="Story id; null for an article not clustered yet.")
+    title: str
+    image_url: str | None
+    snippet: str
+    sources: list[StorySourceOut]
+    source_count: int
+    first_seen_at: datetime
+    last_updated_at: datetime
+
+
+class StoryFeedOut(BaseModel):
+    profile: str
+    topic: TopicOut | None
+    group: Literal["stories"] = "stories"
+    items: list[StoryItemOut]
+    next_cursor: str | None = Field(description="Pass as `cursor` to get the next page.")
+
+
+class StoryMemberOut(BaseModel):
+    id: int
+    title: str
+    source_id: str
+    source: str
+    url: str
+    published_at: datetime
+    summary: str
+
+
+class StoryOut(BaseModel):
+    id: int
+    title: str
+    representative_article_id: int
+    source_count: int
+    first_seen_at: datetime
+    last_updated_at: datetime
+    members: list[StoryMemberOut] = Field(description="Oldest first.")
+
+
+class AdminArticleOut(ArticleOut):
+    text_status: str
+    text_fetched_at: datetime | None
+    word_count: int | None
+    story_id: int | None
+    text: str | None = Field(
+        default=None, description="Extracted body; only with `include_text=true`."
+    )
 
 
 def _session(request: Request) -> Session:
@@ -177,21 +237,28 @@ def get_profile(request: Request, slug: str) -> ProfileRecord:
 
 @router.get(
     "/profiles/{slug}/feed",
-    response_model=FeedOut,
+    response_model=StoryFeedOut | FeedOut,
     tags=["profiles"],
-    summary="A profile's feed, optionally filtered by topic (cursor-paginated, newest first)",
+    summary="A profile's feed of stories or articles, optionally filtered by topic",
 )
 def profile_feed(
     request: Request,
     slug: str,
     topic: Annotated[int | None, Query(description="Topic id; omit for all articles.")] = None,
+    group: Annotated[
+        Literal["stories", "articles"],
+        Query(
+            description="`stories` (default): related articles from the profile's sources "
+            "grouped into one item, newest update first. `articles`: one item per article."
+        ),
+    ] = "stories",
     limit: Annotated[int, Query(ge=1, le=100)] = 24,
     cursor: Annotated[str | None, Query(description="`next_cursor` of the previous page.")] = None,
     time_field: Annotated[
         Literal["published", "fetched"],
-        Query(description="Timestamp to order and paginate by."),
+        Query(description="Timestamp to order and paginate articles by (`group=articles`)."),
     ] = "published",
-) -> FeedOut:
+) -> StoryFeedOut | FeedOut:
     with _session(request) as session:
         profile = _profile_or_404(session, slug)
         selected = None
@@ -199,16 +266,27 @@ def profile_feed(
             selected = repo.get_topic(profile, topic)
             if selected is None:
                 raise HTTPException(status_code=404, detail=f"unknown topic {topic}")
+        names = repo.source_names(session)
+        topic_out = TopicOut.model_validate(selected) if selected else None
         try:
+            if group == "stories":
+                stories = repo.story_feed_page(
+                    session, profile, selected, limit=limit, cursor=cursor
+                )
+                return StoryFeedOut(
+                    profile=profile.slug,
+                    topic=topic_out,
+                    items=[_story_item_out(item, names) for item in stories.items],
+                    next_cursor=stories.next_cursor,
+                )
             page = repo.feed_page(
                 session, profile, selected, limit=limit, cursor=cursor, time_field=time_field
             )
         except repo.InvalidCursor:
             raise HTTPException(status_code=422, detail="invalid cursor") from None
-        names = repo.source_names(session)
     return FeedOut(
         profile=profile.slug,
-        topic=TopicOut.model_validate(selected) if selected else None,
+        topic=topic_out,
         items=[
             FeedItem(
                 **ArticleOut.model_validate(a).model_dump(),
@@ -218,6 +296,112 @@ def profile_feed(
         ],
         next_cursor=page.next_cursor,
     )
+
+
+def _story_item_out(item: repo.StoryItem, names: dict[str, str]) -> StoryItemOut:
+    return StoryItemOut(
+        id=item.story_id,
+        title=item.title,
+        image_url=item.image_url,
+        snippet=snippet(item.snippet_source),
+        sources=[
+            StorySourceOut(
+                name=names.get(a.source_id, a.source_id), url=a.url, published_at=a.published_at
+            )
+            for a in item.sources
+        ],
+        source_count=item.source_count,
+        first_seen_at=item.first_seen_at,
+        last_updated_at=item.last_updated_at,
+    )
+
+
+@router.get("/stories/{story_id}", response_model=StoryOut, tags=["stories"])
+def get_story(
+    request: Request,
+    story_id: int,
+    profile: Annotated[
+        str | None, Query(description="Only members from this profile's sources.")
+    ] = None,
+) -> StoryOut:
+    with _session(request) as session:
+        record = _profile_or_404(session, profile) if profile else None
+        item = repo.get_story(session, story_id, record)
+        if item is None:
+            raise HTTPException(status_code=404, detail=f"unknown story {story_id}")
+        names = repo.source_names(session)
+    return StoryOut(
+        id=story_id,
+        title=item.title,
+        representative_article_id=item.representative.id,
+        source_count=item.source_count,
+        first_seen_at=item.first_seen_at,
+        last_updated_at=item.last_updated_at,
+        members=[
+            StoryMemberOut(
+                id=m.id,
+                title=m.title,
+                source_id=m.source_id,
+                source=names.get(m.source_id, m.source_id),
+                url=m.url,
+                published_at=m.published_at,
+                summary=m.summary_raw,
+            )
+            for m in item.members
+        ],
+    )
+
+
+@router.post(
+    "/admin/extract",
+    response_model=ExtractRunResult,
+    tags=["admin"],
+    summary="Extract article text now (pending articles, newest first)",
+)
+async def extract(
+    request: Request,
+    limit: Annotated[
+        int | None, Query(ge=1, le=1000, description="Default: DISCOVER_EXTRACT_MAX_ARTICLES.")
+    ] = None,
+) -> ExtractRunResult:
+    return await request.app.state.pipeline.extract(limit)
+
+
+@router.post(
+    "/admin/cluster",
+    response_model=ClusterRunResult,
+    tags=["admin"],
+    summary="Cluster unassigned articles into stories now",
+)
+async def cluster(
+    request: Request,
+    rebuild: Annotated[
+        bool, Query(description="Drop all stories and recluster every article.")
+    ] = False,
+) -> ClusterRunResult:
+    return await run_in_threadpool(request.app.state.pipeline.cluster, rebuild=rebuild)
+
+
+@router.get(
+    "/admin/articles/{article_id}",
+    response_model=AdminArticleOut,
+    response_model_exclude_none=False,
+    tags=["admin"],
+    summary="One article with its pipeline state (internal; text only on request)",
+)
+def admin_article(
+    request: Request,
+    article_id: int,
+    include_text: Annotated[bool, Query(description="Include the extracted text.")] = False,
+) -> AdminArticleOut:
+    with _session(request) as session:
+        article = session.get(Article, article_id)
+        if article is None:
+            raise HTTPException(status_code=404, detail=f"unknown article {article_id}")
+        out = AdminArticleOut.model_validate(article)
+    if not include_text:
+        out.text = None
+    return out
 
 
 def _topic_kwargs(body: TopicIn) -> dict:

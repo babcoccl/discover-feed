@@ -12,8 +12,9 @@ from app.config import AppConfig, Source, load_config
 from app.db import init_db, make_engine, make_session_factory, ping
 from app.ingest import Ingestor, build_user_agent, sources_requiring_contact
 from app.models import ProfileRecord
+from app.pipeline import Pipeline, clusterer_from_settings, extractor_from_settings
 from app.profiles import active_sources, seed_from_config
-from app.scheduler import create_scheduler, schedule_ingestion
+from app.scheduler import create_scheduler, schedule_ingestion, schedule_pipeline
 from app.settings import Settings, get_settings
 from app.web import router as web_router
 
@@ -68,6 +69,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             timeout=settings.fetch_timeout_seconds,
             user_agent=build_user_agent(settings.contact_email),
         )
+        app.state.pipeline = Pipeline(
+            app.state.session_factory,
+            extractor_from_settings(
+                app.state.session_factory,
+                settings,
+                user_agent=build_user_agent(settings.contact_email),
+            ),
+            clusterer_from_settings(settings),
+        )
         _warn_missing_contact(sources, settings)
         scheduler = create_scheduler()
         if settings.scheduler_enabled:
@@ -76,6 +86,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 sources,
                 app.state.ingestor,
                 jitter_seconds=settings.refresh_jitter_seconds,
+            )
+            schedule_pipeline(
+                scheduler,
+                app.state.pipeline,
+                interval_minutes=settings.extract_interval_minutes,
             )
             scheduler.start()
         app.state.scheduler = scheduler

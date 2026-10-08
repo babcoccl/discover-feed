@@ -4,7 +4,7 @@ import zlib
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app import profiles as repo
 from app.models import ProfileRecord, Topic
+from app.runs import last_runs, text_status_counts
 from app.topics import split_keywords
 
 router = APIRouter(include_in_schema=False)
@@ -105,12 +106,22 @@ def home(request: Request) -> Response:
         return TEMPLATES.TemplateResponse(request, "index.html", _base_context(session, None))
 
 
+View = Literal["stories", "articles"]
+
+
 def _feed_context(
-    session: Session, profile: ProfileRecord, topic_id: int | None, cursor: str | None = None
+    session: Session,
+    profile: ProfileRecord,
+    topic_id: int | None,
+    cursor: str | None = None,
+    view: View = "stories",
 ) -> dict:
     topic = _selected_topic(profile, topic_id)
     try:
-        page = repo.feed_page(session, profile, topic, limit=PAGE_SIZE, cursor=cursor)
+        if view == "articles":
+            page = repo.feed_page(session, profile, topic, limit=PAGE_SIZE, cursor=cursor)
+        else:
+            page = repo.story_feed_page(session, profile, topic, limit=PAGE_SIZE, cursor=cursor)
     except repo.InvalidCursor:
         raise HTTPException(status_code=400, detail="invalid cursor") from None
     return _base_context(
@@ -119,28 +130,56 @@ def _feed_context(
         topic=topic,
         tabs=[t for t in profile.topics if t.enabled],
         page=page,
+        view=view,
         names=repo.source_names(session),
     )
 
 
 @router.get("/p/{slug}", response_class=HTMLResponse)
-def profile_page(request: Request, slug: str, topic: int | None = None) -> Response:
+def profile_page(
+    request: Request, slug: str, topic: int | None = None, view: View = "stories"
+) -> Response:
     with _session(request) as session:
         profile = _profile_or_404(session, slug)
-        context = _feed_context(session, profile, topic)
+        context = _feed_context(session, profile, topic, view=view)
     return TEMPLATES.TemplateResponse(request, "feed.html", context)
 
 
 @router.get("/p/{slug}/feed", response_class=HTMLResponse)
 def feed_partial(
-    request: Request, slug: str, topic: int | None = None, cursor: str | None = None
+    request: Request,
+    slug: str,
+    topic: int | None = None,
+    cursor: str | None = None,
+    view: View = "stories",
 ) -> Response:
     """HTMX partial: tabs + grid for a topic, or just the next cards when ``cursor`` is set."""
     with _session(request) as session:
         profile = _profile_or_404(session, slug)
-        context = _feed_context(session, profile, topic, cursor)
+        context = _feed_context(session, profile, topic, cursor, view)
     template = "_cards.html" if cursor else "_feed.html"
     return TEMPLATES.TemplateResponse(request, template, context)
+
+
+@router.get("/story/{story_id}", response_class=HTMLResponse)
+def story_page(
+    request: Request, story_id: int, p: str | None = None, topic: int | None = None
+) -> Response:
+    """All members of a story; with ``p`` only those from the profile's sources."""
+    with _session(request) as session:
+        profile = _profile_or_404(session, p) if p else None
+        story = repo.get_story(session, story_id, profile)
+        if story is None:
+            raise HTTPException(status_code=404, detail=f"unknown story {story_id}")
+        if profile is not None:
+            selected = _selected_topic(profile, topic)
+            back = f"/p/{profile.slug}" + (f"?topic={selected.id}" if selected else "")
+        else:
+            back = "/"
+        context = _base_context(
+            session, profile, story=story, back=back, names=repo.source_names(session)
+        )
+    return TEMPLATES.TemplateResponse(request, "story.html", context)
 
 
 # --- settings ------------------------------------------------------------------------------
@@ -162,6 +201,7 @@ def _settings_context(
         on_settings=True,
         topics=sorted(profile.topics, key=lambda t: t.position),
         statuses=repo.source_statuses(session, source_ids),
+        **_pipeline_context(session),
         error=error,
         message=message,
         message_topic=message_topic,
@@ -186,6 +226,19 @@ async def _topic_form(request: Request) -> dict:
         "source_ids": [str(v) for v in form.getlist("sources")],
         "enabled": form.get("enabled") is not None,
     }
+
+
+def _pipeline_context(session: Session) -> dict:
+    return {"text_counts": text_status_counts(session), "runs": last_runs(session)}
+
+
+@router.get("/p/{slug}/settings/pipeline", response_class=HTMLResponse)
+def settings_pipeline(request: Request, slug: str) -> Response:
+    """HTMX partial: the read-only Pipeline panel (reloaded after an admin button runs)."""
+    with _session(request) as session:
+        profile = _profile_or_404(session, slug)
+        context = _base_context(session, profile, **_pipeline_context(session))
+    return TEMPLATES.TemplateResponse(request, "_pipeline.html", context)
 
 
 @router.get("/p/{slug}/settings", response_class=HTMLResponse)

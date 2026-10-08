@@ -1,7 +1,9 @@
 {% macro tab(label, topic_id, active) -%}
-{%- set href = "/p/" ~ profile.slug ~ ("?topic=" ~ topic_id if topic_id else "") -%}
+{%- set params = (["topic=" ~ topic_id] if topic_id else []) + (["view=articles"] if view == "articles" else []) -%}
+{%- set query = ("?" ~ params | join("&")) if params else "" -%}
+{%- set href = "/p/" ~ profile.slug ~ query -%}
 <a href="{{ href }}"
-   hx-get="/p/{{ profile.slug }}/feed{% if topic_id %}?topic={{ topic_id }}{% endif %}"
+   hx-get="/p/{{ profile.slug }}/feed{{ query }}"
    hx-target="#feed" hx-push-url="{{ href }}"
    {% if active %}aria-current="page"{% endif %}
    class="whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium transition-colors {% if active %}border-sky-600 text-sky-700 dark:border-sky-400 dark:text-sky-300{% else %}border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200{% endif %}">{{ label }}</a>
@@ -18,7 +20,7 @@
 </div>
 {% else %}
 <div class="rounded-xl border border-dashed border-slate-300 p-10 text-center text-slate-500 dark:border-slate-700 dark:text-slate-400">
-  {% if topic %}No articles match <strong>{{ topic.name }}</strong> yet.
+  {% if topic %}No {{ 'articles' if view == 'articles' else 'stories' }} match <strong>{{ topic.name }}</strong> yet.
   <a href="/p/{{ profile.slug }}/settings" class="text-sky-700 hover:underline dark:text-sky-400">Edit its keywords</a>.
   {% else %}No articles yet. They appear after the next refresh.{% endif %}
 </div>

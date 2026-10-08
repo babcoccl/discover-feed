@@ -59,5 +59,21 @@
       <description>Full transcript of the company's third-quarter call with analysts.</description>
       <media:content url="https://picsum.photos/seed/cnbc-markets-7/800/450" medium="image" width="800" height="450"/>
     </item>
+    <item>
+      <title>Fed cuts interest rates by a quarter point and signals more easing ahead</title>
+      <link>https://www.cnbc.com/2026/10/07/fed-rate-decision-october-2026.html</link>
+      <guid isPermaLink="false">cnbc-markets-8</guid>
+      <pubDate>Wed, 07 Oct 2026 18:05:00 +0000</pubDate>
+      <description><![CDATA[<p>The Federal Reserve lowered its benchmark rate a quarter percentage point to a range of 3.25%-3.5%, its third cut this year, as the FOMC pointed to a cooling jobs market.</p>]]></description>
+      <media:content url="https://picsum.photos/seed/cnbc-markets-8/800/450" medium="image" width="800" height="450"/>
+    </item>
+    <item>
+      <title>SEC sues crypto lender Nimbus, alleging $1.2 billion fraud</title>
+      <link>https://www.cnbc.com/2026/10/06/sec-sues-crypto-lender-nimbus.html</link>
+      <guid isPermaLink="false">cnbc-markets-9</guid>
+      <pubDate>Tue, 06 Oct 2026 15:40:00 +0000</pubDate>
+      <description><![CDATA[<p>The SEC accused Nimbus Lending and CEO Mark Ellery of running a $1.2 billion fraud that promised retail crypto investors returns of up to 14%.</p>]]></description>
+      <media:content url="https://picsum.photos/seed/cnbc-markets-9/800/450" medium="image" width="800" height="450"/>
+    </item>
   </channel>
 </rss>
