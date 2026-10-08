@@ -18,8 +18,9 @@ make demo             # throwaway demo on :8000 (see below)
 ```
 
 `make demo` deletes and rebuilds `.demo/demo.db`, seeds both example profiles from
-`config/profiles.example.yaml`, loads `tests/fixtures/demo/*.xml` (42 articles, served via
-`httpx.MockTransport`, no network), then runs the app with the scheduler off. It never touches
+`config/profiles.example.yaml`, loads `tests/fixtures/demo/*.xml` (66 articles, served via
+`httpx.MockTransport`, no network), extracts text from `tests/fixtures/demo/pages/` and clusters
+stories (4 multi-source stories), then runs the app with the scheduler off. It never touches
 `./data` or the Docker volume. Open http://localhost:8000/ (redirects to the first profile).
 Override with `make demo PORT=8001` / `DEMO_HOST=0.0.0.0`. Card images point at picsum.photos;
 without internet the cards fall back to gradient placeholders.
@@ -53,10 +54,13 @@ Notes:
 - Profiles, sources and topics live in the DB. They are seeded from the YAML only when the
   `profiles` table is empty; after that, edit topics in the UI/API (YAML changes are ignored
   until you drop the DB: `docker compose down -v` or delete `data/discover.db`).
-- UI: `/` → `/p/{slug}` (topic tabs + card grid, HTMX), `/p/{slug}/settings` (topic CRUD, source status).
+- UI: `/` → `/p/{slug}` (topic tabs + story cards, `?view=articles` for single articles, HTMX),
+  `/story/{id}`, `/p/{slug}/settings` (topic CRUD, source status, Pipeline panel).
 - Endpoints: `/health`, `/docs`, `/openapi.json`,
   `GET /api/profiles`, `GET /api/profiles/{slug}`,
-  `GET /api/profiles/{slug}/feed?topic=&limit=&cursor=&time_field=`,
+  `GET /api/profiles/{slug}/feed?group=stories|articles&topic=&limit=&cursor=&time_field=`,
+  `GET /api/stories/{id}[?profile=]`, `POST /api/admin/extract`, `POST /api/admin/cluster[?rebuild=true]`,
+  `GET /api/admin/articles/{id}?include_text=true` (only place extracted text is exposed),
   `POST /api/profiles/{slug}/topics`, `PUT|DELETE /api/profiles/{slug}/topics/{id}`,
   `GET /api/articles?limit=&source_id=&since=&time_field=published|fetched`, `POST /api/admin/refresh[?source_id=]`.
 - `DISCOVER_CONTACT_EMAIL` is appended to the fetch User-Agent; startup logs a warning if an
@@ -64,3 +68,16 @@ Notes:
 - With the scheduler enabled the app fetches every configured feed within
   `DISCOVER_REFRESH_JITTER_SECONDS` (60) of startup. Tests never hit the network: they use
   `httpx.MockTransport` + `tests/fixtures/*.xml`; keep it that way.
+
+## Tune clustering
+
+```bash
+python -m app.cluster.evaluate --threshold 0.35 0.45 0.55   # precision/recall sweep on labelled fixtures
+python -m app.cluster.evaluate --markdown                    # join scores per member + near-miss cosines
+python -m app.cluster --rebuild                              # re-cluster the configured DB after changing DISCOVER_CLUSTER_*
+```
+
+Labels: `tests/fixtures/demo/stories.yaml` (stories + near-miss pairs). Keep precision at 100%
+and the threshold clearly above the highest near-miss cosine. Add new live false merges or misses
+as fixtures (feed item + page + label). `tests/test_cluster.py` asserts the exact groups, so
+update it when fixtures or defaults change. README "Tuning clustering" has the full procedure.
