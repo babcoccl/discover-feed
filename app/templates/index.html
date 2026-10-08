@@ -1,25 +1,8 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="mb-8">
-  <h1 class="text-2xl font-bold mb-2">Your feed</h1>
-  <p class="text-slate-600">Ingestion isn't wired up yet. Configured profiles are listed below.</p>
-</section>
-
-<section class="grid gap-4 sm:grid-cols-2">
-  {% for profile in profiles %}
-  <article class="rounded-lg border bg-white p-4 shadow-sm">
-    <h2 class="font-semibold">{{ profile.name }}</h2>
-    <p class="text-xs text-slate-400 mb-2">{{ profile.id }}</p>
-    {% if profile.description %}<p class="text-sm text-slate-600 mb-3">{{ profile.description }}</p>{% endif %}
-    <dl class="text-sm text-slate-700 space-y-1">
-      <div><dt class="inline font-medium">Topics:</dt> <dd class="inline">{{ profile.topics | join(", ") or "—" }}</dd></div>
-      <div><dt class="inline font-medium">Sources:</dt> <dd class="inline">{{ profile.sources | length }}</dd></div>
-      <div><dt class="inline font-medium">Alert rules:</dt> <dd class="inline">{{ profile.alert_rules | length }}</dd></div>
-      <div><dt class="inline font-medium">Model:</dt> <dd class="inline">{{ profile.llm.model }}</dd></div>
-    </dl>
-  </article>
-  {% else %}
-  <p class="text-slate-500">No profiles configured. Set <code>DISCOVER_CONFIG_PATH</code> to a profiles YAML file.</p>
-  {% endfor %}
+<section class="mx-auto max-w-md py-16 text-center">
+  <h1 class="mb-2 text-2xl font-bold">No profiles yet</h1>
+  <p class="text-slate-600 dark:text-slate-400">No profiles configured. Set <code>DISCOVER_CONFIG_PATH</code> to a profiles YAML file
+    (profiles are seeded from it on first start), or run <code>make demo</code>.</p>
 </section>
 {% endblock %}

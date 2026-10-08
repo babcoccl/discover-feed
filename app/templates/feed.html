@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}{{ profile.name }} · Discover Feed{% endblock %}
+{% block content %}
+<div class="mb-4">
+  <h1 class="text-2xl font-bold tracking-tight">{{ profile.name }}</h1>
+  {% if profile.description %}<p class="text-sm text-slate-500 dark:text-slate-400">{{ profile.description }}</p>{% endif %}
+</div>
+<div id="feed">{% include "_feed.html" %}</div>
+{% endblock %}

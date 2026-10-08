@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:media="http://search.yahoo.com/mrss/">
+  <channel>
+    <title>SEC Press Releases</title>
+    <link>https://www.sec.gov/news/pressreleases</link>
+    <description>Demo fixture feed for sec-press-releases.</description>
+    <lastBuildDate>Wed, 07 Oct 2026 15:30:00 +0000</lastBuildDate>
+    <item>
+      <title>SEC Charges Investment Adviser with Misleading Investors About Fees</title>
+      <link>https://www.sec.gov/newsroom/press-releases/2026-141</link>
+      <guid isPermaLink="false">sec-press-releases-1</guid>
+      <pubDate>Wed, 07 Oct 2026 12:30:00 +0000</pubDate>
+      <description>The SEC alleges the adviser overbilled clients by $12 million over five years.</description>
+    </item>
+    <item>
+      <title>SEC Adopts Amendments to Form 10-K Climate Disclosure Requirements</title>
+      <link>https://www.sec.gov/newsroom/press-releases/2026-140</link>
+      <guid isPermaLink="false">sec-press-releases-2</guid>
+      <pubDate>Wed, 07 Oct 2026 04:00:00 +0000</pubDate>
+      <description>The amendments simplify reporting for smaller filers.</description>
+    </item>
+    <item>
+      <title>SEC Obtains Final Judgment Against Former Crypto Lending Executive</title>
+      <link>https://www.sec.gov/newsroom/press-releases/2026-139</link>
+      <guid isPermaLink="false">sec-press-releases-3</guid>
+      <pubDate>Tue, 06 Oct 2026 19:30:00 +0000</pubDate>
+      <description>The court ordered disgorgement and a permanent officer-and-director bar.</description>
+    </item>
+    <item>
+      <title>Statement on Proposed Changes to Quarterly Reporting</title>
+      <link>https://www.sec.gov/newsroom/speeches-statements/statement-quarterly-reporting-100426</link>
+      <guid isPermaLink="false">sec-press-releases-4</guid>
+      <pubDate>Tue, 06 Oct 2026 11:00:00 +0000</pubDate>
+      <description>Commissioner remarks on whether the SEC should allow semiannual reports.</description>
+    </item>
+    <item>
+      <title>SEC Announces Agenda for Investor Advisory Committee Meeting</title>
+      <link>https://www.sec.gov/newsroom/press-releases/2026-138</link>
+      <guid isPermaLink="false">sec-press-releases-5</guid>
+      <pubDate>Tue, 06 Oct 2026 02:30:00 +0000</pubDate>
+      <description>The SEC committee will discuss retail access to private markets.</description>
+    </item>
+    <item>
+      <title>SEC Charges Software Company and Executives in Revenue Recognition Scheme</title>
+      <link>https://www.sec.gov/newsroom/press-releases/2026-137</link>
+      <guid isPermaLink="false">sec-press-releases-6</guid>
+      <pubDate>Mon, 05 Oct 2026 18:00:00 +0000</pubDate>
+      <description>The SEC alleges the company pulled forward revenue to meet analyst estimates.</description>
+    </item>
+    <item>
+      <title>SEC Announces Enforcement Results for Fiscal Year 2026</title>
+      <link>https://www.sec.gov/newsroom/press-releases/2026-136</link>
+      <guid isPermaLink="false">sec-press-releases-7</guid>
+      <pubDate>Mon, 05 Oct 2026 09:30:00 +0000</pubDate>
+      <description>The SEC filed 612 enforcement actions and obtained $4.1 billion in remedies.</description>
+    </item>
+  </channel>
+</rss>

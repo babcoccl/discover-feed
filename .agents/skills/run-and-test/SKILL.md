@@ -14,7 +14,15 @@ make lint             # ruff check + ruff format --check
 make test             # pytest
 make format           # auto-fix lint/format issues
 make run              # uvicorn with reload on :8000
+make demo             # throwaway demo on :8000 (see below)
 ```
+
+`make demo` deletes and rebuilds `.demo/demo.db`, seeds both example profiles from
+`config/profiles.example.yaml`, loads `tests/fixtures/demo/*.xml` (42 articles, served via
+`httpx.MockTransport`, no network), then runs the app with the scheduler off. It never touches
+`./data` or the Docker volume. Open http://localhost:8000/ (redirects to the first profile).
+Override with `make demo PORT=8001` / `DEMO_HOST=0.0.0.0`. Card images point at picsum.photos;
+without internet the cards fall back to gradient placeholders.
 
 Docker:
 
@@ -35,7 +43,14 @@ Notes:
   `config/profiles.example.yaml`). Missing file = app starts with no profiles.
 - DB: `DISCOVER_DATABASE_URL` (default `sqlite:///./data/discover.db`; `/data` volume in Docker).
 - YAML values support `${VAR}` / `${VAR:-default}`; keep API keys in env / `.env`, never in the repo.
-- Endpoints: `/` placeholder page, `/health`, `/docs`, `/openapi.json`,
+- Profiles, sources and topics live in the DB. They are seeded from the YAML only when the
+  `profiles` table is empty; after that, edit topics in the UI/API (YAML changes are ignored
+  until you drop the DB: `docker compose down -v` or delete `data/discover.db`).
+- UI: `/` → `/p/{slug}` (topic tabs + card grid, HTMX), `/p/{slug}/settings` (topic CRUD, source status).
+- Endpoints: `/health`, `/docs`, `/openapi.json`,
+  `GET /api/profiles`, `GET /api/profiles/{slug}`,
+  `GET /api/profiles/{slug}/feed?topic=&limit=&cursor=&time_field=`,
+  `POST /api/profiles/{slug}/topics`, `PUT|DELETE /api/profiles/{slug}/topics/{id}`,
   `GET /api/articles?limit=&source_id=&since=&time_field=published|fetched`, `POST /api/admin/refresh[?source_id=]`.
 - `DISCOVER_CONTACT_EMAIL` is appended to the fetch User-Agent; startup logs a warning if an
   SEC source is configured without it.

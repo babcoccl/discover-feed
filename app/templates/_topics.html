@@ -1,0 +1,69 @@
+{%- set base = "/p/" ~ profile.slug ~ "/settings/topics" -%}
+{%- set input_cls = "w-full rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm placeholder:text-slate-400 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 dark:border-slate-700 dark:bg-slate-800" -%}
+{%- set label_cls = "mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400" -%}
+{%- set btn_cls = "rounded-md border border-slate-300 px-2.5 py-1 text-sm hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:hover:bg-slate-800" -%}
+{%- set primary_cls = "rounded-md bg-sky-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-sky-700 dark:bg-sky-500 dark:hover:bg-sky-600" -%}
+{% macro source_choices(selected) %}
+{% if profile.sources %}
+<fieldset class="text-sm">
+  <legend class="{{ label_cls }}">Only from sources <span class="font-normal normal-case">(none checked = all)</span></legend>
+  <div class="flex flex-wrap gap-x-4 gap-y-1">
+    {% for s in profile.sources %}
+    <label class="inline-flex items-center gap-1.5"><input type="checkbox" name="sources" value="{{ s.id }}" {% if s.id in selected %}checked{% endif %} class="h-4 w-4 accent-sky-600"> {{ s.name }}</label>
+    {% endfor %}
+  </div>
+</fieldset>
+{% endif %}
+{% endmacro %}
+{% if error %}<div role="alert" class="mb-4 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-200">{{ error }}</div>{% endif %}
+{% if message %}<div role="status" class="mb-4 rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">{{ message }}
+  {% if message_topic and message_topic.enabled %}<a href="/p/{{ profile.slug }}?topic={{ message_topic.id }}" class="ml-1 font-medium underline">View in feed →</a>{% endif %}</div>{% endif %}
+
+<ol class="mb-6 space-y-3">
+  {% for topic in topics %}
+  <li id="topic-{{ topic.id }}" class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 {% if not topic.enabled %}opacity-70{% endif %}">
+    <form method="post" action="{{ base }}/{{ topic.id }}" hx-post="{{ base }}/{{ topic.id }}" hx-target="#topics" class="space-y-3">
+      <div class="flex flex-wrap items-center gap-3">
+        <span class="w-6 text-sm tabular-nums text-slate-400">{{ loop.index }}.</span>
+        <input name="name" value="{{ topic.name }}" required maxlength="100" aria-label="Topic name" class="{{ input_cls }} max-w-xs flex-1 font-medium">
+        <label class="inline-flex items-center gap-2 text-sm"><input type="checkbox" name="enabled" {% if topic.enabled %}checked{% endif %} class="h-4 w-4 accent-sky-600"> Enabled</label>
+      </div>
+      <div class="grid gap-3 sm:grid-cols-2">
+        <label class="block"><span class="{{ label_cls }}">Include keywords</span>
+          <input name="include" value="{{ topic.include_keywords | join(', ') }}" placeholder="empty = all articles" class="{{ input_cls }}"></label>
+        <label class="block"><span class="{{ label_cls }}">Exclude keywords</span>
+          <input name="exclude" value="{{ topic.exclude_keywords | join(', ') }}" placeholder="none" class="{{ input_cls }}"></label>
+      </div>
+      {{ source_choices(topic.source_ids) }}
+      <div class="flex flex-wrap items-center gap-2 pt-1">
+        {# Save comes first so pressing Enter in a field saves rather than moving/deleting. #}
+        <button type="submit" class="{{ primary_cls }}">Save</button>
+        <button type="submit" formaction="{{ base }}/{{ topic.id }}/move?direction=up" hx-post="{{ base }}/{{ topic.id }}/move?direction=up" hx-target="#topics" class="{{ btn_cls }}" aria-label="Move {{ topic.name }} up" title="Move up" {% if loop.first %}disabled{% endif %}>↑</button>
+        <button type="submit" formaction="{{ base }}/{{ topic.id }}/move?direction=down" hx-post="{{ base }}/{{ topic.id }}/move?direction=down" hx-target="#topics" class="{{ btn_cls }}" aria-label="Move {{ topic.name }} down" title="Move down" {% if loop.last %}disabled{% endif %}>↓</button>
+        <button type="submit" formaction="{{ base }}/{{ topic.id }}/delete" hx-post="{{ base }}/{{ topic.id }}/delete" hx-target="#topics" hx-confirm="Delete topic “{{ topic.name }}”?" class="{{ btn_cls }} ml-auto text-red-600 dark:text-red-400">Delete</button>
+        {% if topic.enabled %}<a href="/p/{{ profile.slug }}?topic={{ topic.id }}" class="text-sm text-sky-700 hover:underline dark:text-sky-400">View tab →</a>{% endif %}
+      </div>
+    </form>
+  </li>
+  {% else %}
+  <li class="rounded-xl border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500 dark:border-slate-700">No topics yet. The feed shows only the All tab.</li>
+  {% endfor %}
+</ol>
+
+<form method="post" action="{{ base }}" hx-post="{{ base }}" hx-target="#topics"
+      class="space-y-3 rounded-xl border border-dashed border-slate-300 bg-white/50 p-4 dark:border-slate-700 dark:bg-slate-900/50">
+  <h3 class="font-semibold">Add a topic</h3>
+  <div class="grid gap-3 sm:grid-cols-3">
+    <label class="block"><span class="{{ label_cls }}">Name</span>
+      <input name="name" value="{{ draft.get('name', '') }}" required maxlength="100" placeholder="e.g. Climate" class="{{ input_cls }}"></label>
+    <label class="block"><span class="{{ label_cls }}">Include keywords</span>
+      <input name="include" value="{{ draft.get('include', []) | join(', ') }}" placeholder="climate, carbon, emissions" class="{{ input_cls }}"></label>
+    <label class="block"><span class="{{ label_cls }}">Exclude keywords</span>
+      <input name="exclude" value="{{ draft.get('exclude', []) | join(', ') }}" placeholder="none" class="{{ input_cls }}"></label>
+  </div>
+  {{ source_choices(draft.get('source_ids', [])) }}
+  <div class="flex items-center gap-4">
+    <button type="submit" class="{{ primary_cls }}">Add topic</button>
+    <label class="inline-flex items-center gap-2 text-sm"><input type="checkbox" name="enabled" {% if draft.get('enabled', True) %}checked{% endif %} class="h-4 w-4 accent-sky-600"> Enabled</label>
+  </div>
+</form>

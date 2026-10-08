@@ -1,8 +1,9 @@
 PYTHON ?= python3
 HOST ?= 0.0.0.0
 PORT ?= 8000
+DEMO_HOST ?= 127.0.0.1
 
-.PHONY: install test lint format run docker-up docker-down
+.PHONY: install test lint format run demo docker-up docker-down
 
 install:
 	$(PYTHON) -m pip install -e ".[dev]"
@@ -20,6 +21,10 @@ format:
 
 run:
 	$(PYTHON) -m uvicorn app.main:app --reload --host $(HOST) --port $(PORT)
+
+# Throwaway demo DB (.demo/) seeded from the example profiles + fixture feeds; no network.
+demo:
+	$(PYTHON) -m app.demo --host $(DEMO_HOST) --port $(PORT)
 
 docker-up:
 	docker compose up --build

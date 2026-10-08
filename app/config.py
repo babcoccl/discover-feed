@@ -89,11 +89,25 @@ class AlertRule(_Model):
     enabled: bool = True
 
 
+class TopicConfig(_Model):
+    """A feed tab: articles matching any `include` keyword and no `exclude` keyword."""
+
+    name: str = Field(min_length=1)
+    include: list[str] = Field(
+        default_factory=list, description="Whole-word, case-insensitive; empty = all articles."
+    )
+    exclude: list[str] = Field(default_factory=list)
+    sources: list[str] = Field(
+        default_factory=list, description="Source names to restrict to; empty = all sources."
+    )
+    enabled: bool = True
+
+
 class Profile(_Model):
     id: str = Field(pattern=_SLUG)
     name: str = Field(min_length=1)
     description: str = ""
-    topics: list[str] = Field(default_factory=list)
+    topics: list[TopicConfig] = Field(default_factory=list)
     keywords: list[str] = Field(default_factory=list)
     sources: list[Source] = Field(default_factory=list)
     alert_rules: list[AlertRule] = Field(default_factory=list)
@@ -106,6 +120,15 @@ class Profile(_Model):
         if dupes:
             raise ValueError(f"duplicate source names: {sorted(dupes)}")
         known = set(names)
+        topic_names = [t.name.casefold() for t in self.topics]
+        if len(topic_names) != len(set(topic_names)):
+            raise ValueError("duplicate topic names")
+        for topic in self.topics:
+            unknown = set(topic.sources) - known
+            if unknown:
+                raise ValueError(
+                    f"topic {topic.name!r} references unknown sources: {sorted(unknown)}"
+                )
         for rule in self.alert_rules:
             unknown = set(rule.sources) - known
             if unknown:

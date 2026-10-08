@@ -1,0 +1,25 @@
+{% macro tab(label, topic_id, active) -%}
+{%- set href = "/p/" ~ profile.slug ~ ("?topic=" ~ topic_id if topic_id else "") -%}
+<a href="{{ href }}"
+   hx-get="/p/{{ profile.slug }}/feed{% if topic_id %}?topic={{ topic_id }}{% endif %}"
+   hx-target="#feed" hx-push-url="{{ href }}"
+   {% if active %}aria-current="page"{% endif %}
+   class="whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium transition-colors {% if active %}border-sky-600 text-sky-700 dark:border-sky-400 dark:text-sky-300{% else %}border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200{% endif %}">{{ label }}</a>
+{%- endmacro %}
+<nav aria-label="Topics" class="-mx-4 mb-5 overflow-x-auto px-4">
+  <div class="flex min-w-max gap-1 border-b border-slate-200 dark:border-slate-800">
+    {{ tab("All", None, topic is none) }}
+    {% for t in tabs %}{{ tab(t.name, t.id, topic is not none and topic.id == t.id) }}{% endfor %}
+  </div>
+</nav>
+{% if page.items %}
+<div id="grid" class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+  {% include "_cards.html" %}
+</div>
+{% else %}
+<div class="rounded-xl border border-dashed border-slate-300 p-10 text-center text-slate-500 dark:border-slate-700 dark:text-slate-400">
+  {% if topic %}No articles match <strong>{{ topic.name }}</strong> yet.
+  <a href="/p/{{ profile.slug }}/settings" class="text-sky-700 hover:underline dark:text-sky-400">Edit its keywords</a>.
+  {% else %}No articles yet. They appear after the next refresh.{% endif %}
+</div>
+{% endif %}

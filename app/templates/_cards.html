@@ -1,0 +1,9 @@
+{% for article in page.items %}{% include "_card.html" %}{% endfor %}
+{% if page.next_cursor %}
+<div class="col-span-full flex justify-center pt-2">
+  <button type="button"
+          hx-get="/p/{{ profile.slug }}/feed?{% if topic %}topic={{ topic.id }}&amp;{% endif %}cursor={{ page.next_cursor }}"
+          hx-target="closest div" hx-swap="outerHTML" hx-disabled-elt="this"
+          class="rounded-full border border-slate-300 bg-white px-5 py-2 text-sm font-medium shadow-sm hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800">Load more</button>
+</div>
+{% endif %}

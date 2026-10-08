@@ -3,23 +3,36 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
   <title>{% block title %}Discover Feed{% endblock %}</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/htmx.org@2.0.3" crossorigin="anonymous"></script>
 </head>
-<body class="bg-slate-50 text-slate-900 min-h-screen">
-  <header class="border-b bg-white">
-    <div class="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
-      <a href="/" class="text-xl font-semibold">Discover Feed</a>
-      <nav class="text-sm space-x-4 text-slate-600">
-        <a href="/docs" class="hover:text-slate-900">API docs</a>
-        <a href="/health" class="hover:text-slate-900">Health</a>
+<body class="min-h-screen bg-slate-50 text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100">
+  <header class="sticky top-0 z-10 border-b border-slate-200 bg-white/90 backdrop-blur dark:border-slate-800 dark:bg-slate-900/90">
+    <div class="mx-auto flex max-w-6xl items-center gap-3 px-4 py-3">
+      <a href="/" class="text-lg font-semibold tracking-tight">Discover</a>
+      {% if profiles %}
+      <label for="profile-switcher" class="sr-only">Profile</label>
+      <select id="profile-switcher" onchange="window.location = this.value"
+              class="min-w-0 max-w-[11rem] truncate rounded-md border border-slate-300 bg-white px-2 py-1 text-sm dark:border-slate-700 dark:bg-slate-800">
+        {% for p in profiles %}
+        <option value="/p/{{ p.slug }}{% if on_settings %}/settings{% endif %}" {% if profile and p.id == profile.id %}selected{% endif %}>{{ p.name }}</option>
+        {% endfor %}
+      </select>
+      {% endif %}
+      <nav class="ml-auto flex items-center gap-4 text-sm text-slate-600 dark:text-slate-400">
+        {% if profile %}
+        <a href="/p/{{ profile.slug }}" class="{% if not on_settings %}font-semibold text-slate-900 dark:text-white{% else %}hover:text-slate-900 dark:hover:text-white{% endif %}">Feed</a>
+        <a href="/p/{{ profile.slug }}/settings" class="{% if on_settings %}font-semibold text-slate-900 dark:text-white{% else %}hover:text-slate-900 dark:hover:text-white{% endif %}">Settings</a>
+        {% endif %}
+        <a href="/docs" class="hidden hover:text-slate-900 sm:inline dark:hover:text-white">API</a>
       </nav>
     </div>
   </header>
-  <main class="max-w-4xl mx-auto px-4 py-8">
+  <main class="mx-auto max-w-6xl px-4 py-6">
     {% block content %}{% endblock %}
   </main>
-  <footer class="max-w-4xl mx-auto px-4 py-6 text-xs text-slate-400">v{{ version }}</footer>
+  <footer class="mx-auto max-w-6xl px-4 py-6 text-xs text-slate-400 dark:text-slate-600">Discover Feed v{{ version }} · summaries are feed-provided; every card links to its source.</footer>
 </body>
 </html>
