@@ -30,9 +30,9 @@
       </div>
       <div class="grid gap-3 sm:grid-cols-2">
         <label class="block"><span class="{{ label_cls }}">Include keywords</span>
-          <input name="include" value="{{ topic.include_keywords | join(', ') }}" placeholder="empty = all articles" class="{{ input_cls }}"></label>
+          <textarea name="include" rows="2" placeholder="empty = all articles" class="{{ input_cls }} resize-y">{{ topic.include_keywords | join(', ') }}</textarea></label>
         <label class="block"><span class="{{ label_cls }}">Exclude keywords</span>
-          <input name="exclude" value="{{ topic.exclude_keywords | join(', ') }}" placeholder="none" class="{{ input_cls }}"></label>
+          <textarea name="exclude" rows="2" placeholder="none" class="{{ input_cls }} resize-y">{{ topic.exclude_keywords | join(', ') }}</textarea></label>
       </div>
       {{ source_choices(topic.source_ids) }}
       <div class="flex flex-wrap items-center gap-2 pt-1">
