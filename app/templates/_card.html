@@ -1,0 +1,22 @@
+{%- set source_name = names.get(article.source_id, article.source_id) -%}
+<article class="flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm transition hover:shadow-md dark:border-slate-800 dark:bg-slate-900">
+  <a href="{{ article.canonical_url }}" target="_blank" rel="noopener noreferrer" tabindex="-1" aria-hidden="true"
+     class="relative block aspect-video overflow-hidden bg-gradient-to-br {{ article.source_id | placeholder_gradient }}">
+    <span class="absolute inset-0 flex items-center justify-center px-4 text-center text-lg font-semibold text-slate-700/60 dark:text-slate-200/50">{{ source_name }}</span>
+    {% if article.image_url %}<img src="{{ article.image_url }}" alt="" loading="lazy" referrerpolicy="no-referrer"
+         class="absolute inset-0 h-full w-full object-cover" onerror="this.remove()">{% endif %}
+  </a>
+  <div class="flex flex-1 flex-col p-4">
+    <div class="mb-1 flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+      <span class="truncate font-medium text-slate-700 dark:text-slate-300">{{ source_name }}</span>
+      <span aria-hidden="true">·</span>
+      <time class="shrink-0" datetime="{{ article.published_at.isoformat() }}" title="{{ article.published_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ article.published_at | reltime }}</time>
+    </div>
+    <h2 class="mb-2 line-clamp-3 font-semibold leading-snug">
+      <a href="{{ article.canonical_url }}" target="_blank" rel="noopener noreferrer" class="hover:underline">{{ article.title or article.canonical_url }}</a>
+    </h2>
+    {% if article.summary_raw %}<p class="mb-3 line-clamp-3 text-sm text-slate-600 dark:text-slate-400">{{ article.summary_raw | snippet }}</p>{% endif %}
+    <a href="{{ article.canonical_url }}" target="_blank" rel="noopener noreferrer"
+       class="mt-auto inline-flex items-center gap-1 text-sm font-medium text-sky-700 hover:underline dark:text-sky-400">Read on {{ source_name }} <span aria-hidden="true">↗</span></a>
+  </div>
+</article>

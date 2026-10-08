@@ -6,7 +6,16 @@ profiles:
   - id: personal-reader
     name: Personal Reader
     description: Long-form tech, science and culture reading, summarised daily.
-    topics: [technology, science, programming, design]
+    # Topics become feed tabs. Keywords are whole-word and case-insensitive; an empty
+    # include list means "every article from the topic's sources".
+    topics:
+      - name: AI
+        include: [AI, artificial intelligence, machine learning, LLM, LLMs, neural network, chatbot]
+      - name: Home
+        include: [smart home, home, homes, heat pump, thermostat, housing, kitchen, solar panels]
+      - name: Travel
+        include: [travel, flight, flights, airline, airport, rail, train, hotel, passport]
+        exclude: [time travel]
     keywords: [python, open source, space, climate]
     sources:
       - name: Hacker News
@@ -37,7 +46,17 @@ profiles:
   - id: market-monitor
     name: Market Monitor
     description: Watches markets and macro news, alerting on high-signal events.
-    topics: [markets, macroeconomics, earnings, central banks]
+    topics:
+      - name: Markets
+        include: [stocks, S&P 500, Nasdaq, Dow, Treasury, yields, bonds, markets, oil prices]
+      - name: SEC filings
+        include: [SEC, 10-K, 10-Q, 8-K, filing, filings, enforcement, charges]
+      - name: Earnings
+        include: [earnings, revenue, guidance, quarterly results, EPS, profit]
+        exclude: [earnings call transcript]
+      - name: Fed
+        # No keywords + a source restriction: everything from the Fed feed.
+        sources: [Federal Reserve press releases]
     keywords: [fed, rate cut, inflation, earnings, guidance]
     sources:
       - name: Federal Reserve press releases

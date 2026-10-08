@@ -1,9 +1,22 @@
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, Integer, String, Text, TypeDecorator
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Table,
+    Text,
+    TypeDecorator,
+    UniqueConstraint,
+)
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.config import Source
 from app.db import Base
 
 
@@ -55,3 +68,69 @@ class SourceStatus(Base):
     next_attempt_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     etag: Mapped[str | None] = mapped_column(String(500))
     last_modified: Mapped[str | None] = mapped_column(String(100))
+
+
+profile_sources = Table(
+    "profile_sources",
+    Base.metadata,
+    Column("profile_id", ForeignKey("profiles.id", ondelete="CASCADE"), primary_key=True),
+    Column("source_id", ForeignKey("sources.id", ondelete="CASCADE"), primary_key=True),
+)
+
+
+class SourceRecord(Base):
+    """A feed; shared by every profile it is assigned to."""
+
+    __tablename__ = "sources"
+
+    id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    name: Mapped[str] = mapped_column(String(200))
+    type: Mapped[str] = mapped_column(String(20), default="rss")
+    url: Mapped[str] = mapped_column(String(2048))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    refresh_minutes: Mapped[int] = mapped_column(Integer, default=30)
+    tags: Mapped[list[str]] = mapped_column(JSON, default=list)
+
+    def to_config(self) -> Source:
+        return Source(
+            id=self.id,
+            name=self.name,
+            type=self.type,
+            url=self.url,
+            enabled=self.enabled,
+            refresh_minutes=self.refresh_minutes,
+            tags=list(self.tags or []),
+        )
+
+
+class ProfileRecord(Base):
+    __tablename__ = "profiles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    slug: Mapped[str] = mapped_column(String(100), unique=True)
+    name: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str] = mapped_column(Text, default="")
+    sources: Mapped[list[SourceRecord]] = relationship(
+        secondary=profile_sources, order_by=SourceRecord.name, lazy="selectin"
+    )
+    topics: Mapped[list["Topic"]] = relationship(
+        back_populates="profile",
+        order_by="Topic.position",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+
+
+class Topic(Base):
+    __tablename__ = "topics"
+    __table_args__ = (UniqueConstraint("profile_id", "name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("profiles.id", ondelete="CASCADE"))
+    name: Mapped[str] = mapped_column(String(100))
+    include_keywords: Mapped[list[str]] = mapped_column(JSON, default=list)
+    exclude_keywords: Mapped[list[str]] = mapped_column(JSON, default=list)
+    source_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    profile: Mapped[ProfileRecord] = relationship(back_populates="topics")

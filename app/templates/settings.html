@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Settings · {{ profile.name }}{% endblock %}
+{% block content %}
+<h1 class="mb-1 text-2xl font-bold tracking-tight">Settings</h1>
+<p class="mb-6 text-sm text-slate-500 dark:text-slate-400">{{ profile.name }}</p>
+
+<section class="mb-10" aria-labelledby="topics-heading">
+  <h2 id="topics-heading" class="mb-1 text-lg font-semibold">Topics</h2>
+  <p class="mb-4 max-w-3xl text-sm text-slate-600 dark:text-slate-400">
+    An article matches a topic when any include keyword appears as a whole word (case-insensitive)
+    in its title or summary and no exclude keyword does. Leave include empty to show every article
+    from the topic's sources. Separate keywords with commas. Changes apply to the feed immediately.
+  </p>
+  <div id="topics">{% include "_topics.html" %}</div>
+</section>
+
+<section aria-labelledby="sources-heading">
+  <h2 id="sources-heading" class="mb-3 text-lg font-semibold">Sources</h2>
+  <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+    <table class="min-w-full text-left text-sm">
+      <thead class="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500 dark:border-slate-800 dark:text-slate-400">
+        <tr>
+          <th class="px-4 py-2 font-medium">Source</th>
+          <th class="px-4 py-2 font-medium">Every</th>
+          <th class="px-4 py-2 font-medium">Last success</th>
+          <th class="px-4 py-2 font-medium">Failures</th>
+          <th class="px-4 py-2 font-medium">Last error</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+        {% for source in profile.sources %}
+        {% set status = statuses.get(source.id) %}
+        <tr>
+          <td class="px-4 py-2">
+            <div class="font-medium">{{ source.name }}{% if not source.enabled %} <span class="text-xs text-slate-400">(disabled)</span>{% endif %}</div>
+            <div class="max-w-xs truncate text-xs text-slate-500 dark:text-slate-400" title="{{ source.url }}">{{ source.url }}</div>
+          </td>
+          <td class="whitespace-nowrap px-4 py-2">{{ source.refresh_minutes }} min</td>
+          <td class="whitespace-nowrap px-4 py-2">
+            {% if status and status.last_success_at %}<time datetime="{{ status.last_success_at.isoformat() }}" title="{{ status.last_success_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ status.last_success_at | reltime }}</time>{% else %}<span class="text-slate-400">never</span>{% endif %}
+          </td>
+          <td class="px-4 py-2 {% if status and status.consecutive_failures %}font-semibold text-red-600 dark:text-red-400{% endif %}">{{ status.consecutive_failures if status else 0 }}</td>
+          <td class="max-w-sm px-4 py-2 text-xs text-red-700 dark:text-red-400"><span class="line-clamp-2" title="{{ status.last_error if status and status.last_error else '' }}">{{ status.last_error if status and status.last_error else "" }}</span>{% if not (status and status.last_error) %}<span class="text-slate-400">—</span>{% endif %}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="px-4 py-6 text-center text-slate-500">No sources assigned to this profile.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

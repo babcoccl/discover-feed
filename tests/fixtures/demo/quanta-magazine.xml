@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:media="http://search.yahoo.com/mrss/">
+  <channel>
+    <title>Quanta Magazine</title>
+    <link>https://www.quantamagazine.org</link>
+    <description>Demo fixture feed for quanta-magazine.</description>
+    <lastBuildDate>Wed, 07 Oct 2026 15:30:00 +0000</lastBuildDate>
+    <item>
+      <title>Mathematicians prove decades-old conjecture about prime gaps</title>
+      <link>https://www.quantamagazine.org/prime-gaps-conjecture-proved-20261007/</link>
+      <guid isPermaLink="false">quanta-magazine-1</guid>
+      <pubDate>Wed, 07 Oct 2026 11:30:00 +0000</pubDate>
+      <description>A new technique bounds how far apart consecutive primes can drift.</description>
+      <media:content url="https://picsum.photos/seed/quanta-magazine-1/800/450" medium="image" width="800" height="450"/>
+    </item>
+    <item>
+      <title>How artificial intelligence is changing protein design</title>
+      <link>https://www.quantamagazine.org/ai-protein-design-20261006/</link>
+      <guid isPermaLink="false">quanta-magazine-2</guid>
+      <pubDate>Wed, 07 Oct 2026 02:30:00 +0000</pubDate>
+      <description>Generative models now propose enzymes that have never existed in nature.</description>
+      <media:content url="https://picsum.photos/seed/quanta-magazine-2/800/450" medium="image" width="800" height="450"/>
+    </item>
+    <item>
+      <title>The physics of why your train window fogs up</title>
+      <link>https://www.quantamagazine.org/train-window-fog-physics-20261005/</link>
+      <guid isPermaLink="false">quanta-magazine-3</guid>
+      <pubDate>Tue, 06 Oct 2026 17:30:00 +0000</pubDate>
+      <description>Condensation, boundary layers and a surprisingly deep fluid dynamics problem.</description>
+    </item>
+    <item>
+      <title>Inside the race to build quantum error correction</title>
+      <link>https://www.quantamagazine.org/quantum-error-correction-race-20261004/</link>
+      <guid isPermaLink="false">quanta-magazine-4</guid>
+      <pubDate>Tue, 06 Oct 2026 08:30:00 +0000</pubDate>
+      <description>Several labs crossed the break-even threshold this year.</description>
+      <media:content url="https://picsum.photos/seed/quanta-magazine-4/800/450" medium="image" width="800" height="450"/>
+    </item>
+    <item>
+      <title>How migrating birds plan their flights across oceans</title>
+      <link>https://www.quantamagazine.org/bird-migration-flights-20261003/</link>
+      <guid isPermaLink="false">quanta-magazine-5</guid>
+      <pubDate>Mon, 05 Oct 2026 23:30:00 +0000</pubDate>
+      <description>Tracking data shows birds wait for tailwinds with remarkable precision.</description>
+      <media:content url="https://picsum.photos/seed/quanta-magazine-5/800/450" medium="image" width="800" height="450"/>
+    </item>
+    <item>
+      <title>Why time travel paradoxes may not be paradoxes after all</title>
+      <link>https://www.quantamagazine.org/time-travel-paradoxes-20261002/</link>
+      <guid isPermaLink="false">quanta-magazine-6</guid>
+      <pubDate>Mon, 05 Oct 2026 14:30:00 +0000</pubDate>
+      <description>Physicists argue that consistent closed timelines are mathematically allowed.</description>
+    </item>
+    <item>
+      <title>The hidden mathematics of crystal growth</title>
+      <link>https://www.quantamagazine.org/crystal-growth-math-20261001/</link>
+      <guid isPermaLink="false">quanta-magazine-7</guid>
+      <pubDate>Mon, 05 Oct 2026 05:30:00 +0000</pubDate>
+      <description>Snowflakes, quasicrystals and the equations that shape them.</description>
+      <media:content url="https://picsum.photos/seed/quanta-magazine-7/800/450" medium="image" width="800" height="450"/>
+    </item>
+  </channel>
+</rss>

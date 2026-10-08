@@ -38,6 +38,28 @@ across renames). New source kinds plug in via `app/sources/base.py` (`SourceAdap
 `@register(SourceType...)`). The optional `state` argument of `fetch()` carries
 ETag/Last-Modified for conditional requests; adapters without them can ignore it.
 
+## Profiles, topics and the UI
+
+On first start the profiles, their sources and topics are seeded from the YAML config into the
+database; from then on the DB is the source of truth (edit topics in the UI or API).
+
+A topic is a feed tab: an article matches when any `include` keyword appears as a whole word
+(case-insensitive) in its title or feed summary and no `exclude` keyword does. An empty
+`include` list means every article from the topic's sources (optionally restricted with
+`sources`). Matching runs at query time; no LLM is involved.
+
+- `/` redirects to the first profile; `/p/{slug}` shows topic tabs and a card grid; every card
+  links to the original article.
+- `/p/{slug}/settings` adds, edits, reorders and deletes topics and shows source health.
+- `GET /api/profiles`, `GET /api/profiles/{slug}`,
+  `GET /api/profiles/{slug}/feed?topic=&limit=&cursor=&time_field=published|fetched`
+  (pass the returned `next_cursor` to get the next page), and
+  `POST /api/profiles/{slug}/topics`, `PUT`/`DELETE /api/profiles/{slug}/topics/{id}`.
+
+```bash
+make demo   # throwaway DB + fixture feeds (no network) on http://localhost:8000
+```
+
 ## Development
 
 ```bash

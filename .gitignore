@@ -12,6 +12,7 @@ htmlcov/
 
 # Local runtime data and config (may contain secrets)
 data/
+.demo/
 *.db
 .env
 config/profiles.yaml

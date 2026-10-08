@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:media="http://search.yahoo.com/mrss/">
+  <channel>
+    <title>Hacker News: Front Page</title>
+    <link>https://news.ycombinator.com/</link>
+    <description>Demo fixture feed for hacker-news.</description>
+    <lastBuildDate>Wed, 07 Oct 2026 15:30:00 +0000</lastBuildDate>
+    <item>
+      <title>Show HN: A local LLM that runs on a Raspberry Pi 5</title>
+      <link>https://github.com/pi-llm/pi-llm</link>
+      <guid isPermaLink="false">hacker-news-1</guid>
+      <pubDate>Wed, 07 Oct 2026 15:00:00 +0000</pubDate>
+      <dc:creator>user7</dc:creator>
+      <comments>https://news.ycombinator.com/item?id=41800100</comments>
+      <description>A 3B-parameter model quantized to 4 bits answers questions offline at about 6 tokens per second.</description>
+    </item>
+    <item>
+      <title>Why airline seat maps lie to you</title>
+      <link>https://www.seatmath.net/blog/seat-maps</link>
+      <guid isPermaLink="false">hacker-news-2</guid>
+      <pubDate>Wed, 07 Oct 2026 08:30:00 +0000</pubDate>
+      <dc:creator>user8</dc:creator>
+      <comments>https://news.ycombinator.com/item?id=41800101</comments>
+      <description>The seat map you pick from is a template, not the aircraft you will actually board.</description>
+    </item>
+    <item>
+      <title>Ask HN: How do you organize homework for a kids' coding club?</title>
+      <link>https://news.ycombinator.com/item?id=41800001</link>
+      <guid isPermaLink="false">hacker-news-3</guid>
+      <pubDate>Wed, 07 Oct 2026 02:00:00 +0000</pubDate>
+      <dc:creator>user9</dc:creator>
+      <comments>https://news.ycombinator.com/item?id=41800102</comments>
+      <description>I run a weekly club for 10-12 year olds and want a lightweight way to hand out exercises.</description>
+    </item>
+    <item>
+      <title>The economics of heat pump retrofits in old homes</title>
+      <link>https://www.buildingscience.blog/heat-pump-retrofits</link>
+      <guid isPermaLink="false">hacker-news-4</guid>
+      <pubDate>Tue, 06 Oct 2026 19:30:00 +0000</pubDate>
+      <dc:creator>user10</dc:creator>
+      <comments>https://news.ycombinator.com/item?id=41800103</comments>
+      <description>Insulation first, then right-size the unit: real numbers from 40 pre-war houses.</description>
+    </item>
+    <item>
+      <title>SQLite is not a toy database</title>
+      <link>https://antonz.org/sqlite-is-not-a-toy-database/</link>
+      <guid isPermaLink="false">hacker-news-5</guid>
+      <pubDate>Tue, 06 Oct 2026 13:00:00 +0000</pubDate>
+      <dc:creator>user11</dc:creator>
+      <comments>https://news.ycombinator.com/item?id=41800104</comments>
+      <description>Why the embedded database powers more production workloads than people think.</description>
+    </item>
+    <item>
+      <title>Training a neural network to read train timetables</title>
+      <link>https://blog.railhacks.dev/timetable-ocr</link>
+      <guid isPermaLink="false">hacker-news-6</guid>
+      <pubDate>Tue, 06 Oct 2026 06:30:00 +0000</pubDate>
+      <dc:creator>user12</dc:creator>
+      <comments>https://news.ycombinator.com/item?id=41800105</comments>
+      <description>Scanned 1970s rail timetables, a small vision model, and a lot of manual labeling.</description>
+    </item>
+    <item>
+      <title>Mail carriers said the new handheld scanners slow them down</title>
+      <link>https://www.postaltimes.example.org/scanners</link>
+      <guid isPermaLink="false">hacker-news-7</guid>
+      <pubDate>Tue, 06 Oct 2026 00:00:00 +0000</pubDate>
+      <dc:creator>user13</dc:creator>
+      <comments>https://news.ycombinator.com/item?id=41800106</comments>
+      <description>Workers said route times grew by 20 minutes after the rollout.</description>
+    </item>
+  </channel>
+</rss>

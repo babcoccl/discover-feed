@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:media="http://search.yahoo.com/mrss/">
+  <channel>
+    <title>Markets</title>
+    <link>https://www.cnbc.com/markets/</link>
+    <description>Demo fixture feed for cnbc-markets.</description>
+    <lastBuildDate>Wed, 07 Oct 2026 15:30:00 +0000</lastBuildDate>
+    <item>
+      <title>Stocks rally as Treasury yields fall; S&amp;P 500 closes at a record</title>
+      <link>https://www.cnbc.com/2026/10/07/stock-market-today-live-updates.html</link>
+      <guid isPermaLink="false">cnbc-markets-1</guid>
+      <pubDate>Wed, 07 Oct 2026 15:15:00 +0000</pubDate>
+      <description>The S&amp;P 500 gained 1.1% and the Nasdaq rose 1.4% as bond yields retreated.</description>
+      <media:content url="https://picsum.photos/seed/cnbc-markets-1/800/450" medium="image" width="800" height="450"/>
+    </item>
+    <item>
+      <title>Nvidia earnings: what Wall Street expects from the chipmaker</title>
+      <link>https://www.cnbc.com/2026/10/07/nvidia-earnings-expectations.html</link>
+      <guid isPermaLink="false">cnbc-markets-2</guid>
+      <pubDate>Wed, 07 Oct 2026 09:15:00 +0000</pubDate>
+      <description>Analysts expect revenue of $58 billion and strong data center guidance.</description>
+      <media:content url="https://picsum.photos/seed/cnbc-markets-2/800/450" medium="image" width="800" height="450"/>
+    </item>
+    <item>
+      <title>Oil prices jump after OPEC+ announces surprise output cut</title>
+      <link>https://www.cnbc.com/2026/10/06/oil-prices-opec-cut.html</link>
+      <guid isPermaLink="false">cnbc-markets-3</guid>
+      <pubDate>Wed, 07 Oct 2026 03:15:00 +0000</pubDate>
+      <description>Brent crude rose above $90 a barrel for the first time since spring.</description>
+    </item>
+    <item>
+      <title>Delta beats on quarterly results and raises full-year guidance</title>
+      <link>https://www.cnbc.com/2026/10/06/delta-earnings-q3-2026.html</link>
+      <guid isPermaLink="false">cnbc-markets-4</guid>
+      <pubDate>Tue, 06 Oct 2026 21:15:00 +0000</pubDate>
+      <description>The airline cited strong premium demand and lower fuel costs.</description>
+      <media:content url="https://picsum.photos/seed/cnbc-markets-4/800/450" medium="image" width="800" height="450"/>
+    </item>
+    <item>
+      <title>Nasdaq slips as chip stocks retreat from highs</title>
+      <link>https://www.cnbc.com/2026/10/05/nasdaq-chip-stocks-retreat.html</link>
+      <guid isPermaLink="false">cnbc-markets-5</guid>
+      <pubDate>Tue, 06 Oct 2026 15:15:00 +0000</pubDate>
+      <description>Semiconductor shares fell 2% after a downgrade from a major broker.</description>
+      <media:content url="https://picsum.photos/seed/cnbc-markets-5/800/450" medium="image" width="800" height="450"/>
+    </item>
+    <item>
+      <title>Retailer shares plunge after 8-K filing reveals CEO departure</title>
+      <link>https://www.cnbc.com/2026/10/04/retailer-ceo-exit-8k.html</link>
+      <guid isPermaLink="false">cnbc-markets-6</guid>
+      <pubDate>Tue, 06 Oct 2026 09:15:00 +0000</pubDate>
+      <description>The company disclosed the abrupt exit in a regulatory filing late Friday.</description>
+    </item>
+    <item>
+      <title>Earnings call transcript: PepsiCo Q3 2026</title>
+      <link>https://www.cnbc.com/2026/10/03/pepsico-q3-2026-earnings-call-transcript.html</link>
+      <guid isPermaLink="false">cnbc-markets-7</guid>
+      <pubDate>Tue, 06 Oct 2026 03:15:00 +0000</pubDate>
+      <description>Full transcript of the company's third-quarter call with analysts.</description>
+      <media:content url="https://picsum.photos/seed/cnbc-markets-7/800/450" medium="image" width="800" height="450"/>
+    </item>
+  </channel>
+</rss>

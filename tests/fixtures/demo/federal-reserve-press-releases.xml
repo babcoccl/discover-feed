@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:media="http://search.yahoo.com/mrss/">
+  <channel>
+    <title>FRB: Press Release - All</title>
+    <link>https://www.federalreserve.gov/feeds/press_all.html</link>
+    <description>Demo fixture feed for federal-reserve-press-releases.</description>
+    <lastBuildDate>Wed, 07 Oct 2026 15:30:00 +0000</lastBuildDate>
+    <item>
+      <title>Federal Reserve issues FOMC statement</title>
+      <link>https://www.federalreserve.gov/newsevents/pressreleases/monetary20261007a.htm</link>
+      <guid isPermaLink="false">federal-reserve-press-releases-1</guid>
+      <pubDate>Wed, 07 Oct 2026 14:30:00 +0000</pubDate>
+      <description>The Committee decided to lower the target range for the federal funds rate; markets had largely priced in the move.</description>
+    </item>
+    <item>
+      <title>Federal Reserve Board announces approval of application by First Midwest Bancorp</title>
+      <link>https://www.federalreserve.gov/newsevents/pressreleases/orders20261006a.htm</link>
+      <guid isPermaLink="false">federal-reserve-press-releases-2</guid>
+      <pubDate>Wed, 07 Oct 2026 06:30:00 +0000</pubDate>
+      <description>The Board approved the proposed acquisition of a state member bank.</description>
+    </item>
+    <item>
+      <title>Minutes of the Federal Open Market Committee, September 15-16, 2026</title>
+      <link>https://www.federalreserve.gov/newsevents/pressreleases/monetary20261005a.htm</link>
+      <guid isPermaLink="false">federal-reserve-press-releases-3</guid>
+      <pubDate>Tue, 06 Oct 2026 22:30:00 +0000</pubDate>
+      <description>Participants discussed the economic outlook and the balance sheet runoff.</description>
+    </item>
+    <item>
+      <title>Federal Reserve Board releases results of supplemental stress test</title>
+      <link>https://www.federalreserve.gov/newsevents/pressreleases/bcreg20261004a.htm</link>
+      <guid isPermaLink="false">federal-reserve-press-releases-4</guid>
+      <pubDate>Tue, 06 Oct 2026 14:30:00 +0000</pubDate>
+      <description>All participating banks remained above minimum capital requirements.</description>
+    </item>
+    <item>
+      <title>Speech by Governor Lee on Treasury market liquidity</title>
+      <link>https://www.federalreserve.gov/newsevents/speech/lee20261003a.htm</link>
+      <guid isPermaLink="false">federal-reserve-press-releases-5</guid>
+      <pubDate>Tue, 06 Oct 2026 06:30:00 +0000</pubDate>
+      <description>Governor Lee discussed recent episodes of stress in the Treasury market and possible reforms.</description>
+    </item>
+    <item>
+      <title>Federal Reserve Board announces enforcement action with Coastal Trust Company</title>
+      <link>https://www.federalreserve.gov/newsevents/pressreleases/enforcement20261002a.htm</link>
+      <guid isPermaLink="false">federal-reserve-press-releases-6</guid>
+      <pubDate>Mon, 05 Oct 2026 22:30:00 +0000</pubDate>
+      <description>The action addresses deficiencies in anti-money-laundering controls.</description>
+    </item>
+    <item>
+      <title>Agencies issue joint statement on third-party risk management</title>
+      <link>https://www.federalreserve.gov/newsevents/pressreleases/bcreg20261001a.htm</link>
+      <guid isPermaLink="false">federal-reserve-press-releases-7</guid>
+      <pubDate>Mon, 05 Oct 2026 14:30:00 +0000</pubDate>
+      <description>The statement clarifies expectations for bank partnerships with fintech firms.</description>
+    </item>
+  </channel>
+</rss>

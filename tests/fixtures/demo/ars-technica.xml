@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:media="http://search.yahoo.com/mrss/">
+  <channel>
+    <title>Ars Technica - All content</title>
+    <link>https://arstechnica.com</link>
+    <description>Demo fixture feed for ars-technica.</description>
+    <lastBuildDate>Wed, 07 Oct 2026 15:30:00 +0000</lastBuildDate>
+    <item>
+      <title>Smart home standard Matter 1.5 adds cameras and energy reporting</title>
+      <link>https://arstechnica.com/gadgets/2026/10/matter-1-5-cameras/</link>
+      <guid isPermaLink="false">ars-technica-1</guid>
+      <pubDate>Wed, 07 Oct 2026 13:30:00 +0000</pubDate>
+      <description><![CDATA[<p>The latest spec finally brings <strong>cameras</strong> into the fold, plus per-device energy reporting for your smart home.</p>]]></description>
+      <media:content url="https://picsum.photos/seed/ars-technica-1/800/450" medium="image" width="800" height="450"/>
+    </item>
+    <item>
+      <title>EU fines chatbot maker over training data</title>
+      <link>https://arstechnica.com/tech-policy/2026/10/eu-chatbot-fine/</link>
+      <guid isPermaLink="false">ars-technica-2</guid>
+      <pubDate>Wed, 07 Oct 2026 06:30:00 +0000</pubDate>
+      <description><![CDATA[<p>Regulators say the company scraped personal data to train its AI models without a legal basis.</p>]]></description>
+      <media:content url="https://picsum.photos/seed/ars-technica-2/800/450" medium="image" width="800" height="450"/>
+    </item>
+    <item>
+      <title>Europe's night trains are back, and booking them is still a mess</title>
+      <link>https://arstechnica.com/cars/2026/10/night-trains-booking/</link>
+      <guid isPermaLink="false">ars-technica-3</guid>
+      <pubDate>Tue, 06 Oct 2026 23:30:00 +0000</pubDate>
+      <description><![CDATA[<p>Rail operators added a dozen sleeper routes this year, but cross-border tickets remain a puzzle for travel planners.</p>]]></description>
+    </item>
+    <item>
+      <title>Thermostat makers push firmware fix after weekend outage</title>
+      <link>https://arstechnica.com/gadgets/2026/10/thermostat-outage/</link>
+      <guid isPermaLink="false">ars-technica-4</guid>
+      <pubDate>Tue, 06 Oct 2026 16:30:00 +0000</pubDate>
+      <description><![CDATA[<p>A bad cloud update left thousands of thermostats stuck in eco mode.</p>]]></description>
+      <media:content url="https://picsum.photos/seed/ars-technica-4/800/450" medium="image" width="800" height="450"/>
+    </item>
+    <item>
+      <title>NASA's Artemis III crew begins final training</title>
+      <link>https://arstechnica.com/space/2026/10/artemis-iii-training/</link>
+      <guid isPermaLink="false">ars-technica-5</guid>
+      <pubDate>Tue, 06 Oct 2026 09:30:00 +0000</pubDate>
+      <description><![CDATA[<p>The four astronauts will spend the next months in simulators in Houston.</p>]]></description>
+      <media:content url="https://picsum.photos/seed/ars-technica-5/800/450" medium="image" width="800" height="450"/>
+    </item>
+    <item>
+      <title>Review: a $300 robot vacuum that maps your whole kitchen</title>
+      <link>https://arstechnica.com/gadgets/2026/10/robot-vacuum-review/</link>
+      <guid isPermaLink="false">ars-technica-6</guid>
+      <pubDate>Tue, 06 Oct 2026 02:30:00 +0000</pubDate>
+      <description><![CDATA[<p>Great mapping, mediocre suction, and an app that wants too many permissions.</p>]]></description>
+    </item>
+    <item>
+      <title>Machine learning model predicts flight delays from weather data</title>
+      <link>https://arstechnica.com/science/2026/10/ml-flight-delays/</link>
+      <guid isPermaLink="false">ars-technica-7</guid>
+      <pubDate>Mon, 05 Oct 2026 19:30:00 +0000</pubDate>
+      <description><![CDATA[<p>Researchers say the system beats airline estimates by 18 minutes on average.</p>]]></description>
+      <media:content url="https://picsum.photos/seed/ars-technica-7/800/450" medium="image" width="800" height="450"/>
+    </item>
+  </channel>
+</rss>
