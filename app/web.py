@@ -47,8 +47,8 @@ def reltime(value: datetime | None, now: datetime | None = None) -> str:
         return f"{int(seconds // 3600)}h ago"
     if seconds < 7 * 86400:
         return f"{int(seconds // 86400)}d ago"
-    fmt = "%b %-d" if value.year == now.year else "%b %-d, %Y"
-    return value.strftime(fmt)
+    label = f"{value:%b} {value.day}"  # no %-d: glibc-only, raises on Windows
+    return label if value.year == now.year else f"{label}, {value.year}"
 
 
 def snippet(text: str | None, length: int = 280) -> str:

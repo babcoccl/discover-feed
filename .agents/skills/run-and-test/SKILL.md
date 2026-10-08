@@ -24,6 +24,13 @@ make demo             # throwaway demo on :8000 (see below)
 Override with `make demo PORT=8001` / `DEMO_HOST=0.0.0.0`. Card images point at picsum.photos;
 without internet the cards fall back to gradient placeholders.
 
+Without make (Windows): `demo.cmd` (double-click or `demo.cmd --port 8001 --no-open`) finds
+Python 3.12+ via `py`/`python` and runs `scripts/demo.py`, a stdlib-only launcher that creates
+`.venv`, `pip install -e .` (only when `pyproject.toml` changed; stamp in
+`.venv/.discover-feed-installed`), then `python -m app.demo --open`. `python scripts/demo.py`
+works on any OS. CI's `windows` job runs pytest and smoke-tests `demo.cmd` on windows-latest;
+keep `demo.cmd` CRLF (enforced by `.gitattributes`).
+
 Docker:
 
 ```bash
