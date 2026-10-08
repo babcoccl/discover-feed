@@ -81,3 +81,23 @@ Labels: `tests/fixtures/demo/stories.yaml` (stories + near-miss pairs). Keep pre
 and the threshold clearly above the highest near-miss cosine. Add new live false merges or misses
 as fixtures (feed item + page + label). `tests/test_cluster.py` asserts the exact groups, so
 update it when fixtures or defaults change. README "Tuning clustering" has the full procedure.
+
+## Summaries and the LLM
+
+- Tests and the demo never call a real LLM: `app/summarize/fake.py` (`FakeLLM(mode)`, modes
+  `ok prose malformed out_of_range invented_number empty http_500 timeout demo`) is an
+  `httpx.MockTransport`; pass it as `LLMClient(role, transport=...)` or
+  `create_app(settings, llm_transport=...)`. `tests/conftest.py` makes any LLMClient without a
+  transport fail the test.
+- Real endpoint: set `LOCAL_LLM_BASE_URL` (e.g. `http://<host>:8080/v1`), `LOCAL_LLM_API_KEY`,
+  then `make demo DEMO_ARGS="--real-llm --model <m>"` / `demo.cmd --real-llm --model <m>`.
+  Never hardcode the LAN IP.
+- Evaluate (Windows: `.venv\Scripts\python`; add `--fake` to run offline):
+  `python -m app.summarize.smoke --profile personal-reader --limit 5 --db .demo/demo.db`,
+  `python -m app.summarize.compare --endpoints a=http://h:8080/v1:m1,b=http://h2:8080/v1:m2 --stories 20 --markdown --db .demo/demo.db`,
+  `python -m app.summarize.capture --out tests/fixtures/llm/real_response.json --db .demo/demo.db`.
+- llama-server: `--host 0.0.0.0 --port 8080 --api-key <key> -c <ctx> -np <slots>`; `-c` is split
+  across slots, so give each slot ~16k for 5 articles x 1200 words; match `-np` to
+  `DISCOVER_SUMMARIZE_CONCURRENCY`.
+- Bump `PROMPT_VERSION` in `app/summarize/prompt.py` whenever the prompt changes (re-summarizes
+  every story).

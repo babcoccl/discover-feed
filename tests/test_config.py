@@ -4,7 +4,7 @@ from pydantic import ValidationError
 from app.config import AlertRule, MatchMode, SourceType, load_config, parse_config
 from tests.conftest import EXAMPLE_CONFIG
 
-MINIMAL_LLM = "llm: {base_url: 'http://localhost:8080/v1', model: m}"
+MINIMAL_LLM = "llm: {summarizer: {base_url: 'http://localhost:8080/v1', model: m}}"
 
 
 def test_example_config_loads_and_validates(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -20,32 +20,50 @@ def test_example_config_loads_and_validates(monkeypatch: pytest.MonkeyPatch) -> 
     assert reader.sources and market.sources
     assert all(s.type is SourceType.RSS for s in reader.sources)
     assert market.alert_rules[0].match is MatchMode.ANY
-    assert str(reader.llm.base_url) == "https://api.openai.com/v1"
-    assert reader.llm.api_key is None
-    assert market.llm.model == "llama3.1:8b"
+    llm = reader.llm.summarizer
+    assert str(llm.base_url) == "http://localhost:8080/v1"
+    assert llm.api_key is None
+    assert llm.model == "local"
+    assert llm.structured_output == "json_schema" and llm.disable_thinking
+    assert (llm.temperature, llm.max_tokens, llm.timeout_seconds) == (0.2, 600, 120)
+    assert reader.llm.chat is not None
+    assert market.llm.summarizer.model == "gpt-4o-mini"
+    assert not market.llm.summarizer.disable_thinking
 
 
 def test_env_vars_are_interpolated(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("LOCAL_LLM_BASE_URL", "http://10.0.0.5:8080/v1")
+    monkeypatch.setenv("LOCAL_LLM_API_KEY", "local-key")
     monkeypatch.setenv("LOCAL_LLM_MODEL", "qwen2.5")
 
     config = load_config(EXAMPLE_CONFIG)
 
-    reader = config.get_profile("personal-reader")
-    market = config.get_profile("market-monitor")
-    assert reader.llm.api_key.get_secret_value() == "sk-test"
-    assert "sk-test" not in repr(reader.llm)
-    assert market.llm.model == "qwen2.5"
+    reader = config.get_profile("personal-reader").llm.summarizer
+    market = config.get_profile("market-monitor").llm.summarizer
+    assert market.api_key.get_secret_value() == "sk-test"
+    assert "sk-test" not in repr(market)
+    assert str(reader.base_url) == "http://10.0.0.5:8080/v1"
+    assert reader.api_key.get_secret_value() == "local-key"
+    assert reader.model == "qwen2.5"
 
 
 def test_empty_env_var_uses_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LOCAL_LLM_BASE_URL", "")
+    monkeypatch.setenv("LOCAL_LLM_API_KEY", "")
     monkeypatch.setenv("LOCAL_LLM_MODEL", "")
 
-    market = load_config(EXAMPLE_CONFIG).get_profile("market-monitor")
+    reader = load_config(EXAMPLE_CONFIG).get_profile("personal-reader").llm.summarizer
 
-    assert str(market.llm.base_url) == "http://localhost:11434/v1"
-    assert market.llm.model == "llama3.1:8b"
+    assert str(reader.base_url) == "http://localhost:8080/v1"
+    assert reader.api_key is None
+    assert reader.model == "local"
+
+
+def test_flat_llm_block_is_rejected() -> None:
+    text = "profiles: [{id: a, name: A, llm: {base_url: 'http://x/v1', model: m}}]"
+    with pytest.raises(ValidationError):
+        parse_config(text)
 
 
 def test_empty_config_is_valid() -> None:

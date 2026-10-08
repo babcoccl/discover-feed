@@ -14,7 +14,7 @@ from app.profiles import active_sources, decode_cursor, encode_cursor, feed_page
 from app.settings import Settings
 from tests.conftest import EXAMPLE_CONFIG
 
-LLM = "llm: {base_url: 'http://localhost:8080/v1', model: m}"
+LLM = "llm: {summarizer: {base_url: 'http://localhost:8080/v1', model: m}}"
 SHARED_CONFIG = f"""
 profiles:
   - id: a

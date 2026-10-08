@@ -10,7 +10,7 @@ from sqlalchemy import delete, or_, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.cluster.base import ArticleDoc, Clusterer, StoryDoc, representative
-from app.models import Article, Story
+from app.models import Article, Story, StorySummary, SummaryJob
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,8 @@ class ClusterRunResult(BaseModel):
     multi_source_stories: int = 0
     joins: list[Joined] = []
     """Every article that joined a story, with the similarity score that justified it."""
+    story_ids: list[int] = []
+    """Stories created or given new members by this run (to be re-summarized)."""
 
 
 def doc(article: Article) -> ArticleDoc:
@@ -67,6 +69,9 @@ def _run(session: Session, clusterer: Clusterer, *, rebuild: bool) -> ClusterRun
     if rebuild:
         session.execute(update(Article).values(story_id=None))
         session.execute(delete(Story))
+        # Story ids are reassigned: detach old summaries (still reusable by input hash).
+        session.execute(update(StorySummary).values(story_id=None))
+        session.execute(delete(SummaryJob))
         session.flush()
 
     new = list(session.scalars(select(Article).where(Article.story_id.is_(None))))
@@ -104,6 +109,7 @@ def _run(session: Session, clusterer: Clusterer, *, rebuild: bool) -> ClusterRun
         result.new_stories = len(created)
         session.flush()
         refresh_stories(session, touched)
+        result.story_ids = sorted(touched)
 
     session.flush()
     result.stories = session.query(Story).count()

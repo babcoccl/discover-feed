@@ -140,8 +140,11 @@ def test_scheduler_registers_ingestion_jobs(tmp_path: Path) -> None:
     with TestClient(app):
         app.state.scheduler.pause()
         ids = {job.id for job in app.state.scheduler.get_jobs()}
-        assert ids == {f"ingest:{s.id}" for s in app.state.config.all_sources()} | {"pipeline"}
-        assert len(ids) == 11
+        assert ids == {f"ingest:{s.id}" for s in app.state.config.all_sources()} | {
+            "pipeline",
+            "summarize",
+        }
+        assert len(ids) == 12
 
 
 def test_warns_when_sec_source_has_no_contact_email(

@@ -30,14 +30,35 @@ class _Model(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class LLMEndpoint(_Model):
-    """An OpenAI-compatible chat completions endpoint."""
+class StructuredOutput(StrEnum):
+    JSON_SCHEMA = "json_schema"
+    JSON_OBJECT = "json_object"
+    NONE = "none"
+
+
+class LLMRole(_Model):
+    """One OpenAI-compatible chat completions endpoint (llama.cpp, vLLM, Ollama, OpenAI...).
+
+    Providers differ only in these settings, never in code.
+    """
 
     base_url: HttpUrl
     api_key: SecretStr | None = None
     model: str = Field(min_length=1)
     temperature: float = Field(default=0.2, ge=0, le=2)
-    timeout_seconds: float = Field(default=60, gt=0)
+    max_tokens: int = Field(default=600, ge=1)
+    timeout_seconds: float = Field(default=120, gt=0)
+    structured_output: StructuredOutput = StructuredOutput.JSON_SCHEMA
+    disable_thinking: bool = Field(
+        default=True,
+        description='Send chat_template_kwargs {"enable_thinking": false} (llama.cpp); '
+        "set false for providers that reject unknown parameters.",
+    )
+
+
+class LLMConfig(_Model):
+    summarizer: LLMRole
+    chat: LLMRole | None = Field(default=None, description="Story Q&A (next phase); unused yet.")
 
 
 class SourceType(StrEnum):
@@ -111,7 +132,7 @@ class Profile(_Model):
     keywords: list[str] = Field(default_factory=list)
     sources: list[Source] = Field(default_factory=list)
     alert_rules: list[AlertRule] = Field(default_factory=list)
-    llm: LLMEndpoint
+    llm: LLMConfig
 
     @model_validator(mode="after")
     def _check_references(self) -> "Profile":
@@ -189,8 +210,9 @@ def _blank_to_none(data: Any) -> Any:
     profiles = data.get("profiles") if isinstance(data, dict) else None
     for profile in profiles or []:
         llm = profile.get("llm") if isinstance(profile, dict) else None
-        if isinstance(llm, dict) and llm.get("api_key") == "":
-            llm["api_key"] = None
+        for role in (llm or {}).values() if isinstance(llm, dict) else ():
+            if isinstance(role, dict) and role.get("api_key") == "":
+                role["api_key"] = None
     return data
 
 

@@ -181,3 +181,51 @@ class Topic(Base):
     position: Mapped[int] = mapped_column(Integer, default=0)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     profile: Mapped[ProfileRecord] = relationship(back_populates="topics")
+
+
+class SummaryStatus(StrEnum):
+    OK = "ok"
+    FALLBACK = "fallback"
+    """The model's answers failed validation; ``text`` is the feed summary."""
+    FAILED = "failed"
+    """The endpoint failed (HTTP error, timeout); ``text`` is the feed summary."""
+
+
+class StorySummary(Base):
+    """Every generated summary version of a story (prior versions are kept)."""
+
+    __tablename__ = "story_summaries"
+    __table_args__ = (UniqueConstraint("story_id", "version"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    story_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    """Set to NULL when the story is deleted (rebuild); rows stay reusable by ``input_hash``."""
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    text: Mapped[str] = mapped_column(Text, default="")
+    citations_json: Mapped[list[list[int]]] = mapped_column(JSON, default=list)
+    """One list of source indexes (1-based) per sentence."""
+    article_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
+    """Article id of each numbered source: ``article_ids[n - 1]`` is [n]."""
+    basis: Mapped[str] = mapped_column(String(20))
+    model: Mapped[str] = mapped_column(String(200), default="")
+    prompt_version: Mapped[str] = mapped_column(String(40))
+    input_hash: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(10), index=True)
+    reason: Mapped[str | None] = mapped_column(Text)
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
+
+
+class SummaryJob(Base):
+    """A story waiting to be (re-)summarized."""
+
+    __tablename__ = "summary_jobs"
+
+    story_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    queued_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    force: Mapped[bool] = mapped_column(Boolean, default=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    last_error: Mapped[str | None] = mapped_column(Text)

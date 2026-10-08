@@ -3,7 +3,10 @@
 No network is used: every source URL is served from ``tests/fixtures/demo/<id>.xml`` and
 article pages from ``tests/fixtures/demo/pages/`` (``index.json`` maps URL to file,
 ``robots.json`` overrides robots.txt per host; other pages 404) through ``httpx.MockTransport``.
-After ingesting, the demo extracts text and clusters stories just like the scheduled pipeline.
+After ingesting, the demo extracts text, clusters stories and summarizes them just like the
+scheduled pipeline. Summaries come from a deterministic in-process fake LLM
+(``app.summarize.fake``) unless ``--real-llm`` is given, which uses the first profile's
+``llm.summarizer`` endpoint (``LOCAL_LLM_BASE_URL``, ``LOCAL_LLM_API_KEY``, ``LOCAL_LLM_MODEL``).
 The DB lives in ``.demo/`` and is recreated on every run, so the real database (``./data`` or
 the Docker volume) is never touched.
 """
@@ -11,6 +14,7 @@ the Docker volume) is never touched.
 import argparse
 import asyncio
 import json
+import os
 import threading
 import webbrowser
 from collections.abc import Sequence
@@ -23,9 +27,16 @@ from app.config import Source, load_config
 from app.db import init_db, make_engine, make_session_factory
 from app.extract import ExtractRunResult
 from app.ingest import Ingestor, SourceRunResult
-from app.pipeline import Pipeline, clusterer_from_settings, extractor_from_settings
+from app.pipeline import (
+    Pipeline,
+    clusterer_from_settings,
+    extractor_from_settings,
+    summary_worker_from_settings,
+)
 from app.profiles import active_sources, seed_from_config
 from app.settings import Settings
+from app.summarize.fake import FakeLLM
+from app.summarize.worker import SummarizeRunResult
 
 ROOT = Path(__file__).resolve().parent.parent
 DEMO_DB = ROOT / ".demo" / "demo.db"
@@ -80,11 +91,16 @@ class DemoBuild:
         ingested: list[SourceRunResult],
         extracted: ExtractRunResult,
         clustered: ClusterRunResult,
+        summarized: SummarizeRunResult | None = None,
+        llm_transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.settings = settings
         self.ingested = ingested
         self.extracted = extracted
         self.clustered = clustered
+        self.summarized = summarized
+        self.llm_transport = llm_transport
+        """What the app should use for the LLM: the fake, or None for the real endpoint."""
 
     def __iter__(self):  # `settings, results = build_demo()` keeps working
         return iter((self.settings, self.ingested))
@@ -95,7 +111,11 @@ def build_demo(
     *,
     config_path: Path = EXAMPLE_CONFIG,
     fixture_dir: Path = FIXTURE_DIR,
+    real_llm: bool = False,
+    summarize_limit: int | None = None,
 ) -> DemoBuild:
+    """``summarize_limit``: summarize only the newest N stories now (default: all); the rest
+    stay queued for "Summarize now" in Settings > Pipeline."""
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     for suffix in ("", "-journal", "-wal", "-shm"):
@@ -133,9 +153,15 @@ def build_demo(
             clusterer_from_settings(settings),
         )
         extracted, clustered = asyncio.run(pipeline.run())
+        transport = None if real_llm else FakeLLM("demo").transport()
+        worker = summary_worker_from_settings(
+            session_factory, settings, load_config(config_path), transport=transport
+        )
+        worker.enqueue_missing()
+        summarized = asyncio.run(worker.run(manual=True, limit=summarize_limit or 100_000))
     finally:
         engine.dispose()
-    return DemoBuild(settings, results, extracted, clustered)
+    return DemoBuild(settings, results, extracted, clustered, summarized, transport)
 
 
 def main() -> None:
@@ -152,20 +178,51 @@ def main() -> None:
         default=False,
         help="open the demo in the default browser once it starts",
     )
+    parser.add_argument(
+        "--real-llm",
+        action="store_true",
+        help="summarize with the real endpoint from LOCAL_LLM_BASE_URL / LOCAL_LLM_API_KEY "
+        "instead of the built-in fake LLM",
+    )
+    parser.add_argument("--model", help="model name for --real-llm (sets LOCAL_LLM_MODEL)")
+    parser.add_argument(
+        "--summaries",
+        type=int,
+        default=10,
+        help="with --real-llm, stories to summarize before starting (default 10; the rest "
+        "can be summarized from Settings > Pipeline)",
+    )
     args = parser.parse_args()
+    if args.real_llm:
+        if not os.environ.get("LOCAL_LLM_BASE_URL"):
+            parser.error("--real-llm needs LOCAL_LLM_BASE_URL, e.g. http://<host>:8080/v1")
+        if args.model:
+            os.environ["LOCAL_LLM_MODEL"] = args.model
+        print(f"Summarizing with {os.environ['LOCAL_LLM_BASE_URL']} (may take a while) ...")
+    elif args.model:
+        parser.error("--model only applies with --real-llm")
 
-    build = build_demo()
+    build = build_demo(
+        real_llm=args.real_llm, summarize_limit=args.summaries if args.real_llm else None
+    )
     settings = build.settings
     for r in build.ingested:
         print(f"  {r.source_id:<32} {r.status:<6} {r.new_articles} articles")
     e, c = build.extracted, build.clustered
     print(f"  text extraction: {e.ok} ok, {e.failed} failed, {e.skipped} skipped")
     print(f"  stories: {c.stories} ({c.multi_source_stories} covered by 2+ sources)")
+    if (sm := build.summarized) is not None:
+        llm = "real LLM" if args.real_llm else "fake LLM"
+        print(
+            f"  summaries ({llm}): {sm.ok} ok, {sm.fallback} fallback, {sm.failed} failed, "
+            f"{sm.queued} queued"
+        )
     url = f"http://localhost:{args.port}/"
     print(f"Demo DB: {DEMO_DB}\nOpen {url}  (Ctrl+C to stop)")
     if args.open:
         threading.Timer(1.5, webbrowser.open, args=(url,)).start()
-    uvicorn.run(create_app(settings), host=args.host, port=args.port)
+    app = create_app(settings, llm_transport=build.llm_transport)
+    uvicorn.run(app, host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

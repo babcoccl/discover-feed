@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app import profiles as repo
 from app.models import ProfileRecord, Topic
 from app.runs import last_runs, text_status_counts
+from app.summarize.views import summary_views
 from app.topics import split_keywords
 
 router = APIRouter(include_in_schema=False)
@@ -124,6 +125,8 @@ def _feed_context(
             page = repo.story_feed_page(session, profile, topic, limit=PAGE_SIZE, cursor=cursor)
     except repo.InvalidCursor:
         raise HTTPException(status_code=400, detail="invalid cursor") from None
+    names = repo.source_names(session)
+    story_ids = [item.story_id for item in page.items] if view == "stories" else []
     return _base_context(
         session,
         profile,
@@ -131,7 +134,8 @@ def _feed_context(
         tabs=[t for t in profile.topics if t.enabled],
         page=page,
         view=view,
-        names=repo.source_names(session),
+        names=names,
+        summaries=summary_views(session, story_ids, names),
     )
 
 
@@ -176,8 +180,14 @@ def story_page(
             back = f"/p/{profile.slug}" + (f"?topic={selected.id}" if selected else "")
         else:
             back = "/"
+        names = repo.source_names(session)
         context = _base_context(
-            session, profile, story=story, back=back, names=repo.source_names(session)
+            session,
+            profile,
+            story=story,
+            back=back,
+            names=names,
+            summary=summary_views(session, [story_id], names).get(story_id),
         )
     return TEMPLATES.TemplateResponse(request, "story.html", context)
 
@@ -186,6 +196,7 @@ def story_page(
 
 
 def _settings_context(
+    request: Request,
     session: Session,
     profile: ProfileRecord,
     *,
@@ -201,7 +212,7 @@ def _settings_context(
         on_settings=True,
         topics=sorted(profile.topics, key=lambda t: t.position),
         statuses=repo.source_statuses(session, source_ids),
-        **_pipeline_context(session),
+        **_pipeline_context(request, session),
         error=error,
         message=message,
         message_topic=message_topic,
@@ -228,8 +239,13 @@ async def _topic_form(request: Request) -> dict:
     }
 
 
-def _pipeline_context(session: Session) -> dict:
-    return {"text_counts": text_status_counts(session), "runs": last_runs(session)}
+def _pipeline_context(request: Request, session: Session) -> dict:
+    worker = getattr(request.app.state, "summaries", None)
+    return {
+        "text_counts": text_status_counts(session),
+        "runs": last_runs(session),
+        "summarizer": worker.status() if worker is not None else None,
+    }
 
 
 @router.get("/p/{slug}/settings/pipeline", response_class=HTMLResponse)
@@ -237,7 +253,7 @@ def settings_pipeline(request: Request, slug: str) -> Response:
     """HTMX partial: the read-only Pipeline panel (reloaded after an admin button runs)."""
     with _session(request) as session:
         profile = _profile_or_404(session, slug)
-        context = _base_context(session, profile, **_pipeline_context(session))
+        context = _base_context(session, profile, **_pipeline_context(request, session))
     return TEMPLATES.TemplateResponse(request, "_pipeline.html", context)
 
 
@@ -245,7 +261,7 @@ def settings_pipeline(request: Request, slug: str) -> Response:
 def settings_page(request: Request, slug: str) -> Response:
     with _session(request) as session:
         profile = _profile_or_404(session, slug)
-        context = _settings_context(session, profile)
+        context = _settings_context(request, session, profile)
     return TEMPLATES.TemplateResponse(request, "settings.html", context)
 
 
@@ -257,10 +273,14 @@ async def settings_create_topic(request: Request, slug: str) -> Response:
         try:
             topic = repo.create_topic(session, profile, **data)
             context = _settings_context(
-                session, profile, message=f"Added topic “{topic.name}”.", message_topic=topic
+                request,
+                session,
+                profile,
+                message=f"Added topic “{topic.name}”.",
+                message_topic=topic,
             )
         except repo.TopicError as exc:
-            context = _settings_context(session, profile, error=str(exc), draft=data)
+            context = _settings_context(request, session, profile, error=str(exc), draft=data)
     return _settings_response(request, context)
 
 
@@ -280,12 +300,12 @@ async def settings_update_topic(request: Request, slug: str, topic_id: int) -> R
         try:
             repo.update_topic(session, profile, topic, **data)
             context = _settings_context(
-                session, profile, message=f"Saved “{topic.name}”.", message_topic=topic
+                request, session, profile, message=f"Saved “{topic.name}”.", message_topic=topic
             )
         except repo.TopicError as exc:
             session.rollback()
             session.refresh(profile)
-            context = _settings_context(session, profile, error=str(exc))
+            context = _settings_context(request, session, profile, error=str(exc))
     return _settings_response(request, context)
 
 
@@ -298,7 +318,7 @@ def settings_move_topic(request: Request, slug: str, topic_id: int, direction: s
         repo.move_topic(
             session, profile, _topic_or_404(profile, topic_id), -1 if direction == "up" else 1
         )
-        context = _settings_context(session, profile)
+        context = _settings_context(request, session, profile)
     return _settings_response(request, context)
 
 
@@ -309,5 +329,5 @@ def settings_delete_topic(request: Request, slug: str, topic_id: int) -> Respons
         topic = _topic_or_404(profile, topic_id)
         name = topic.name
         repo.delete_topic(session, profile, topic)
-        context = _settings_context(session, profile, message=f"Deleted “{name}”.")
+        context = _settings_context(request, session, profile, message=f"Deleted “{name}”.")
     return _settings_response(request, context)

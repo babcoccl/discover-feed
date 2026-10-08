@@ -8,6 +8,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from app.config import Source
 from app.ingest import Ingestor
 from app.pipeline import Pipeline
+from app.summarize.worker import SummaryWorker
 
 
 def create_scheduler() -> BackgroundScheduler:
@@ -55,6 +56,26 @@ def schedule_pipeline(
         trigger=IntervalTrigger(minutes=interval_minutes),
         id="pipeline",
         name="Extract text and cluster stories",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+        next_run_time=datetime.now(UTC) + timedelta(seconds=first_run_delay_seconds),
+    )
+
+
+def schedule_summaries(
+    scheduler: BackgroundScheduler,
+    worker: SummaryWorker,
+    *,
+    interval_minutes: int = 5,
+    first_run_delay_seconds: int = 30,
+) -> None:
+    """Drain the summary queue (debounced stories and retries after backoff come due here)."""
+    scheduler.add_job(
+        worker.run_blocking,
+        trigger=IntervalTrigger(minutes=interval_minutes),
+        id="summarize",
+        name="Summarize stories",
         replace_existing=True,
         coalesce=True,
         max_instances=1,
