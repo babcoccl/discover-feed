@@ -230,6 +230,9 @@ $env:LOCAL_LLM_BASE_URL = "http://<llm-host>:8080/v1"; $env:LOCAL_LLM_API_KEY = 
 .\demo.cmd --real-llm --model <model>
 ```
 
+Or put `LOCAL_LLM_BASE_URL` / `LOCAL_LLM_API_KEY` in `.env` (see `.env.example`) and just run
+`demo.cmd --real-llm --model <model>`.
+
 Evaluate the real model (nothing is stored; `--db .demo/demo.db` reads the demo's stories,
 `--fake` runs offline). On Windows use `.venv\Scripts\python` instead of `python`:
 
@@ -272,7 +275,9 @@ Without make (e.g. Windows), run the same commands directly from the activated v
 - Profiles live in a YAML file; see [`config/profiles.example.yaml`](config/profiles.example.yaml).
   Copy it to `config/profiles.yaml` (git-ignored) and point `DISCOVER_CONFIG_PATH` at it.
 - YAML values may reference env vars: `${OPENAI_API_KEY}` or `${VAR:-default}`.
-  Put secrets in the environment or a git-ignored `.env` (see `.env.example`).
+  Put secrets in the environment or a git-ignored `.env` (see `.env.example`). Both docker
+  compose and local runs (uvicorn, `make demo`, `demo.cmd`, the `app.summarize` commands) read
+  `.env`, so `${LOCAL_LLM_BASE_URL}` etc. resolve either way; variables set in the shell win.
 
 | Env var | Default |
 | --- | --- |

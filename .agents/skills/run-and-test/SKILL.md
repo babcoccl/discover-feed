@@ -51,6 +51,8 @@ Notes:
   `config/profiles.example.yaml`). Missing file = app starts with no profiles.
 - DB: `DISCOVER_DATABASE_URL` (default `sqlite:///./data/discover.db`; `/data` volume in Docker).
 - YAML values support `${VAR}` / `${VAR:-default}`; keep API keys in env / `.env`, never in the repo.
+  `app/settings.py` loads `.env` (cwd, or `DISCOVER_ENV_FILE`) into `os.environ` at import
+  without overriding the shell; tests point `DISCOVER_ENV_FILE` at a missing file.
 - Profiles, sources and topics live in the DB. They are seeded from the YAML only when the
   `profiles` table is empty; after that, edit topics in the UI/API (YAML changes are ignored
   until you drop the DB: `docker compose down -v` or delete `data/discover.db`).

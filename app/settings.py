@@ -1,13 +1,26 @@
+import os
 from functools import lru_cache
 from pathlib import Path
 
+from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+ENV_FILE = Path(os.environ.get("DISCOVER_ENV_FILE", ".env"))
+
+
+def load_env_file(path: str | Path = ENV_FILE) -> bool:
+    """Copy ``.env`` into ``os.environ`` so ``${VAR}`` in the profiles YAML resolves in local
+    runs too (docker compose passes it through itself). Variables already set win."""
+    return load_dotenv(path, override=False, encoding="utf-8")
+
+
+load_env_file()
 
 
 class Settings(BaseSettings):
     """Process-level settings, read from environment variables prefixed with ``DISCOVER_``."""
 
-    model_config = SettingsConfigDict(env_prefix="DISCOVER_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="DISCOVER_", env_file=ENV_FILE, extra="ignore")
 
     config_path: Path = Path("config/profiles.yaml")
     database_url: str = "sqlite:///./data/discover.db"

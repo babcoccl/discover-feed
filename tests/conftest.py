@@ -1,12 +1,16 @@
+import os
 from pathlib import Path
 
-import pytest
-from fastapi.testclient import TestClient
-
-from app.main import create_app
-from app.settings import Settings
-
 ROOT = Path(__file__).resolve().parent.parent
+# Keep a developer's own .env out of the tests (must run before app.settings is imported).
+os.environ["DISCOVER_ENV_FILE"] = str(ROOT / "tests" / "no-such.env")
+
+import pytest  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+
+from app.main import create_app  # noqa: E402
+from app.settings import Settings  # noqa: E402
+
 EXAMPLE_CONFIG = ROOT / "config" / "profiles.example.yaml"
 
 
