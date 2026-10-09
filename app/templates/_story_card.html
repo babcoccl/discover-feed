@@ -1,17 +1,19 @@
-{#- A story as seen from the profile. Single-source stories look like plain article cards. -#}
+{#- A story as seen from the profile. Every card opens the story page (brief + report);
+    single-source cards also link to the article ("Read on ..."). -#}
 {%- set story = item -%}
 {%- set rep = story.representative -%}
 {%- set source_name = names.get(rep.source_id, rep.source_id) -%}
 {%- set multi = story.source_count > 1 -%}
 {%- set summary = summaries.get(story.story_id) if story.story_id and summaries is defined else none -%}
 {%- from "_summary.html" import lead_text, point_text, summary_byline, snippet_label -%}
-{%- if multi -%}
+{%- set internal = story.story_id is not none -%}
+{%- if internal -%}
 {%- set href = "/story/" ~ story.story_id ~ "?p=" ~ profile.slug ~ ("&topic=" ~ topic.id if topic else "") -%}
 {%- else -%}
 {%- set href = rep.url -%}
 {%- endif -%}
 <article class="flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm transition hover:shadow-md dark:border-slate-800 dark:bg-slate-900"{% if story.story_id %} data-story-id="{{ story.story_id }}"{% endif %}>
-  <a href="{{ href }}"{% if not multi %} target="_blank" rel="noopener noreferrer"{% endif %} tabindex="-1" aria-hidden="true"
+  <a href="{{ href }}"{% if not internal %} target="_blank" rel="noopener noreferrer"{% endif %} tabindex="-1" aria-hidden="true"
      class="relative block aspect-video overflow-hidden bg-gradient-to-br {{ rep.source_id | placeholder_gradient }}">
     <span class="absolute inset-0 flex items-center justify-center px-4 text-center text-lg font-semibold text-slate-700/60 dark:text-slate-200/50">{{ source_name }}</span>
     {% if story.image_url %}<img src="{{ story.image_url }}" alt="" loading="lazy" referrerpolicy="no-referrer"
@@ -25,7 +27,7 @@
       <time class="shrink-0" datetime="{{ story.last_updated_at.isoformat() }}" title="{{ story.last_updated_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ story.last_updated_at | reltime }}</time>
     </div>
     <h2 class="mb-2 line-clamp-3 font-semibold leading-snug">
-      <a href="{{ href }}"{% if not multi %} target="_blank" rel="noopener noreferrer"{% endif %} class="hover:underline">{{ story.title or rep.url }}</a>
+      <a href="{{ href }}"{% if not internal %} target="_blank" rel="noopener noreferrer"{% endif %} class="hover:underline">{{ story.title or rep.url }}</a>
     </h2>
     {% if summary and summary.style != "snippet" %}
     <div data-summary data-brief="{{ summary.style }}">

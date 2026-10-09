@@ -224,11 +224,16 @@ def _worker(request: Request):
 
 
 def _report_context(request: Request, story_id: int, report, polls: int = 0) -> dict:
-    """``report_state``: ``ok`` | ``failed`` | ``skipped`` | ``pending`` | ``timeout`` | ``off``."""
+    """``report_state``: ``ok`` | ``failed`` | ``skipped`` | ``pending`` | ``retrying`` |
+    ``timeout`` | ``off``. ``retrying``: the endpoint failed (e.g. timed out) and the job is
+    backing off."""
     worker = _worker(request)
     job = worker.report_job(story_id) if worker is not None else None
-    if job is not None and job.attempts == 0 and (report is None or report.status != "ok"):
-        state = "timeout" if polls >= REPORT_MAX_POLLS else "pending"
+    if job is not None and (report is None or report.status != "ok"):
+        if polls >= REPORT_MAX_POLLS:
+            state = "timeout"
+        else:
+            state = "retrying" if job.attempts else "pending"
     elif report is not None:
         state = report.status
     else:
@@ -240,6 +245,7 @@ def _report_context(request: Request, story_id: int, report, polls: int = 0) -> 
         "polls": polls,
         "poll_seconds": REPORT_POLL_SECONDS,
         "can_regenerate": worker is not None,
+        "job": job,
         "p": request.query_params.get("p"),
     }
 
@@ -250,7 +256,7 @@ def story_report(request: Request, story_id: int, polls: int = 0) -> Response:
     with _session(request) as session:
         report = report_views(session, [story_id], repo.source_names(session)).get(story_id)
         context = _report_context(request, story_id, report, polls)
-    if context["report_state"] not in ("pending", "timeout"):
+    if context["report_state"] not in ("pending", "retrying", "timeout"):
         return Response(status_code=200, headers={"HX-Refresh": "true"})
     return TEMPLATES.TemplateResponse(request, "_report.html", context)
 

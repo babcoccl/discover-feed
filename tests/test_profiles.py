@@ -488,7 +488,9 @@ def test_card_href_is_the_feeds_raw_link(demo_client: TestClient) -> None:
     _ingest_raw_link(demo_client)
     html = demo_client.get("/p/personal-reader").text
     href = RAW_LINK.replace("&", "&amp;")
-    assert html.count(f'href="{href}" target="_blank" rel="noopener noreferrer"') == 3
+    assert (
+        html.count(f'href="{href}" target="_blank" rel="noopener noreferrer"') == 3
+    )  # not clustered yet: the card links to the article
     assert "raw-link-story?" not in html  # never the canonical (dedup) form
 
 

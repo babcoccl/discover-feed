@@ -43,7 +43,7 @@
           {%- else -%}
           {{ sm.queued }} queued{% if sm.waiting %} ({{ sm.waiting }} waiting){% endif %}; briefs: {{ sm.summaries.ok }} ok, {{ sm.summaries.fallback }} fallback, {{ sm.summaries.failed }} failed
           · reports ({{ sm.report_mode | replace("_", " ") }}): {{ sm.reports.ok }} ok, {{ sm.reports.failed }} failed, {{ sm.reports.skipped }} skipped{% if sm.queued_reports %}, {{ sm.queued_reports }} queued{% endif %}
-          · {{ sm.model }}{% if sm.tokens_per_second %} · {{ sm.tokens_per_second }} tokens/s{% endif %}
+          · {{ sm.model }}{% if sm.tokens_per_second %} · {{ sm.tokens_per_second }} tokens/s{% endif %}{% if sm.seconds.brief %} · brief {{ sm.seconds.brief }}s{% endif %}{% if sm.seconds.report %} · report {{ sm.seconds.report }}s{% endif %}
           {%- if sm.paused_until %}<br><span class="text-amber-700 dark:text-amber-400">Paused after repeated endpoint errors until {{ sm.paused_until.strftime('%H:%M UTC') }}</span>{% endif %}
           {%- if sm.last_error %}<br><span class="text-rose-700 dark:text-rose-400" data-last-error>Last error: {{ sm.last_error | snippet(200) }}</span>{% endif %}
           {%- endif -%}

@@ -57,6 +57,8 @@ class WorkerStatus(BaseModel):
     paused_until: datetime | None
     tokens_per_second: float | None
     """Average generation speed over the last 20 generated briefs/reports."""
+    seconds: dict[str, float | None] = {}
+    """Median latency (all attempts) of the last 20 generated briefs / reports."""
     summaries: dict[str, int]
     """Stored brief versions by status."""
     reports: dict[str, int]
@@ -314,7 +316,13 @@ class SummaryWorker:
         with self.session_factory() as session:
             job = session.get(SummaryJob, (story_id, kind))
             if outcome.status == "failed":
-                self._record_failure(outcome.reason)
+                # Only brief failures pause the worker: a slow report timing out must not
+                # stop the cards from being written. Report jobs back off on their own.
+                if kind == SummaryKind.BRIEF:
+                    self._record_failure(outcome.reason)
+                else:
+                    self.state.last_error = f"report: {outcome.reason}"
+                    self.state.last_error_at = self.clock()
                 if job is not None:
                     job.attempts = attempts + 1
                     job.last_error = outcome.reason
@@ -394,8 +402,20 @@ class SummaryWorker:
                 .select_from(SummaryJob)
                 .where(SummaryJob.kind == SummaryKind.REPORT)
             )
+            seconds = {}
+            for kind in KINDS:
+                ms_list = sorted(
+                    session.scalars(
+                        select(StorySummary.latency_ms)
+                        .where(StorySummary.kind == kind, StorySummary.latency_ms > 0)
+                        .order_by(StorySummary.id.desc())
+                        .limit(20)
+                    )
+                )
+                seconds[kind] = round(ms_list[len(ms_list) // 2] / 1000, 1) if ms_list else None
         state = self.state
         return WorkerStatus(
+            seconds=seconds,
             enabled=self.enabled,
             model=self.model,
             running=state.running,
