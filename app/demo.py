@@ -21,12 +21,14 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import httpx
+from sqlalchemy import select
 
 from app.cluster.service import ClusterRunResult
 from app.config import Source, load_config
 from app.db import init_db, make_engine, make_session_factory
 from app.extract import ExtractRunResult
 from app.ingest import Ingestor, SourceRunResult
+from app.models import Story
 from app.pipeline import (
     Pipeline,
     clusterer_from_settings,
@@ -113,9 +115,14 @@ def build_demo(
     fixture_dir: Path = FIXTURE_DIR,
     real_llm: bool = False,
     summarize_limit: int | None = None,
+    report_mode: str | None = None,
+    fake_delay: float = 0,
 ) -> DemoBuild:
     """``summarize_limit``: summarize only the newest N stories now (default: all); the rest
-    stay queued for "Summarize now" in Settings > Pipeline."""
+    stay queued for "Summarize now" in Settings > Pipeline. Reports are generated now for
+    every multi-source story (the fixtures are older than the auto window) unless
+    ``report_mode`` is ``on_demand`` or ``off``. ``fake_delay``: seconds the fake LLM takes
+    per answer once the app runs (shows the "Generating detailed report" state)."""
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     for suffix in ("", "-journal", "-wal", "-shm"):
@@ -130,6 +137,7 @@ def build_demo(
         config_path=config_path,
         database_url=f"sqlite:///{db_path.as_posix()}",
         scheduler_enabled=False,
+        report_mode=report_mode,
     )
     engine = make_engine(settings.database_url)
     try:
@@ -158,7 +166,13 @@ def build_demo(
             session_factory, settings, load_config(config_path), transport=transport
         )
         worker.enqueue_missing()
+        if worker.report_mode.value == "auto":
+            with session_factory() as session:
+                multi = list(session.scalars(select(Story.id).where(Story.source_count >= 2)))
+            worker.enqueue(multi, kind="report")
         summarized = asyncio.run(worker.run(manual=True, limit=summarize_limit or 100_000))
+        if fake_delay and not real_llm:
+            transport = FakeLLM("demo", delay=fake_delay).transport()
     finally:
         engine.dispose()
     return DemoBuild(settings, results, extracted, clustered, summarized, transport)
@@ -192,6 +206,18 @@ def main() -> None:
         help="with --real-llm, stories to summarize before starting (default 10; the rest "
         "can be summarized from Settings > Pipeline)",
     )
+    parser.add_argument(
+        "--report-mode",
+        choices=["auto", "on_demand", "off"],
+        help="override the profiles' summaries.report_mode (on_demand: reports are written "
+        "when a story page is opened)",
+    )
+    parser.add_argument(
+        "--fake-llm-delay",
+        type=float,
+        default=0,
+        help="seconds the fake LLM takes per answer while the demo runs (default 0)",
+    )
     args = parser.parse_args()
     if args.real_llm:
         if not os.environ.get("LOCAL_LLM_BASE_URL"):
@@ -203,7 +229,10 @@ def main() -> None:
         parser.error("--model only applies with --real-llm")
 
     build = build_demo(
-        real_llm=args.real_llm, summarize_limit=args.summaries if args.real_llm else None
+        real_llm=args.real_llm,
+        summarize_limit=args.summaries if args.real_llm else None,
+        report_mode=args.report_mode,
+        fake_delay=args.fake_llm_delay,
     )
     settings = build.settings
     for r in build.ingested:
@@ -214,8 +243,8 @@ def main() -> None:
     if (sm := build.summarized) is not None:
         llm = "real LLM" if args.real_llm else "fake LLM"
         print(
-            f"  summaries ({llm}): {sm.ok} ok, {sm.fallback} fallback, {sm.failed} failed, "
-            f"{sm.queued} queued"
+            f"  briefs + reports ({llm}): {sm.ok} ok, {sm.fallback} fallback, "
+            f"{sm.failed} failed, {sm.rejected} rejected reports, {sm.queued} queued"
         )
     url = f"http://localhost:{args.port}/"
     print(f"Demo DB: {DEMO_DB}\nOpen {url}  (Ctrl+C to stop)")

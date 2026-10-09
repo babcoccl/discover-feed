@@ -147,46 +147,105 @@ formal FOMC statement, which shares too little wording with the press coverage o
 (cosine about 0.33). Reaching 100% recall would need a threshold of about 0.30, which leaves too
 little margin against false merges on live feeds.
 
-## Story summaries
+## Briefs and detailed reports
 
-Every story gets a short (2-3 sentence) neutral summary with `[n]` citations, written by an
-OpenAI-compatible chat completions endpoint (llama.cpp `llama-server`, vLLM, Ollama, OpenAI...).
-Cards show it instead of the feed snippet, each `[n]` links to that article's own permalink
-(`Article.url`), and the story page lists the numbered sources and `Summarized by <model>`.
-Cards without a summary show the raw feed text labelled **Feed snippet**.
+Stories get two LLM-written artifacts (Perplexity Discover style), both with `[n]` citations
+that link to each article's own permalink (`Article.url`):
+
+- **Brief** (feed cards and the top of the story page): one lead sentence (at most 30 words,
+  what happened) plus exactly three bullets (at most 28 words each: what happened, why it
+  matters or context, what's next or a key detail). Cards show the image, title, lead, the
+  three bullets, source chips and relative time; `card_style: lead_only` hides the bullets.
+- **Detailed report** (story page, below the brief): 3-5 paragraphs, about 250-450 words,
+  paraphrasing the sources, then the numbered **Sources** list. `[n]` is the same article in
+  the brief, the report and the Sources list. The page shows the model and when it was written.
+
+Written by an OpenAI-compatible chat completions endpoint (llama.cpp `llama-server`, vLLM,
+Ollama, OpenAI...). Only the numbered sources' text goes into the prompt; extracted article
+text is never returned by the public API or rendered in a page.
 
 How it works (`app/summarize/`):
 
-- After clustering, new stories and stories that gained members are queued (`summary_jobs`).
-  A background worker (`DISCOVER_SUMMARIZE_INTERVAL_MINUTES`, default 5, plus right after each
-  pipeline run) summarizes the newest stories first, `DISCOVER_SUMMARIZE_CONCURRENCY` (1) at a
-  time and at most `DISCOVER_SUMMARIZE_MAX_PER_RUN` (25) per run. It runs in its own thread, so
+- After clustering, new stories and stories that gained members are queued (`summary_jobs`,
+  one row per story and kind). A background worker (`DISCOVER_SUMMARIZE_INTERVAL_MINUTES`,
+  default 5, plus right after each pipeline run) does briefs before reports, newest stories
+  first: briefs `DISCOVER_SUMMARIZE_CONCURRENCY` (1) at a time and at most
+  `DISCOVER_SUMMARIZE_MAX_PER_RUN` (25) per run, reports `report_concurrency` (1) at a time and
+  at most `max_reports_per_run` (10). Briefs and reports debounce independently
+  (`DISCOVER_SUMMARIZE_RESUMMARIZE_MIN_MINUTES`, 30). The worker has its own thread, so
   ingestion, extraction and clustering never wait for the LLM.
-- Input: up to `DISCOVER_SUMMARIZE_MAX_ARTICLES_PER_STORY` (5) members, numbered `[1]..[k]`
-  (one per source first), each with title, source and the first
-  `DISCOVER_SUMMARIZE_MAX_WORDS_PER_ARTICLE` (1200) words of extracted text, or the feed
-  summary when extraction didn't succeed.
+- Input: briefs use up to `DISCOVER_SUMMARIZE_MAX_ARTICLES_PER_STORY` (5) members and the first
+  `DISCOVER_SUMMARIZE_MAX_WORDS_PER_ARTICLE` (1200) words of each; reports use
+  `report_max_articles` (6) and `report_max_words_per_article` (1500), keeping the brief's
+  numbering and appending any extra sources. Members are numbered one per source first; the
+  feed summary stands in when extraction failed.
 - The answer must be JSON (`response_format` JSON schema; code fences/prose around it are
-  tolerated) with one citation list per sentence, indexes within `1..k`, at most 70 words,
-  and every number (digits, %, amounts) present in a source that sentence cites. A rejected
-  answer is retried once with the error; if that fails too the story keeps its feed snippet
-  (`status=fallback`, with the reason). Endpoint errors (HTTP 5xx, timeouts) are `failed`, are
-  retried later with backoff, and after `DISCOVER_SUMMARIZE_FAILURE_LIMIT` (3) in a row the
-  worker pauses for `DISCOVER_SUMMARIZE_PAUSE_MINUTES` (10).
-- Every version is kept in `story_summaries` (text, citations, the article id behind each
-  `[n]`, basis, model, prompt version, tokens, latency). `input_hash` covers member ids, source
-  text hashes, `PROMPT_VERSION` and model: unchanged input means no LLM call. A story is
-  re-summarized at most once per `DISCOVER_SUMMARIZE_RESUMMARIZE_MIN_MINUTES` (30).
-- Settings > Pipeline shows the queue, running state, last error and tokens/sec, with a
-  **Summarize now** button. API: `POST /api/admin/summarize` (all queued stories in the
-  background; `?story_id=` one story, awaited; `?force=true` ignores the cache; `?wait=true`).
-- Story feed items and `GET /api/stories/{id}` have `summary`: `{text, citations: [{index,
-  source, headline, url}], sentences, basis: full_text|feed_summary|mixed, model,
-  generated_at}` or `null`. Extracted article text is never returned.
+  tolerated). Briefs are rejected for a wrong bullet count, a lead that is not one sentence,
+  length violations, missing or out-of-range citations, numbers (digits, %, amounts) not in a
+  cited source, or near-duplicate bullets / a bullet repeating the lead (token overlap at or
+  above `duplicate_threshold`, 0.6). Reports are rejected for fewer than 3 or more than 5
+  paragraphs, fewer than 225 or more than 500 words (the 250-450 target plus 10%), uncited
+  paragraphs, bad citations, invented numbers, duplicate paragraphs, or any run of 8+ words
+  copied from a source.
+- A rejected answer is retried once with the error. A brief that fails twice falls back to a
+  Phase 4 style 2-3 sentence summary, then to the feed snippet (labelled **Feed snippet**),
+  `status=fallback` with the reason. A report that fails twice is stored `failed` with the
+  reason and nothing is shown in its place; the story page offers **Retry**.
+- Stories whose only text is feed summaries (every member failed extraction, or a single member
+  under 150 words) get a brief but no report: `status=skipped`, `reason=insufficient_text`,
+  shown as "Report unavailable (not enough source text)".
+- Endpoint errors (HTTP 5xx, timeouts) are `failed`, retried later with backoff, and after
+  `DISCOVER_SUMMARIZE_FAILURE_LIMIT` (3) in a row the worker pauses for
+  `DISCOVER_SUMMARIZE_PAUSE_MINUTES` (10).
+- Every version is kept in `story_summaries` (`kind` brief|report, text, structured
+  `content_json`, citations, the article id behind each `[n]`, basis, model, prompt version,
+  tokens, latency). `input_hash` covers member ids, source text hashes, the kind's prompt
+  version (`BRIEF_PROMPT_VERSION`, `REPORT_PROMPT_VERSION`), model and kind: unchanged input
+  means no LLM call (a report that failed validation is not retried until its input changes or
+  you force it). Pre-report databases are migrated in place (old rows become briefs and stay
+  readable).
+- Settings > Pipeline shows the queue, brief and report counts, running state, last error and
+  tokens/sec, with a **Summarize now** button. API: `POST /api/admin/summarize` (all queued
+  jobs in the background; `?story_id=` one story, awaited; `?kind=brief|report|both`, default
+  both; `?force=true` ignores the cache; `?wait=true`).
+- Story feed items and `GET /api/stories/{id}` have `brief` (`{lead, lead_citations, bullets:
+  [{text, citations}], status: ok|fallback, style: brief|summary|snippet, basis, model,
+  generated_at, sources}`), `report` (`{paragraphs: [{text, citations}], status:
+  ok|failed|skipped, model, generated_at, sources}` or `null` when none was requested) and
+  the deprecated `summary` (the brief's lead and bullets joined; removed next release). Each
+  citation is `{index, source, headline, url}` with the raw `Article.url`.
+
+### Report modes and the profile `summaries` block
+
+Each profile can set (defaults shown; read from the YAML on every start, not stored in the DB):
+
+```yaml
+summaries:
+  card_style: lead_bullets       # or lead_only (cards show the lead without bullets)
+  report_mode: auto              # auto | on_demand | off
+  report_auto_max_age_hours: 48  # auto: pre-generate reports for multi-source stories this recent
+  max_reports_per_run: 10
+  report_concurrency: 1
+  report_max_articles: 6
+  report_max_words_per_article: 1500
+  report_max_tokens: 1400        # max_tokens for report requests (briefs use llm.summarizer's)
+  duplicate_threshold: 0.6       # token overlap at which two bullets/paragraphs are duplicates
+```
+
+- `auto`: reports are generated in the background for multi-source stories updated within the
+  window; any other story (single source, older) gets its report when its page is opened.
+- `on_demand`: opening a story page queues its report.
+- `off`: no reports.
+
+While a report is queued or running the story page shows "Generating detailed report..." and
+polls every 3 seconds (HTMX) for up to 2 minutes, then says it is still queued. **Regenerate**
+(and **Retry** after a failure) forces a new brief/report. `DISCOVER_REPORT_MODE` overrides
+every profile's `report_mode` (the demo's `--report-mode`).
 
 ### Configuring the endpoint
 
-Each profile has two LLM roles, `summarizer` (used now) and `chat` (story Q&A, next phase).
+Each profile has two LLM roles, `summarizer` (briefs and reports) and `chat` (story Q&A, next
+phase).
 The worker uses `DISCOVER_SUMMARIZE_PROFILE`'s summarizer (default: the first profile);
 `DISCOVER_SUMMARIZE_ENABLED=false` turns summaries off.
 
@@ -205,8 +264,8 @@ llm:
 
 Cloud providers use the same code with different settings (see `market-monitor` in
 `config/profiles.example.yaml`; set `disable_thinking: false` where unknown parameters are
-rejected). Start llama.cpp so other machines can reach it, with a key, enough context for 5
-articles, and parallel slots matching `DISCOVER_SUMMARIZE_CONCURRENCY`:
+rejected). Start llama.cpp so other machines can reach it, with a key, enough context for a
+report's 6 articles x 1500 words, and parallel slots matching `DISCOVER_SUMMARIZE_CONCURRENCY`:
 
 ```bash
 llama-server -m model.gguf --host 0.0.0.0 --port 8080 --api-key <key> -c 16384 -np 1
@@ -217,12 +276,18 @@ concurrency 2.)
 
 ### Demo and evaluation
 
-The demo and tests use a deterministic in-process fake LLM (no network); about one story in
-five gets an invented number so fallbacks show up. To use your server instead:
+The demo and tests use a deterministic in-process fake LLM (no network) that writes briefs and
+reports from the sources: about one brief in five gets an invented number (fallbacks show up),
+one story's report fails validation (shows **Retry**; Retry then succeeds), and single-source
+stories with little text show "Report unavailable". The demo writes reports for every
+multi-source story at startup (the fixtures are older than the auto window); open a
+single-source story to see an on-demand report. Demo options: `--report-mode on_demand|off`,
+`--fake-llm-delay 3` (slow fake answers to see the generating state), and `?cards=lead_only`
+on a feed URL previews the lead-only cards. To use your server instead:
 
 ```bash
 export LOCAL_LLM_BASE_URL=http://<llm-host>:8080/v1 LOCAL_LLM_API_KEY=<key>
-make demo DEMO_ARGS="--real-llm --model <model>"     # summarizes the newest 10 at startup
+make demo DEMO_ARGS="--real-llm --model <model>"     # briefs+reports for the newest 10 at startup
 ```
 
 ```powershell
@@ -237,16 +302,18 @@ Evaluate the real model (nothing is stored; `--db .demo/demo.db` reads the demo'
 `--fake` runs offline). On Windows use `.venv\Scripts\python` instead of `python`:
 
 ```bash
-python -m app.summarize.smoke --profile personal-reader --limit 5 --db .demo/demo.db
-python -m app.summarize.compare --stories 20 --markdown --db .demo/demo.db \
+python -m app.summarize.smoke --profile personal-reader --limit 5 --kind both --db .demo/demo.db
+python -m app.summarize.compare --stories 20 --kind both --markdown --db .demo/demo.db \
   --endpoints qwen=http://<host>:8080/v1:qwen3,gemma=http://<host2>:8080/v1:gemma3
-python -m app.summarize.capture --out tests/fixtures/llm/real_response.json --db .demo/demo.db
+python -m app.summarize.capture --kind brief --out tests/fixtures/llm/real_response.json --db .demo/demo.db
 ```
 
-`smoke` prints each summary with citations, latency, tokens/sec and the validation result;
-`compare` prints pass rate, fallbacks, median latency, tokens/sec and the summaries side by
-side (API keys: `LLM_API_KEY_<NAME>`, else `LOCAL_LLM_API_KEY`); `capture` saves one raw
-response that `tests/test_summarizer.py` then parses (skipped when absent). Only the fake LLM
+`--kind brief|report|both` (default both; capture also takes `summary`). `smoke` prints each
+brief and report with citations, latency, tokens/sec, word counts and the validation result;
+`compare` prints, per endpoint and kind, pass rate, fallbacks, failures, skipped reports,
+median latency, tokens/sec and average lead / bullet / report word counts, then the briefs and
+reports side by side (API keys: `LLM_API_KEY_<NAME>`, else `LOCAL_LLM_API_KEY`); `capture`
+saves one raw response that `tests/test_summarizer.py` then parses (skipped when absent). Only the fake LLM
 is tested here; real-model quality is unverified until you run these.
 
 ### Next phase: story Q&A

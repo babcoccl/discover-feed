@@ -86,8 +86,18 @@ update it when fixtures or defaults change. README "Tuning clustering" has the f
 
 ## Summaries and the LLM
 
+- Two artifacts per story: `brief` (lead + 3 cited bullets, cards) and `report` (3-5 cited
+  paragraphs, story page); `story_summaries.kind`, one `summary_jobs` row per (story, kind),
+  briefs run first. Per-profile `summaries:` YAML block (read on every start): `card_style`
+  (lead_bullets|lead_only), `report_mode` (auto|on_demand|off), `report_auto_max_age_hours`,
+  `max_reports_per_run`, `report_concurrency`, `report_max_articles`,
+  `report_max_words_per_article`, `report_max_tokens`, `duplicate_threshold`;
+  `DISCOVER_REPORT_MODE` overrides report_mode. `POST /api/admin/summarize?story_id=&kind=brief|report|both&force=true`.
+- Demo options: `--report-mode on_demand|off`, `--fake-llm-delay <s>` (see "Generating detailed
+  report"), `?cards=lead_only` on a feed URL. The fake fails one story's report (Retry works).
 - Tests and the demo never call a real LLM: `app/summarize/fake.py` (`FakeLLM(mode)`, modes
-  `ok prose malformed out_of_range invented_number empty http_500 timeout demo`) is an
+  `ok prose malformed out_of_range invented_number empty http_500 timeout wrong_bullet_count
+  duplicate_bullets copied_report short_report demo`; kind detected from the system prompt) is an
   `httpx.MockTransport`; pass it as `LLMClient(role, transport=...)` or
   `create_app(settings, llm_transport=...)`. `tests/conftest.py` makes any LLMClient without a
   transport fail the test.
@@ -95,11 +105,11 @@ update it when fixtures or defaults change. README "Tuning clustering" has the f
   then `make demo DEMO_ARGS="--real-llm --model <m>"` / `demo.cmd --real-llm --model <m>`.
   Never hardcode the LAN IP.
 - Evaluate (Windows: `.venv\Scripts\python`; add `--fake` to run offline):
-  `python -m app.summarize.smoke --profile personal-reader --limit 5 --db .demo/demo.db`,
-  `python -m app.summarize.compare --endpoints a=http://h:8080/v1:m1,b=http://h2:8080/v1:m2 --stories 20 --markdown --db .demo/demo.db`,
-  `python -m app.summarize.capture --out tests/fixtures/llm/real_response.json --db .demo/demo.db`.
+  `python -m app.summarize.smoke --profile personal-reader --limit 5 --kind both --db .demo/demo.db`,
+  `python -m app.summarize.compare --endpoints a=http://h:8080/v1:m1,b=http://h2:8080/v1:m2 --stories 20 --kind both --markdown --db .demo/demo.db`,
+  `python -m app.summarize.capture --kind brief --out tests/fixtures/llm/real_response.json --db .demo/demo.db`.
 - llama-server: `--host 0.0.0.0 --port 8080 --api-key <key> -c <ctx> -np <slots>`; `-c` is split
   across slots, so give each slot ~16k for 5 articles x 1200 words; match `-np` to
   `DISCOVER_SUMMARIZE_CONCURRENCY`.
-- Bump `PROMPT_VERSION` in `app/summarize/prompt.py` whenever the prompt changes (re-summarizes
-  every story).
+- Bump `BRIEF_PROMPT_VERSION` / `REPORT_PROMPT_VERSION` in `app/summarize/prompt.py` whenever
+  that prompt changes (regenerates that kind for every story).

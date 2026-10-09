@@ -8,7 +8,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.cluster import Clusterer, TfidfClusterer
 from app.cluster.service import ClusterRunResult, run_clustering
-from app.config import AppConfig, LLMRole
+from app.config import AppConfig, LLMRole, Profile, SummariesConfig
 from app.extract import Extractor, ExtractRunResult
 from app.ingest import USER_AGENT
 from app.llm import LLMClient
@@ -43,8 +43,9 @@ def extractor_from_settings(
     return Extractor(session_factory, **{**options, **kwargs})
 
 
-def summarizer_role(config: AppConfig, settings: Settings) -> LLMRole | None:
-    """The ``llm.summarizer`` of DISCOVER_SUMMARIZE_PROFILE, else of the first profile."""
+def summarize_profile(config: AppConfig, settings: Settings) -> Profile | None:
+    """DISCOVER_SUMMARIZE_PROFILE, else the first profile (its ``llm.summarizer`` and
+    ``summaries`` settings drive the summary worker)."""
     if not settings.summarize_enabled or not config.profiles:
         return None
     if settings.summarize_profile:
@@ -53,8 +54,13 @@ def summarizer_role(config: AppConfig, settings: Settings) -> LLMRole | None:
             raise ValueError(
                 f"DISCOVER_SUMMARIZE_PROFILE: unknown profile {settings.summarize_profile!r}"
             )
-        return profile.llm.summarizer
-    return config.profiles[0].llm.summarizer
+        return profile
+    return config.profiles[0]
+
+
+def summarizer_role(config: AppConfig, settings: Settings) -> LLMRole | None:
+    profile = summarize_profile(config, settings)
+    return profile.llm.summarizer if profile else None
 
 
 def summary_worker_from_settings(
@@ -65,13 +71,18 @@ def summary_worker_from_settings(
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> SummaryWorker:
     """``transport`` replaces the network (the fake LLM in tests and the demo)."""
-    role = summarizer_role(config, settings)
+    profile = summarize_profile(config, settings)
+    options = profile.summaries if profile else SummariesConfig()
     summarizer = None
-    if role is not None:
+    if profile is not None:
         summarizer = Summarizer(
-            LLMClient(role, transport=transport),
+            LLMClient(profile.llm.summarizer, transport=transport),
             max_articles=settings.summarize_max_articles_per_story,
             max_words=settings.summarize_max_words_per_article,
+            report_max_articles=options.report_max_articles,
+            report_max_words=options.report_max_words_per_article,
+            report_max_tokens=options.report_max_tokens,
+            duplicate_threshold=options.duplicate_threshold,
         )
     return SummaryWorker(
         session_factory,
@@ -81,6 +92,10 @@ def summary_worker_from_settings(
         debounce_minutes=settings.summarize_resummarize_min_minutes,
         failure_limit=settings.summarize_failure_limit,
         pause_minutes=settings.summarize_pause_minutes,
+        report_mode=settings.report_mode or options.report_mode,
+        report_auto_max_age_hours=options.report_auto_max_age_hours,
+        max_reports_per_run=options.max_reports_per_run,
+        report_concurrency=options.report_concurrency,
     )
 
 
@@ -122,6 +137,7 @@ class Pipeline:
                 self.summaries.enqueue_all()
             else:
                 self.summaries.enqueue(result.story_ids)
+                self.summaries.enqueue_auto_reports(result.story_ids)
         except Exception:
             logger.exception("could not queue stories for summaries")
 

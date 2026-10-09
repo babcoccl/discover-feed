@@ -1,6 +1,7 @@
 import os
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -57,6 +58,8 @@ class Settings(BaseSettings):
     summarize_failure_limit: int = 3
     """Consecutive endpoint failures before the worker pauses."""
     summarize_pause_minutes: float = 10
+    report_mode: Literal["auto", "on_demand", "off"] | None = None
+    """Overrides every profile's ``summaries.report_mode`` (the demo's ``--report-mode``)."""
 
 
 @lru_cache

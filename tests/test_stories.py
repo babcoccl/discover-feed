@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -22,15 +23,41 @@ def app_client(tmp_path_factory):
         yield c
 
 
+_GENERATED = {"summary", "brief", "report"}
+_GENERATED_HTML = re.compile(
+    r"<div data-summary.*?</div>|<section[^>]*data-summary.*?</section>|"
+    r"<section id=\"report\".*?</section>",
+    re.S,
+)
+
+
+def _strip_generated(data):
+    if isinstance(data, dict):
+        return {k: _strip_generated(v) for k, v in data.items() if k not in _GENERATED}
+    if isinstance(data, list):
+        return [_strip_generated(v) for v in data]
+    return data
+
+
+def _without_generated(resp) -> str:
+    """The response minus model-written briefs/reports, which may paraphrase article text."""
+    if resp.headers["content-type"].startswith("application/json"):
+        return json.dumps(_strip_generated(resp.json()))
+    return _GENERATED_HTML.sub("", resp.text)
+
+
 def _article_text_keys(data, path="") -> list[str]:
-    """Paths of any ``text`` key outside a generated ``summary`` object."""
+    """Paths of any ``text`` key outside generated ``summary``/``brief``/``report`` objects."""
     if isinstance(data, list):
         return [p for i, v in enumerate(data) for p in _article_text_keys(v, f"{path}[{i}]")]
     if not isinstance(data, dict):
         return []
     found = [f"{path}.text"] if "text" in data else []
     return found + [
-        p for k, v in data.items() if k != "summary" for p in _article_text_keys(v, f"{path}.{k}")
+        p
+        for k, v in data.items()
+        if k not in _GENERATED
+        for p in _article_text_keys(v, f"{path}.{k}")
     ]
 
 
@@ -111,7 +138,7 @@ def test_extracted_text_never_public(app_client: TestClient) -> None:
     responses += [app_client.get(f"/api/stories/{story_id}"), app_client.get(f"/story/{story_id}")]
     for resp in responses:
         assert resp.status_code == 200
-        assert EXTRACTED_ONLY not in resp.text
+        assert EXTRACTED_ONLY not in _without_generated(resp)
         assert '"text_status"' not in resp.text
         if resp.headers["content-type"].startswith("application/json"):
             assert not _article_text_keys(resp.json())

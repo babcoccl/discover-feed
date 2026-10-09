@@ -3,14 +3,14 @@
 import argparse
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
 from app import profiles as repo
-from app.config import LLMRole, load_config
+from app.config import LLMRole, SummariesConfig, load_config
 from app.db import init_db, make_engine, make_session_factory
 from app.llm import LLMClient
 from app.models import Story
@@ -41,6 +41,7 @@ class Env:
     role: LLMRole
     session_factory: sessionmaker
     fake: bool
+    options: SummariesConfig = field(default_factory=SummariesConfig)
 
     def client(self, role: LLMRole | None = None) -> LLMClient:
         transport = FakeLLM().transport() if self.fake else None
@@ -64,7 +65,9 @@ def load(args: argparse.Namespace) -> Env:
         sys.exit(f"unknown profile {args.profile!r}")
     engine = make_engine(settings.database_url)
     init_db(engine)
-    return Env(settings, profile.llm.summarizer, make_session_factory(engine), args.fake)
+    return Env(
+        settings, profile.llm.summarizer, make_session_factory(engine), args.fake, profile.summaries
+    )
 
 
 @dataclass
@@ -72,6 +75,9 @@ class StoryInput:
     story_id: int
     title: str
     sources: list[SourceDoc]
+    """The brief's sources (the report's: ``summarizer.sources_for(item, names, "report")``)."""
+    item: repo.StoryItem
+    names: dict[str, str]
 
 
 def newest_stories(env: Env, limit: int) -> list[StoryInput]:
@@ -92,7 +98,7 @@ def newest_stories(env: Env, limit: int) -> list[StoryInput]:
                 max_articles=env.settings.summarize_max_articles_per_story,
                 max_words=env.settings.summarize_max_words_per_article,
             )
-            stories.append(StoryInput(story_id, item.title, sources))
+            stories.append(StoryInput(story_id, item.title, sources, item, names))
     if not stories:
         sys.exit(f"no stories in {env.settings.database_url}; run the app or demo first")
     return stories
@@ -105,6 +111,37 @@ def marked(summary, sources: list[SourceDoc]) -> str:
         s + " " + "".join(f"[{i}]" for i in c)
         for s, c in zip(summary.sentences, summary.citations, strict=True)
     )
+
+
+def summarizer(env: Env, client=None):
+    """A Summarizer with the profile's ``summaries`` limits."""
+    from app.summarize.service import Summarizer
+
+    o, st = env.options, env.settings
+    return Summarizer(
+        client or env.client(),
+        max_articles=st.summarize_max_articles_per_story,
+        max_words=st.summarize_max_words_per_article,
+        report_max_articles=o.report_max_articles,
+        report_max_words=o.report_max_words_per_article,
+        report_max_tokens=o.report_max_tokens,
+        duplicate_threshold=o.duplicate_threshold,
+    )
+
+
+def cited(points) -> list[str]:
+    """``Text. [1][2]`` for each validated point (lead sentence, bullet or paragraph)."""
+    return [p.text + " " + "".join(f"[{i}]" for i in p.citations) for p in points]
+
+
+def brief_lines(gen) -> list[str]:
+    """A generated brief (or its fallback) as printable lines."""
+    if gen.brief is not None:
+        lead = gen.brief.lead + " " + "".join(f"[{i}]" for i in gen.brief.lead_citations)
+        return [lead] + ["- " + b for b in cited(gen.brief.bullets)]
+    if gen.summary is not None:
+        return [f"(fallback: Phase 4 summary) {marked(gen.summary, [])}"]
+    return ["(fallback: feed snippet)"] if gen.status == "fallback" else []
 
 
 def utf8_stdout() -> None:

@@ -1,10 +1,21 @@
-{#- A generated summary: each sentence followed by its [n] markers, linked to the cited article. -#}
+{#- Generated text: each point followed by its [n] markers, linked to the cited article's raw URL. -#}
+{%- macro markers(citations) -%}
+{%- for c in citations %}<a href="{{ c.url }}" target="_blank" rel="noopener noreferrer" data-citation="{{ c.index }}" title="[{{ c.index }}] {{ c.source }}: {{ c.headline }}" class="ml-0.5 align-super text-[0.7em] font-semibold text-sky-700 hover:underline dark:text-sky-400">[{{ c.index }}]</a>{% endfor -%}
+{%- endmacro -%}
+
+{%- macro point_text(point) -%}{{ point.text }}{{ markers(point.citations) }}{%- endmacro -%}
+
+{%- macro lead_text(brief) -%}
+{%- for sentence in brief.lead -%}{{ point_text(sentence) }}{% if not loop.last %} {% endif %}{%- endfor -%}
+{%- endmacro -%}
+
+{#- Phase 4 name, kept for templates that still use it. -#}
 {%- macro summary_text(summary) -%}
-{%- for sentence in summary.sentences -%}
-{{ sentence.text }}{% for c in sentence.citations %}<a href="{{ c.url }}" target="_blank" rel="noopener noreferrer" data-citation="{{ c.index }}" title="[{{ c.index }}] {{ c.source }}: {{ c.headline }}" class="ml-0.5 align-super text-[0.7em] font-semibold text-sky-700 hover:underline dark:text-sky-400">[{{ c.index }}]</a>{% endfor %}{% if not loop.last %} {% endif %}
-{%- endfor -%}
+{%- for sentence in summary.sentences -%}{{ point_text(sentence) }}{% if not loop.last %} {% endif %}{%- endfor -%}
 {%- endmacro -%}
 
 {%- macro summary_byline(summary) -%}
 Summarized by {{ summary.model }}{% if summary.basis == "feed_summary" %} from feed snippets{% endif %}
 {%- endmacro -%}
+
+{%- macro snippet_label() -%}<span class="mr-1 rounded bg-slate-100 px-1.5 py-0.5 align-[0.1em] text-[0.65rem] font-semibold uppercase tracking-wide text-slate-500 dark:bg-slate-800 dark:text-slate-400">Feed snippet</span>{%- endmacro -%}

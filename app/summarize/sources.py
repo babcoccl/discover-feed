@@ -33,20 +33,38 @@ def source_doc(index: int, article: Article, names: dict[str, str], max_words: i
     )
 
 
-def select_sources(
-    members: Sequence[Article], names: dict[str, str], *, max_articles: int, max_words: int
-) -> list[SourceDoc]:
-    """Up to ``max_articles`` members, one per source first (earliest coverage first), then
-    the rest; numbered [1]..[k] in publication order."""
-    ordered = sorted(members, key=lambda m: (m.published_at, m.id))
+def _by_published(articles: Sequence[Article]) -> list[Article]:
+    return sorted(articles, key=lambda m: (m.published_at, m.id))
+
+
+def _priority(members: Sequence[Article]) -> list[Article]:
+    """One per source first (earliest coverage first), then the rest."""
+    ordered = _by_published(members)
     picked: list[Article] = []
     seen: set[str] = set()
     for article in ordered:
         if article.source_id not in seen:
             seen.add(article.source_id)
             picked.append(article)
-    picked += [a for a in ordered if a not in picked]
-    chosen = sorted(picked[:max_articles], key=lambda m: (m.published_at, m.id))
+    return picked + [a for a in ordered if a not in picked]
+
+
+def select_sources(
+    members: Sequence[Article],
+    names: dict[str, str],
+    *,
+    max_articles: int,
+    max_words: int,
+    numbered_first: int = 0,
+) -> list[SourceDoc]:
+    """Up to ``max_articles`` members by priority, numbered [1]..[k] in publication order.
+
+    With ``numbered_first`` (the brief's article budget), the first that many picks keep the
+    numbers they have in the brief and extra picks are appended after them, so a report's
+    [1]..[n] cite the same articles as the brief's."""
+    picked = _priority(members)[:max_articles]
+    split = min(numbered_first, len(picked)) if numbered_first else len(picked)
+    chosen = _by_published(picked[:split]) + _by_published(picked[split:])
     return [source_doc(i, a, names, max_words) for i, a in enumerate(chosen, 1)]
 
 
@@ -58,10 +76,16 @@ def basis(sources: Sequence[SourceDoc]) -> str:
 
 
 def input_hash(
-    member_ids: Sequence[int], sources: Sequence[SourceDoc], prompt_version: str, model: str
+    member_ids: Sequence[int],
+    sources: Sequence[SourceDoc],
+    prompt_version: str,
+    model: str,
+    kind: str = "brief",
 ) -> str:
-    """Changes when the story gains a member, a source text changes, or the prompt/model does."""
+    """Changes when the story gains a member, a source text changes, or the prompt/model or
+    artifact kind does."""
     key = {
+        "kind": kind,
         "members": sorted(member_ids),
         "sources": [[s.article_id, s.text_hash] for s in sources],
         "prompt_version": prompt_version,
