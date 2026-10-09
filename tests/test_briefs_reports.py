@@ -14,10 +14,11 @@ from app.main import create_app
 from app.models import StorySummary, SummaryJob
 from app.summarize.fake import FakeLLM, fake_report
 from app.summarize.prompt import PROMPT_VERSIONS, SourceDoc, build_messages
+from app.summarize.service import Summarizer
 from app.summarize.validate import SummaryInvalid, validate_brief, validate_report
 from app.summarize.worker import SummaryWorker
 from tests.pipeline_helpers import add_article
-from tests.test_summarizer import TEXT_A, TEXT_B, make_story, summarizer
+from tests.test_summarizer import ROLE, TEXT_A, TEXT_B, make_story, summarizer
 
 SUBJECTS = ["The council", "Engineers", "Residents", "The mayor", "Inspectors", "Contractors"]
 VERBS = ["reviewed", "debated", "inspected", "questioned", "approved", "delayed"]
@@ -512,3 +513,66 @@ def test_report_mode_off(tmp_path) -> None:
         item = next(i for i in _feed(c) if i["source_count"] >= 2)
         page = c.get(f"/story/{item['id']}").text
         assert 'id="report"' not in page and item["report"] is None
+
+
+# --- regressions: unreachable reports, slow reports pausing briefs ---------------------
+
+
+def test_single_source_cards_open_the_story_page(demo) -> None:
+    single = next(i for i in _feed(demo) if i["source_count"] == 1 and i["id"])
+    html = demo.get("/p/personal-reader").text
+    assert f'href="/story/{single["id"]}?p=personal-reader"' in html
+    assert "Read on " in html  # the article itself is still one click away
+
+
+def test_report_endpoint_failures_do_not_pause_briefs(session_factory, story) -> None:
+    w = worker(session_factory, FakeLLM("timeout"), failure_limit=2)
+    w.enqueue([story], kind="report")
+    for _ in range(3):
+        asyncio.run(w.run(story_id=story, kinds=["report"]))
+    assert w.state.paused_until is None and w.state.last_error.startswith("report: timeout")
+    with session_factory() as session:
+        job = session.get(SummaryJob, (story, "report"))
+        assert job.attempts == 3 and job.next_attempt_at is not None
+    w.enqueue([story], kind="brief")
+    for _ in range(2):
+        asyncio.run(w.run(story_id=story, kinds=["brief"]))
+    assert w.state.paused_until is not None  # an unreachable endpoint still pauses
+
+
+def test_report_requests_get_their_own_timeout() -> None:
+    from app.llm.client import LLMClient
+
+    s = Summarizer(LLMClient(ROLE), report_max_tokens=900, report_timeout_seconds=300)
+    assert s.report_client.role.timeout_seconds == 300 and s.report_client.role.max_tokens == 900
+    assert s.client.role.timeout_seconds == ROLE.timeout_seconds
+
+
+def test_story_page_shows_a_retrying_report(demo) -> None:
+    from datetime import timedelta
+
+    from app.models import utcnow
+
+    single = next(i for i in _feed(demo) if i["source_count"] == 1 and i["report"] is None)
+    factory = demo.app.state.session_factory
+    with factory() as session:
+        session.merge(
+            SummaryJob(
+                story_id=single["id"],
+                kind="report",
+                attempts=1,
+                last_error="timeout: timed out after 300s",
+                next_attempt_at=utcnow() + timedelta(hours=1),
+            )
+        )
+        session.commit()
+    try:
+        page = demo.get(f"/story/{single['id']}").text
+        assert 'data-report="retrying"' in page and "timed out after 300s" in page
+        assert "Retry now" in page and "data-report-retrying" in page
+        poll = demo.get(f"/story/{single['id']}/report?polls=1")
+        assert "data-report-retrying" in poll.text
+    finally:
+        with factory() as session:
+            session.delete(session.get(SummaryJob, (single["id"], "report")))
+            session.commit()

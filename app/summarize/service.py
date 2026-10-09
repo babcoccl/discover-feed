@@ -108,16 +108,25 @@ class Summarizer:
         *,
         max_articles: int = 5,
         max_words: int = 1200,
-        report_max_articles: int = 6,
-        report_max_words: int = 1500,
+        report_max_articles: int = 4,
+        report_max_words: int = 600,
         report_max_tokens: int | None = None,
+        report_timeout_seconds: float | None = None,
         duplicate_threshold: float = 0.6,
         clock: Callable[[], datetime] = utcnow,
     ) -> None:
         self.client = client
         self.report_client = client
-        if report_max_tokens:
-            role = client.role.model_copy(update={"max_tokens": report_max_tokens})
+        update = {
+            k: v
+            for k, v in (
+                ("max_tokens", report_max_tokens),
+                ("timeout_seconds", report_timeout_seconds),
+            )
+            if v
+        }
+        if update:
+            role = client.role.model_copy(update=update)
             self.report_client = LLMClient(role, transport=client.transport)
         self.max_articles = max_articles
         self.max_words = max_words

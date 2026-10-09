@@ -19,6 +19,11 @@
     <span class="inline-block h-3 w-3 animate-spin rounded-full border-2 border-sky-600 border-t-transparent" aria-hidden="true"></span>
     Generating detailed report…
   </div>
+  {%- elif report_state == "retrying" %}
+  <div hx-get="{{ poll_url }}" hx-trigger="load delay:{{ poll_seconds * 5 }}s" hx-target="#report" hx-swap="outerHTML" class="flex flex-wrap items-center gap-3 text-sm text-slate-600 dark:text-slate-400" role="status" data-report-retrying>
+    <span>The model endpoint failed ({{ job.last_error or "error" }}); retrying{% if job.next_attempt_at %} <time datetime="{{ job.next_attempt_at.isoformat() }}">{{ job.next_attempt_at | reltime }}</time>{% endif %}.</span>
+    {% if can_regenerate %}<button type="button" hx-post="{{ regen_url }}?kind=report" hx-target="#report" hx-swap="outerHTML" data-retry class="rounded-md bg-sky-700 px-3 py-1 text-xs font-semibold text-white hover:bg-sky-800 dark:bg-sky-600 dark:hover:bg-sky-500">Retry now</button>{% endif %}
+  </div>
   {%- elif report_state == "timeout" %}
   <p class="text-sm text-slate-600 dark:text-slate-400" role="status" data-report-timeout>The detailed report is taking longer than expected. It is still queued; refresh the page later.</p>
   {%- elif report_state == "skipped" %}

@@ -91,8 +91,12 @@ update it when fixtures or defaults change. README "Tuning clustering" has the f
   briefs run first. Per-profile `summaries:` YAML block (read on every start): `card_style`
   (lead_bullets|lead_only), `report_mode` (auto|on_demand|off), `report_auto_max_age_hours`,
   `max_reports_per_run`, `report_concurrency`, `report_max_articles`,
-  `report_max_words_per_article`, `report_max_tokens`, `duplicate_threshold`;
+  `report_max_words_per_article`, `report_max_tokens`, `report_timeout_seconds`,
+  `duplicate_threshold`;
   `DISCOVER_REPORT_MODE` overrides report_mode. `POST /api/admin/summarize?story_id=&kind=brief|report|both&force=true`.
+- Every clustered card links to `/story/{id}` (on-demand reports are requested there). Only brief
+  endpoint failures pause the worker; report failures back off per job and the story page
+  shows `data-report="retrying"`. Settings > Pipeline shows median brief/report seconds.
 - Demo options: `--report-mode on_demand|off`, `--fake-llm-delay <s>` (see "Generating detailed
   report"), `?cards=lead_only` on a feed URL. The fake fails one story's report (Retry works).
 - Tests and the demo never call a real LLM: `app/summarize/fake.py` (`FakeLLM(mode)`, modes

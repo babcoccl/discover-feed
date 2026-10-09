@@ -82,6 +82,7 @@ def summary_worker_from_settings(
             report_max_articles=options.report_max_articles,
             report_max_words=options.report_max_words_per_article,
             report_max_tokens=options.report_max_tokens,
+            report_timeout_seconds=options.report_timeout_seconds,
             duplicate_threshold=options.duplicate_threshold,
         )
     return SummaryWorker(

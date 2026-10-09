@@ -157,7 +157,8 @@ that link to each article's own permalink (`Article.url`):
   matters or context, what's next or a key detail). Cards show the image, title, lead, the
   three bullets, source chips and relative time; `card_style: lead_only` hides the bullets.
 - **Detailed report** (story page, below the brief): 3-5 paragraphs, about 250-450 words,
-  paraphrasing the sources, then the numbered **Sources** list. `[n]` is the same article in
+  paraphrasing the sources, then the numbered **Sources** list. Every card opens its story
+  page (single-source cards also have a "Read on <source>" link to the article). `[n]` is the same article in
   the brief, the report and the Sources list. The page shows the model and when it was written.
 
 Written by an OpenAI-compatible chat completions endpoint (llama.cpp `llama-server`, vLLM,
@@ -171,12 +172,12 @@ How it works (`app/summarize/`):
   default 5, plus right after each pipeline run) does briefs before reports, newest stories
   first: briefs `DISCOVER_SUMMARIZE_CONCURRENCY` (1) at a time and at most
   `DISCOVER_SUMMARIZE_MAX_PER_RUN` (25) per run, reports `report_concurrency` (1) at a time and
-  at most `max_reports_per_run` (10). Briefs and reports debounce independently
+  at most `max_reports_per_run` (3). Briefs and reports debounce independently
   (`DISCOVER_SUMMARIZE_RESUMMARIZE_MIN_MINUTES`, 30). The worker has its own thread, so
   ingestion, extraction and clustering never wait for the LLM.
 - Input: briefs use up to `DISCOVER_SUMMARIZE_MAX_ARTICLES_PER_STORY` (5) members and the first
   `DISCOVER_SUMMARIZE_MAX_WORDS_PER_ARTICLE` (1200) words of each; reports use
-  `report_max_articles` (6) and `report_max_words_per_article` (1500), keeping the brief's
+  `report_max_articles` (4) and `report_max_words_per_article` (600), keeping the brief's
   numbering and appending any extra sources. Members are numbered one per source first; the
   feed summary stands in when extraction failed.
 - The answer must be JSON (`response_format` JSON schema; code fences/prose around it are
@@ -195,8 +196,10 @@ How it works (`app/summarize/`):
   under 150 words) get a brief but no report: `status=skipped`, `reason=insufficient_text`,
   shown as "Report unavailable (not enough source text)".
 - Endpoint errors (HTTP 5xx, timeouts) are `failed`, retried later with backoff, and after
-  `DISCOVER_SUMMARIZE_FAILURE_LIMIT` (3) in a row the worker pauses for
-  `DISCOVER_SUMMARIZE_PAUSE_MINUTES` (10).
+  `DISCOVER_SUMMARIZE_FAILURE_LIMIT` (3) brief failures in a row the worker pauses for
+  `DISCOVER_SUMMARIZE_PAUSE_MINUTES` (10). Report failures only back off their own job (a
+  slow report timing out never stops briefs); meanwhile the story page says the endpoint
+  failed and offers **Retry now**. Report requests use `report_timeout_seconds` (300).
 - Every version is kept in `story_summaries` (`kind` brief|report, text, structured
   `content_json`, citations, the article id behind each `[n]`, basis, model, prompt version,
   tokens, latency). `input_hash` covers member ids, source text hashes, the kind's prompt
@@ -224,11 +227,12 @@ summaries:
   card_style: lead_bullets       # or lead_only (cards show the lead without bullets)
   report_mode: auto              # auto | on_demand | off
   report_auto_max_age_hours: 48  # auto: pre-generate reports for multi-source stories this recent
-  max_reports_per_run: 10
+  max_reports_per_run: 3
   report_concurrency: 1
-  report_max_articles: 6
-  report_max_words_per_article: 1500
-  report_max_tokens: 1400        # max_tokens for report requests (briefs use llm.summarizer's)
+  report_max_articles: 4
+  report_max_words_per_article: 600
+  report_max_tokens: 1000        # max_tokens for report requests (briefs use llm.summarizer's)
+  report_timeout_seconds: 300    # timeout for report requests (briefs use llm.summarizer's)
   duplicate_threshold: 0.6       # token overlap at which two bullets/paragraphs are duplicates
 ```
 
@@ -265,7 +269,7 @@ llm:
 Cloud providers use the same code with different settings (see `market-monitor` in
 `config/profiles.example.yaml`; set `disable_thinking: false` where unknown parameters are
 rejected). Start llama.cpp so other machines can reach it, with a key, enough context for a
-report's 6 articles x 1500 words, and parallel slots matching `DISCOVER_SUMMARIZE_CONCURRENCY`:
+report's 4 articles x 600 words, and parallel slots matching `DISCOVER_SUMMARIZE_CONCURRENCY`:
 
 ```bash
 llama-server -m model.gguf --host 0.0.0.0 --port 8080 --api-key <key> -c 16384 -np 1

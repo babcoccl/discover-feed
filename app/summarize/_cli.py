@@ -125,6 +125,7 @@ def summarizer(env: Env, client=None):
         report_max_articles=o.report_max_articles,
         report_max_words=o.report_max_words_per_article,
         report_max_tokens=o.report_max_tokens,
+        report_timeout_seconds=o.report_timeout_seconds,
         duplicate_threshold=o.duplicate_threshold,
     )
 
