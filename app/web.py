@@ -12,14 +12,32 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app import profiles as repo
+from app.config import CardStyle
 from app.models import ProfileRecord, Topic
 from app.runs import last_runs, text_status_counts
-from app.summarize.views import summary_views
+from app.summarize.views import brief_views, report_views
 from app.topics import split_keywords
 
+
+def _card_style(request: Request) -> dict:
+    """``card_style`` of the viewed profile's ``summaries`` (``?cards=`` overrides it)."""
+    override = request.query_params.get("cards")
+    if override in {c.value for c in CardStyle}:
+        return {"card_style": override}
+    slug = request.path_params.get("slug") or request.query_params.get("p")
+    config = getattr(request.app.state, "config", None)
+    profile = config.get_profile(slug) if config is not None and slug else None
+    return {"card_style": profile.summaries.card_style.value if profile else "lead_bullets"}
+
+
 router = APIRouter(include_in_schema=False)
-TEMPLATES = Jinja2Templates(directory=Path(__file__).parent / "templates")
+TEMPLATES = Jinja2Templates(
+    directory=Path(__file__).parent / "templates", context_processors=[_card_style]
+)
 PAGE_SIZE = 24
+REPORT_POLL_SECONDS = 3
+REPORT_MAX_POLLS = 40
+"""The story page stops polling for a report after this many polls (2 minutes)."""
 
 try:
     _VERSION = version("discover-feed")
@@ -135,7 +153,7 @@ def _feed_context(
         page=page,
         view=view,
         names=names,
-        summaries=summary_views(session, story_ids, names),
+        summaries=brief_views(session, story_ids, names),
     )
 
 
@@ -181,15 +199,80 @@ def story_page(
         else:
             back = "/"
         names = repo.source_names(session)
+        brief = brief_views(session, [story_id], names).get(story_id)
+        report = report_views(session, [story_id], names).get(story_id)
+        if report is None or report.status != "ok":
+            worker = _worker(request)
+            if worker is not None:
+                worker.request_report(story_id)
         context = _base_context(
             session,
             profile,
             story=story,
             back=back,
             names=names,
-            summary=summary_views(session, [story_id], names).get(story_id),
+            brief=brief,
+            summary=brief,
+            **_report_context(request, story_id, report),
         )
     return TEMPLATES.TemplateResponse(request, "story.html", context)
+
+
+def _worker(request: Request):
+    worker = getattr(request.app.state, "summaries", None)
+    return worker if worker is not None and worker.enabled else None
+
+
+def _report_context(request: Request, story_id: int, report, polls: int = 0) -> dict:
+    """``report_state``: ``ok`` | ``failed`` | ``skipped`` | ``pending`` | ``timeout`` | ``off``."""
+    worker = _worker(request)
+    job = worker.report_job(story_id) if worker is not None else None
+    if job is not None and job.attempts == 0 and (report is None or report.status != "ok"):
+        state = "timeout" if polls >= REPORT_MAX_POLLS else "pending"
+    elif report is not None:
+        state = report.status
+    else:
+        state = "off"
+    return {
+        "story_id": story_id,
+        "report": report,
+        "report_state": state,
+        "polls": polls,
+        "poll_seconds": REPORT_POLL_SECONDS,
+        "can_regenerate": worker is not None,
+        "p": request.query_params.get("p"),
+    }
+
+
+@router.get("/story/{story_id}/report", response_class=HTMLResponse)
+def story_report(request: Request, story_id: int, polls: int = 0) -> Response:
+    """HTMX partial polled while a report is generating; refreshes the page when done."""
+    with _session(request) as session:
+        report = report_views(session, [story_id], repo.source_names(session)).get(story_id)
+        context = _report_context(request, story_id, report, polls)
+    if context["report_state"] not in ("pending", "timeout"):
+        return Response(status_code=200, headers={"HX-Refresh": "true"})
+    return TEMPLATES.TemplateResponse(request, "_report.html", context)
+
+
+@router.post("/story/{story_id}/regenerate", response_class=HTMLResponse)
+def story_regenerate(request: Request, story_id: int, kind: str = "both") -> Response:
+    """Regenerate / Retry: force a new brief and/or report and show the generating state."""
+    worker = _worker(request)
+    if worker is None:
+        raise HTTPException(status_code=409, detail="no summarizer configured")
+    with _session(request) as session:
+        if repo.get_story(session, story_id) is None:
+            raise HTTPException(status_code=404, detail=f"unknown story {story_id}")
+    for k in ("brief", "report"):
+        if kind in (k, "both"):
+            worker.enqueue([story_id], force=True, kind=k)
+    worker.start(story_id=story_id, manual=True)
+    context = {
+        **_report_context(request, story_id, None),
+        "report_state": "pending",
+    }
+    return TEMPLATES.TemplateResponse(request, "_report.html", context)
 
 
 # --- settings ------------------------------------------------------------------------------

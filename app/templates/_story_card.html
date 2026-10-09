@@ -4,7 +4,7 @@
 {%- set source_name = names.get(rep.source_id, rep.source_id) -%}
 {%- set multi = story.source_count > 1 -%}
 {%- set summary = summaries.get(story.story_id) if story.story_id and summaries is defined else none -%}
-{%- from "_summary.html" import summary_text, summary_byline -%}
+{%- from "_summary.html" import lead_text, point_text, summary_byline, snippet_label -%}
 {%- if multi -%}
 {%- set href = "/story/" ~ story.story_id ~ "?p=" ~ profile.slug ~ ("&topic=" ~ topic.id if topic else "") -%}
 {%- else -%}
@@ -27,10 +27,17 @@
     <h2 class="mb-2 line-clamp-3 font-semibold leading-snug">
       <a href="{{ href }}"{% if not multi %} target="_blank" rel="noopener noreferrer"{% endif %} class="hover:underline">{{ story.title or rep.url }}</a>
     </h2>
-    {% if summary %}
-    <p class="mb-1 line-clamp-5 text-sm text-slate-700 dark:text-slate-300" data-summary>{{ summary_text(summary) }}</p>
+    {% if summary and summary.style != "snippet" %}
+    <div data-summary data-brief="{{ summary.style }}">
+      <p class="mb-2 text-sm font-medium leading-snug text-slate-800 dark:text-slate-200" data-brief-lead>{{ lead_text(summary) }}</p>
+      {% if card_style != "lead_only" and summary.bullets %}
+      <ul class="mb-2 list-disc space-y-1 pl-4 text-[0.8rem] leading-snug text-slate-600 marker:text-slate-400 dark:text-slate-400" data-brief-bullets>
+        {% for bullet in summary.bullets %}<li>{{ point_text(bullet) }}</li>{% endfor %}
+      </ul>
+      {% endif %}
+    </div>
     <p class="mb-3 text-xs text-slate-400 dark:text-slate-500">{{ summary_byline(summary) }}</p>
-    {% elif story.snippet_source %}<p class="mb-3 line-clamp-3 text-sm text-slate-600 dark:text-slate-400" data-snippet><span class="mr-1 rounded bg-slate-100 px-1.5 py-0.5 align-[0.1em] text-[0.65rem] font-semibold uppercase tracking-wide text-slate-500 dark:bg-slate-800 dark:text-slate-400">Feed snippet</span>{{ story.snippet_source | snippet }}</p>{% endif %}
+    {% elif story.snippet_source %}<p class="mb-3 line-clamp-3 text-sm text-slate-600 dark:text-slate-400" data-snippet>{{ snippet_label() }}{{ story.snippet_source | snippet }}</p>{% endif %}
     {% if multi %}
     <ul class="mt-auto flex flex-wrap gap-1.5" aria-label="Sources">
       {% for article in story.sources[:3] %}

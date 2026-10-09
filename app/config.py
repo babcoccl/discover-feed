@@ -61,6 +61,40 @@ class LLMConfig(_Model):
     chat: LLMRole | None = Field(default=None, description="Story Q&A (next phase); unused yet.")
 
 
+class CardStyle(StrEnum):
+    LEAD_BULLETS = "lead_bullets"
+    LEAD_ONLY = "lead_only"
+
+
+class ReportMode(StrEnum):
+    AUTO = "auto"
+    """Generate reports in the background for recent multi-source stories."""
+    ON_DEMAND = "on_demand"
+    """Generate a story's report when its page is opened."""
+    OFF = "off"
+
+
+class SummariesConfig(_Model):
+    """Briefs (cards) and detailed reports (story page). Read from the YAML on every start."""
+
+    card_style: CardStyle = CardStyle.LEAD_BULLETS
+    report_mode: ReportMode = ReportMode.AUTO
+    report_auto_max_age_hours: float = Field(default=48, gt=0)
+    max_reports_per_run: int = Field(default=10, ge=1)
+    report_concurrency: int = Field(default=1, ge=1)
+    report_max_articles: int = Field(default=6, ge=1)
+    report_max_words_per_article: int = Field(default=1500, ge=50)
+    report_max_tokens: int = Field(
+        default=1400, ge=100, description="max_tokens for report requests (briefs use the role's)."
+    )
+    duplicate_threshold: float = Field(
+        default=0.6,
+        gt=0,
+        le=1,
+        description="Token overlap (Jaccard) at which two bullets/paragraphs count as duplicates.",
+    )
+
+
 class SourceType(StrEnum):
     RSS = "rss"
     ATOM = "atom"
@@ -133,6 +167,7 @@ class Profile(_Model):
     sources: list[Source] = Field(default_factory=list)
     alert_rules: list[AlertRule] = Field(default_factory=list)
     llm: LLMConfig
+    summaries: SummariesConfig = Field(default_factory=SummariesConfig)
 
     @model_validator(mode="after")
     def _check_references(self) -> "Profile":

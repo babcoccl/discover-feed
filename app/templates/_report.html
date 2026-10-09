@@ -1,0 +1,33 @@
+{#- The story page's "Detailed report" section; replaced in place while generating. -#}
+{%- from "_summary.html" import point_text -%}
+{%- set regen_url = "/story/" ~ story_id ~ "/regenerate" -%}
+{%- set poll_url = "/story/" ~ story_id ~ "/report?polls=" ~ (polls + 1) ~ ("&p=" ~ p if p else "") -%}
+{%- if report_state != "off" -%}
+<section id="report" class="mb-6 max-w-3xl rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900" aria-labelledby="report-heading" data-report="{{ report_state }}">
+  <div class="mb-2 flex items-center justify-between gap-2">
+    <h2 id="report-heading" class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Detailed report</h2>
+    {% if can_regenerate and report_state in ("ok", "skipped") %}<button type="button" hx-post="{{ regen_url }}?kind=both" hx-target="#report" hx-swap="outerHTML" data-regenerate class="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">Regenerate</button>{% endif %}
+  </div>
+  {%- if report_state == "ok" %}
+  <div class="space-y-3 leading-relaxed text-slate-800 dark:text-slate-200">
+    {% for paragraph in report.paragraphs %}<p data-report-paragraph>{{ point_text(paragraph) }}</p>
+    {% endfor %}
+  </div>
+  <p class="mt-3 text-xs text-slate-500 dark:text-slate-400">Written by {{ report.model }} · <time datetime="{{ report.generated_at.isoformat() }}" title="{{ report.generated_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ report.generated_at | reltime }}</time></p>
+  {%- elif report_state == "pending" %}
+  <div hx-get="{{ poll_url }}" hx-trigger="load delay:{{ poll_seconds }}s" hx-target="#report" hx-swap="outerHTML" class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400" role="status" data-report-pending>
+    <span class="inline-block h-3 w-3 animate-spin rounded-full border-2 border-sky-600 border-t-transparent" aria-hidden="true"></span>
+    Generating detailed report…
+  </div>
+  {%- elif report_state == "timeout" %}
+  <p class="text-sm text-slate-600 dark:text-slate-400" role="status" data-report-timeout>The detailed report is taking longer than expected. It is still queued; refresh the page later.</p>
+  {%- elif report_state == "skipped" %}
+  <p class="text-sm text-slate-600 dark:text-slate-400" data-report-skipped>Report unavailable (not enough source text).</p>
+  {%- else %}
+  <div class="flex flex-wrap items-center gap-3 text-sm text-slate-600 dark:text-slate-400" data-report-failed>
+    <span>The detailed report could not be generated.</span>
+    {% if can_regenerate %}<button type="button" hx-post="{{ regen_url }}?kind=report" hx-target="#report" hx-swap="outerHTML" data-retry class="rounded-md bg-sky-700 px-3 py-1 text-xs font-semibold text-white hover:bg-sky-800 dark:bg-sky-600 dark:hover:bg-sky-500">Retry</button>{% endif %}
+  </div>
+  {%- endif %}
+</section>
+{%- endif -%}

@@ -12,7 +12,7 @@ from app.cluster.service import ClusterRunResult
 from app.extract import ExtractRunResult
 from app.ingest import SourceRunResult
 from app.models import Article, ProfileRecord, Story
-from app.summarize.views import SummaryView, summary_views
+from app.summarize.views import BriefView, Point, ReportView, brief_views, report_views
 from app.summarize.worker import SummarizeRunResult, WorkerStatus
 from app.web import snippet
 
@@ -110,7 +110,7 @@ class StorySourceOut(BaseModel):
 
 
 class CitationOut(BaseModel):
-    index: int = Field(description="The [n] marker used in the summary.")
+    index: int = Field(description="The [n] marker used in the brief/report.")
     source: str
     headline: str
     url: str = Field(description="The cited article's own permalink (never the canonical URL).")
@@ -132,15 +132,84 @@ class SummaryOut(BaseModel):
     generated_at: datetime
 
 
-def _summary_out(view: SummaryView | None) -> SummaryOut | None:
+class CitedTextOut(BaseModel):
+    text: str
+    citations: list[CitationOut] = Field(description="The sources this text cites.")
+
+
+class BriefOut(BaseModel):
+    lead: str = Field(description="One sentence: what happened.")
+    lead_citations: list[CitationOut]
+    bullets: list[CitedTextOut] = Field(
+        description="Three supporting points (empty for a fallback brief)."
+    )
+    status: Literal["ok", "fallback"] = Field(
+        description="`fallback`: the brief failed validation; `lead` is a Phase 4 style "
+        "summary (`style: summary`) or the feed snippet (`style: snippet`)."
+    )
+    style: Literal["brief", "summary", "snippet"]
+    basis: Literal["full_text", "feed_summary", "mixed"]
+    model: str
+    generated_at: datetime
+    sources: list[CitationOut] = Field(description="Numbered sources, [1] first.")
+
+
+class ReportOut(BaseModel):
+    paragraphs: list[CitedTextOut] = Field(description="3-5 paragraphs; empty unless `ok`.")
+    status: Literal["ok", "failed", "skipped"] = Field(
+        description="`failed`: generation or validation failed (no report is shown); "
+        "`skipped`: not enough source text."
+    )
+    model: str
+    generated_at: datetime
+    sources: list[CitationOut] = Field(
+        description="Numbered sources, [1] first; [1]..[n] match the brief's."
+    )
+
+
+def _citation_out(c) -> CitationOut:
+    return CitationOut(index=c.index, source=c.source, headline=c.headline, url=c.url)
+
+
+def _cited_out(point: Point) -> CitedTextOut:
+    return CitedTextOut(text=point.text, citations=[_citation_out(c) for c in point.citations])
+
+
+def _brief_out(view: BriefView | None) -> BriefOut | None:
     if view is None:
+        return None
+    return BriefOut(
+        lead=view.lead_text,
+        lead_citations=[_citation_out(c) for c in view.lead_citations],
+        bullets=[_cited_out(b) for b in view.bullets],
+        status=view.status,
+        style=view.style,
+        basis=view.basis,
+        model=view.model,
+        generated_at=view.generated_at,
+        sources=[_citation_out(c) for c in view.citations],
+    )
+
+
+def _report_out(view: ReportView | None) -> ReportOut | None:
+    if view is None:
+        return None
+    return ReportOut(
+        paragraphs=[_cited_out(p) for p in view.paragraphs],
+        status=view.status,
+        model=view.model,
+        generated_at=view.generated_at,
+        sources=[_citation_out(c) for c in view.citations],
+    )
+
+
+def _summary_out(view: BriefView | None) -> SummaryOut | None:
+    """Deprecated ``summary``: the brief's lead and bullets joined, with [n] markers."""
+    if view is None or view.style == "snippet":
         return None
     return SummaryOut(
         text=view.marked_text,
-        citations=[
-            CitationOut(index=c.index, source=c.source, headline=c.headline, url=c.url)
-            for c in view.citations
-        ],
+        citations=[_citation_out(c) for c in view.citations],
         sentences=[
             SummarySentenceOut(text=s.text, citations=[c.index for c in s.citations])
             for s in view.sentences
@@ -151,14 +220,29 @@ def _summary_out(view: SummaryView | None) -> SummaryOut | None:
     )
 
 
-_SUMMARY_FIELD = Field(description="Latest generated summary; null until one is generated.")
+_SUMMARY_FIELD = Field(
+    default=None,
+    deprecated=True,
+    description="Deprecated (removed next release): the brief's lead and bullets joined. "
+    "Use `brief`.",
+)
+_BRIEF_FIELD = Field(
+    default=None, description="Lead + three cited bullets; null until one is generated."
+)
+_REPORT_FIELD = Field(
+    default=None,
+    description="Detailed multi-paragraph report; null until one is generated (or with "
+    "`report_mode: off`).",
+)
 
 
 class StoryItemOut(BaseModel):
     id: int | None = Field(description="Story id; null for an article not clustered yet.")
     title: str
     image_url: str | None
-    snippet: str = Field(description="The feed's own summary (fallback when `summary` is null).")
+    snippet: str = Field(description="The feed's own summary (fallback when `brief` is null).")
+    brief: BriefOut | None = _BRIEF_FIELD
+    report: ReportOut | None = _REPORT_FIELD
     summary: SummaryOut | None = _SUMMARY_FIELD
     sources: list[StorySourceOut]
     source_count: int
@@ -191,6 +275,8 @@ class StoryOut(BaseModel):
     source_count: int
     first_seen_at: datetime
     last_updated_at: datetime
+    brief: BriefOut | None = _BRIEF_FIELD
+    report: ReportOut | None = _REPORT_FIELD
     summary: SummaryOut | None = _SUMMARY_FIELD
     members: list[StoryMemberOut] = Field(description="Oldest first.")
 
@@ -322,11 +408,13 @@ def profile_feed(
                 stories = repo.story_feed_page(
                     session, profile, selected, limit=limit, cursor=cursor
                 )
-                summaries = summary_views(session, [i.story_id for i in stories.items], names)
+                story_ids = [i.story_id for i in stories.items]
+                briefs = brief_views(session, story_ids, names)
+                reports = report_views(session, story_ids, names)
                 return StoryFeedOut(
                     profile=profile.slug,
                     topic=topic_out,
-                    items=[_story_item_out(item, names, summaries) for item in stories.items],
+                    items=[_story_item_out(item, names, briefs, reports) for item in stories.items],
                     next_cursor=stories.next_cursor,
                 )
             page = repo.feed_page(
@@ -349,14 +437,19 @@ def profile_feed(
 
 
 def _story_item_out(
-    item: repo.StoryItem, names: dict[str, str], summaries: dict[int, SummaryView]
+    item: repo.StoryItem,
+    names: dict[str, str],
+    briefs: dict[int, BriefView],
+    reports: dict[int, ReportView],
 ) -> StoryItemOut:
     return StoryItemOut(
         id=item.story_id,
         title=item.title,
         image_url=item.image_url,
         snippet=snippet(item.snippet_source),
-        summary=_summary_out(summaries.get(item.story_id)),
+        brief=_brief_out(briefs.get(item.story_id)),
+        report=_report_out(reports.get(item.story_id)),
+        summary=_summary_out(briefs.get(item.story_id)),
         sources=[
             StorySourceOut(
                 name=names.get(a.source_id, a.source_id), url=a.url, published_at=a.published_at
@@ -383,7 +476,8 @@ def get_story(
         if item is None:
             raise HTTPException(status_code=404, detail=f"unknown story {story_id}")
         names = repo.source_names(session)
-        summary = summary_views(session, [story_id], names).get(story_id)
+        brief = brief_views(session, [story_id], names).get(story_id)
+        report = report_views(session, [story_id], names).get(story_id)
     return StoryOut(
         id=story_id,
         title=item.title,
@@ -391,7 +485,9 @@ def get_story(
         source_count=item.source_count,
         first_seen_at=item.first_seen_at,
         last_updated_at=item.last_updated_at,
-        summary=_summary_out(summary),
+        brief=_brief_out(brief),
+        report=_report_out(report),
+        summary=_summary_out(brief),
         members=[
             StoryMemberOut(
                 id=m.id,
@@ -447,13 +543,17 @@ class SummarizeOut(BaseModel):
     "/admin/summarize",
     response_model=SummarizeOut,
     tags=["admin"],
-    summary="Summarize queued stories now, or one story",
+    summary="Generate queued briefs/reports now, or one story's",
 )
 async def summarize(
     request: Request,
     story_id: Annotated[
         int | None, Query(description="Summarize only this story (always awaited).")
     ] = None,
+    kind: Annotated[
+        Literal["brief", "report", "both"],
+        Query(description="Which artifact(s) to queue for `story_id` (or for all with `force`)."),
+    ] = "both",
     force: Annotated[
         bool, Query(description="Regenerate even if the input is unchanged (all stories if no id).")
     ] = False,
@@ -466,11 +566,13 @@ async def summarize(
         with _session(request) as session:
             if session.get(Story, story_id) is None:
                 raise HTTPException(status_code=404, detail=f"unknown story {story_id}")
-        worker.enqueue([story_id], force=force)
-        result = await worker.run(story_id=story_id, manual=True)
+        kinds = ["brief", "report"] if kind == "both" else [kind]
+        for k in kinds:
+            worker.enqueue([story_id], force=force, kind=k)
+        result = await worker.run(story_id=story_id, manual=True, kinds=kinds)
         return SummarizeOut(started=False, result=result, status=worker.status())
     if force:
-        worker.enqueue_all(force=True)
+        worker.enqueue_all(force=True, kind=kind)
     else:
         worker.enqueue_missing()
     if wait:

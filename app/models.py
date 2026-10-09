@@ -188,11 +188,20 @@ class SummaryStatus(StrEnum):
     FALLBACK = "fallback"
     """The model's answers failed validation; ``text`` is the feed summary."""
     FAILED = "failed"
-    """The endpoint failed (HTTP error, timeout); ``text`` is the feed summary."""
+    """The endpoint failed (HTTP error, timeout), or a report failed validation."""
+    SKIPPED = "skipped"
+    """Reports only: not enough source text (``reason`` says why)."""
+
+
+class SummaryKind(StrEnum):
+    BRIEF = "brief"
+    """Lead sentence + three cited bullets (feed cards)."""
+    REPORT = "report"
+    """Multi-paragraph cited report (story page)."""
 
 
 class StorySummary(Base):
-    """Every generated summary version of a story (prior versions are kept)."""
+    """Every generated brief/report version of a story (prior versions are kept)."""
 
     __tablename__ = "story_summaries"
     __table_args__ = (UniqueConstraint("story_id", "version"),)
@@ -201,9 +210,16 @@ class StorySummary(Base):
     story_id: Mapped[int | None] = mapped_column(Integer, index=True)
     """Set to NULL when the story is deleted (rebuild); rows stay reusable by ``input_hash``."""
     version: Mapped[int] = mapped_column(Integer, default=1)
+    kind: Mapped[str] = mapped_column(
+        String(10), default="brief", server_default="brief", index=True
+    )
     text: Mapped[str] = mapped_column(Text, default="")
+    """Plain text: the brief's lead + bullets, the report's paragraphs, or the fallback text."""
+    content_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    """Structured answer: brief ``{lead, lead_citations, bullets}``, report ``{paragraphs}``, or
+    ``{style: summary|snippet}`` for a brief fallback. NULL for pre-brief (Phase 4) rows."""
     citations_json: Mapped[list[list[int]]] = mapped_column(JSON, default=list)
-    """One list of source indexes (1-based) per sentence."""
+    """One list of source indexes (1-based) per sentence (Phase 4 style rows)."""
     article_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
     """Article id of each numbered source: ``article_ids[n - 1]`` is [n]."""
     basis: Mapped[str] = mapped_column(String(20))
@@ -219,11 +235,12 @@ class StorySummary(Base):
 
 
 class SummaryJob(Base):
-    """A story waiting to be (re-)summarized."""
+    """A story's brief or report waiting to be (re-)generated."""
 
     __tablename__ = "summary_jobs"
 
     story_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(10), primary_key=True, default="brief")
     queued_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     force: Mapped[bool] = mapped_column(Boolean, default=False)
     attempts: Mapped[int] = mapped_column(Integer, default=0)

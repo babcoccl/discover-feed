@@ -36,12 +36,13 @@
       </tr>
       {%- set sm = summarizer %}
       <tr data-summarizer>
-        <td class="px-4 py-2 font-medium">Story summaries</td>
+        <td class="px-4 py-2 font-medium">Briefs &amp; reports</td>
         <td class="whitespace-nowrap px-4 py-2">{% if sm and sm.running %}<span class="font-medium text-sky-700 dark:text-sky-400">running…</span>{% elif sm and sm.last_run_at %}<time datetime="{{ sm.last_run_at.isoformat() }}" title="{{ sm.last_run_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ sm.last_run_at | reltime }}</time>{% else %}<span class="text-slate-400">not yet</span>{% endif %}</td>
         <td class="px-4 py-2 text-slate-600 dark:text-slate-400">
           {%- if not sm or not sm.enabled -%}No summarizer configured (profile <code>llm.summarizer</code>)
           {%- else -%}
-          {{ sm.queued }} queued{% if sm.waiting %} ({{ sm.waiting }} waiting){% endif %}; {{ sm.summaries.ok }} ok, {{ sm.summaries.fallback }} fallback, {{ sm.summaries.failed }} failed
+          {{ sm.queued }} queued{% if sm.waiting %} ({{ sm.waiting }} waiting){% endif %}; briefs: {{ sm.summaries.ok }} ok, {{ sm.summaries.fallback }} fallback, {{ sm.summaries.failed }} failed
+          · reports ({{ sm.report_mode | replace("_", " ") }}): {{ sm.reports.ok }} ok, {{ sm.reports.failed }} failed, {{ sm.reports.skipped }} skipped{% if sm.queued_reports %}, {{ sm.queued_reports }} queued{% endif %}
           · {{ sm.model }}{% if sm.tokens_per_second %} · {{ sm.tokens_per_second }} tokens/s{% endif %}
           {%- if sm.paused_until %}<br><span class="text-amber-700 dark:text-amber-400">Paused after repeated endpoint errors until {{ sm.paused_until.strftime('%H:%M UTC') }}</span>{% endif %}
           {%- if sm.last_error %}<br><span class="text-rose-700 dark:text-rose-400" data-last-error>Last error: {{ sm.last_error | snippet(200) }}</span>{% endif %}

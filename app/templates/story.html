@@ -1,40 +1,61 @@
 {% extends "base.html" %}
 {% block title %}{{ story.title }} · Discover Feed{% endblock %}
-{% from "_summary.html" import summary_text, summary_byline %}
+{% from "_summary.html" import lead_text, point_text, summary_byline, snippet_label %}
 {% block content %}
+{%- set numbered = report.citations if report and report.citations else (brief.citations if brief else []) -%}
+{%- set cited_ids = numbered | map(attribute="article_id") | list -%}
 <a href="{{ back }}" class="mb-4 inline-flex items-center gap-1 text-sm font-medium text-sky-700 hover:underline dark:text-sky-400"><span aria-hidden="true">←</span> Back to feed</a>
 <h1 class="mb-1 max-w-3xl text-2xl font-bold leading-tight tracking-tight">{{ story.title }}</h1>
-<p class="mb-6 text-sm text-slate-500 dark:text-slate-400">
+<p class="mb-4 text-sm text-slate-500 dark:text-slate-400">
   Covered by {{ story.source_count }} source{{ "s" if story.source_count != 1 }} ·
   {{ story.members | length }} article{{ "s" if story.members | length != 1 }} ·
   first seen <time datetime="{{ story.first_seen_at.isoformat() }}" title="{{ story.first_seen_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ story.first_seen_at | reltime }}</time>
 </p>
-{% if summary %}
-<section class="mb-6 max-w-3xl rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900" aria-labelledby="summary-heading" data-summary>
-  <h2 id="summary-heading" class="sr-only">Summary</h2>
-  <p class="leading-relaxed text-slate-800 dark:text-slate-200">{{ summary_text(summary) }}</p>
-  <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">{{ summary_byline(summary) }} · <time datetime="{{ summary.generated_at.isoformat() }}" title="{{ summary.generated_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ summary.generated_at | reltime }}</time></p>
-  <h3 class="mb-1 mt-4 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Sources</h3>
-  <ol class="space-y-1 text-sm" aria-label="Cited sources">
-    {% for c in summary.citations %}
-    <li id="source-{{ c.index }}" class="flex gap-2"><span class="shrink-0 font-semibold text-sky-700 dark:text-sky-400">[{{ c.index }}]</span><span><a href="{{ c.url }}" target="_blank" rel="noopener noreferrer" class="hover:underline">{{ c.headline }}</a> <span class="text-slate-500 dark:text-slate-400">· {{ c.source }}</span></span></li>
+{% if story.image_url %}<img src="{{ story.image_url }}" alt="" referrerpolicy="no-referrer" onerror="this.remove()" class="mb-6 aspect-video w-full max-w-3xl rounded-xl object-cover" data-story-image>{% endif %}
+{% if brief %}
+<section class="mb-6 max-w-3xl rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900" aria-labelledby="brief-heading" data-summary data-brief="{{ brief.style }}">
+  <h2 id="brief-heading" class="sr-only">Brief</h2>
+  {% if brief.style == "snippet" %}
+  <p class="leading-relaxed text-slate-700 dark:text-slate-300">{{ snippet_label() }}{{ brief.lead_text }}</p>
+  {% else %}
+  <p class="text-lg font-medium leading-snug text-slate-900 dark:text-slate-100" data-brief-lead>{{ lead_text(brief) }}</p>
+  {% if brief.bullets %}
+  <ul class="mt-3 list-disc space-y-1.5 pl-5 leading-relaxed text-slate-700 marker:text-slate-400 dark:text-slate-300" data-brief-bullets>
+    {% for bullet in brief.bullets %}<li>{{ point_text(bullet) }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+  <p class="mt-3 text-xs text-slate-500 dark:text-slate-400">{{ summary_byline(brief) }} · <time datetime="{{ brief.generated_at.isoformat() }}" title="{{ brief.generated_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ brief.generated_at | reltime }}</time></p>
+  {% endif %}
+</section>
+{% endif %}
+{% include "_report.html" %}
+{% if numbered %}
+<section class="mb-6 max-w-3xl" aria-labelledby="sources-heading">
+  <h2 id="sources-heading" class="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Sources</h2>
+  <ol class="divide-y divide-slate-200 overflow-hidden rounded-xl border border-slate-200 bg-white text-sm dark:divide-slate-800 dark:border-slate-800 dark:bg-slate-900" aria-label="Cited sources">
+    {% for c in numbered %}
+    <li id="source-{{ c.index }}" class="flex gap-2 p-3"><span class="shrink-0 font-semibold text-sky-700 dark:text-sky-400">[{{ c.index }}]</span><span><a href="{{ c.url }}" target="_blank" rel="noopener noreferrer" class="font-medium hover:underline">{{ c.headline }} <span aria-hidden="true" class="text-sky-700 dark:text-sky-400">↗</span></a> <span class="text-slate-500 dark:text-slate-400">· {{ c.source }}</span></span></li>
     {% endfor %}
   </ol>
 </section>
 {% endif %}
-<ol class="max-w-3xl divide-y divide-slate-200 overflow-hidden rounded-xl border border-slate-200 bg-white dark:divide-slate-800 dark:border-slate-800 dark:bg-slate-900">
-  {% for article in story.members %}
+{%- set others = story.members | rejectattr("id", "in", cited_ids) | list -%}
+{% if others %}
+{% if numbered %}<h2 class="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">More coverage</h2>{% endif %}
+<ol class="max-w-3xl divide-y divide-slate-200 overflow-hidden rounded-xl border border-slate-200 bg-white dark:divide-slate-800 dark:border-slate-800 dark:bg-slate-900" data-members>
+  {% for article in others %}
   <li class="p-4">
     <div class="mb-1 flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
       <span class="font-medium text-slate-700 dark:text-slate-300">{{ names.get(article.source_id, article.source_id) }}</span>
       <span aria-hidden="true">·</span>
       <time datetime="{{ article.published_at.isoformat() }}" title="{{ article.published_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ article.published_at | reltime }}</time>
     </div>
-    <h2 class="font-semibold leading-snug">
+    <h3 class="font-semibold leading-snug">
       <a href="{{ article.url }}" target="_blank" rel="noopener noreferrer" class="hover:underline">{{ article.title or article.url }} <span aria-hidden="true" class="text-sm text-sky-700 dark:text-sky-400">↗</span></a>
-    </h2>
+    </h3>
     {% if article.summary_raw %}<p class="mt-1 line-clamp-2 text-sm text-slate-600 dark:text-slate-400">{{ article.summary_raw | snippet(200) }}</p>{% endif %}
   </li>
   {% endfor %}
 </ol>
+{% endif %}
 {% endblock %}

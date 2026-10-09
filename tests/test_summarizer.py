@@ -98,9 +98,11 @@ def test_ok_summary_is_stored_with_citations(session_factory, story) -> None:
     assert outcome.status == "ok" and fake.calls == 1
     [row] = rows(session_factory, story)
     assert row.status == "ok" and row.version == 1 and row.basis == "full_text"
-    assert row.citations_json == [[1], [2]] and len(row.article_ids) == 2
+    assert row.kind == "brief" and len(row.article_ids) == 2
+    assert row.content_json["lead_citations"] == [1] and len(row.content_json["bullets"]) == 3
+    assert row.citations_json[0] == [1] and len(row.citations_json) == 4
     assert row.text.startswith("Acme Robotics said on Tuesday it raised $40 million")
-    assert row.model == "fake-llm" and row.prompt_version == service.PROMPT_VERSION
+    assert row.model == "fake-llm" and row.prompt_version == service.PROMPT_VERSIONS["brief"]
     assert row.prompt_tokens and row.completion_tokens and row.latency_ms is not None
 
 
@@ -129,10 +131,11 @@ def test_retry_once_with_error_then_ok(session_factory, story, bad: str) -> None
 def test_retry_then_fallback(session_factory, story, bad: str, reason: str) -> None:
     fake = FakeLLM(bad)
     outcome = summarize(session_factory, story, fake)
-    assert outcome.status == "fallback" and fake.calls == 2
+    assert outcome.status == "fallback" and fake.calls == 4  # 2 brief + 2 Phase 4 summary
     [row] = rows(session_factory, story)
     assert row.status == "fallback" and reason in row.reason and "attempt 2" in row.reason
     assert row.basis == "feed_summary" and row.text == "Acme got $40 million."
+    assert row.content_json == {"style": "snippet"}
 
 
 @pytest.mark.parametrize("mode", ["http_500", "timeout"])
@@ -171,10 +174,10 @@ def test_new_member_regenerates(session_factory, story) -> None:
 
 def test_prompt_version_change_regenerates(session_factory, story, monkeypatch) -> None:
     summarize(session_factory, story, FakeLLM())
-    monkeypatch.setattr(service, "PROMPT_VERSION", "summary-v999")
+    monkeypatch.setitem(service.PROMPT_VERSIONS, "brief", "brief-v999")
     fake = FakeLLM()
     assert summarize(session_factory, story, fake).status == "ok" and fake.calls == 1
-    assert rows(session_factory, story)[-1].prompt_version == "summary-v999"
+    assert rows(session_factory, story)[-1].prompt_version == "brief-v999"
 
 
 def test_input_assembly(session_factory) -> None:
@@ -407,17 +410,17 @@ def test_ui_shows_summary_markers_and_fallback(demo_client) -> None:
 def test_admin_summarize_and_pipeline_panel(demo_client) -> None:
     feed = demo_client.get("/api/profiles/personal-reader/feed?limit=100").json()["items"]
     story_id = next(i["id"] for i in feed if i["summary"])
-    cached = demo_client.post(f"/api/admin/summarize?story_id={story_id}").json()
+    cached = demo_client.post(f"/api/admin/summarize?story_id={story_id}&kind=brief").json()
     assert cached["result"]["cached"] == 1 and cached["status"]["enabled"]
-    forced = demo_client.post(f"/api/admin/summarize?story_id={story_id}&force=true").json()
-    assert forced["result"]["ok"] == 1
+    url = f"/api/admin/summarize?story_id={story_id}&kind=brief&force=true"
+    assert demo_client.post(url).json()["result"]["ok"] == 1
     assert demo_client.post("/api/admin/summarize?story_id=999999").status_code == 404
     waited = demo_client.post("/api/admin/summarize?wait=true").json()
     assert waited["result"]["status"] == "ok" and waited["status"]["queued"] == 0
     settings = demo_client.get("/p/personal-reader/settings").text
     assert 'hx-post="/api/admin/summarize"' in settings and "Summarize now" in settings
     panel = demo_client.get("/p/personal-reader/settings/pipeline").text
-    assert "Story summaries" in panel and "queued" in panel and "tokens/s" in panel
+    assert "Briefs &amp; reports" in panel and "queued" in panel and "tokens/s" in panel
 
 
 def test_admin_summarize_without_summarizer(tmp_path) -> None:
@@ -463,12 +466,20 @@ def test_smoke_compare_capture_with_fake(demo_client, tmp_path, capsys) -> None:
     common = ["--db", db, "--fake", "--profile", "personal-reader"]
     assert smoke.main([*common, "--limit", "2"]) == 0
     out = capsys.readouterr().out
-    assert "result: ok" in out and "[1] " in out and "2/2 passed validation" in out
+    assert "result: ok" in out and "[1] " in out and "brief: 2/2 passed validation" in out
+    assert "### Report" in out and "words: " in out
+    assert smoke.main([*common, "--limit", "1", "--kind", "report"]) == 0
+    out = capsys.readouterr().out
+    assert "### Brief" not in out and "report: 1/1 passed validation" in out
     endpoints = "one=http://a:8080/v1:m1,two=http://b:8080/v1:m2"
     assert compare.main([*common, "--endpoints", endpoints, "--stories", "2", "--markdown"]) == 0
     out = capsys.readouterr().out
-    assert "| one | m1 | 2/2 (100%) |" in out and "| Story | one | two |" in out
+    assert "| one | m1 | brief | 2/2 (100%) |" in out and "| two | m2 | report | 2/2" in out
+    assert "## Briefs" in out and "## Reports" in out and "| Story | one | two |" in out
     path = tmp_path / "real_response.json"
     assert capture.main([*common, "--out", str(path)]) == 0
     saved = json.loads(path.read_text(encoding="utf-8"))
     assert parse_response(saved["response"]).content and "api_key" not in json.dumps(saved)
+    assert saved["kind"] == "brief"
+    assert capture.main([*common, "--out", str(path), "--kind", "report"]) == 0
+    assert json.loads(path.read_text(encoding="utf-8"))["kind"] == "report"
