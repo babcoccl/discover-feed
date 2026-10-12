@@ -1,6 +1,7 @@
 """Source management: CRUD and sharing, soft delete, auto-disable recovery, health,
 feed autodiscovery, read-only test fetches, OPML, the starter catalog and YAML sync."""
 
+import html as html_lib
 import io
 import time
 import xml.etree.ElementTree as ET
@@ -477,7 +478,7 @@ async def test_fetch(
         item_count=len(raws),
         items=[
             TestItem(
-                title=(r.title or r.url or "(untitled)")[:300],
+                title=html_lib.unescape(r.title or r.url or "(untitled)")[:300],
                 url=r.url,
                 published_at=r.published_at,
             )

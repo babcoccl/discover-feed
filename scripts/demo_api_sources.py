@@ -87,14 +87,14 @@ def main() -> int:
     factory = make_session_factory(engine)
     sources = [
         Source(
-            name="Guardian business",
+            name="Guardian API business",
             type="guardian",
             api_key="GUARDIAN_API_KEY",
             params={"q": "rates", "section": "business"},
             daily_request_budget=100,
         ),
         Source(
-            name="NewsData markets",
+            name="NewsData.io markets",
             type="newsdata",
             api_key="NEWSDATA_API_KEY",
             params={"q": "rates", "language": "en"},
