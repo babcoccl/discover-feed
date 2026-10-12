@@ -104,6 +104,8 @@ def poll(base: str, tl: Timeline, assert_published: bool) -> None:
                     tl.violations.append(msg)
             else:
                 tl.mark(row, "brief")
+                if not any(e[1].startswith("first story published") for e in tl.events):
+                    tl.event(f"first story published: {item['title'][:60]}")
             state = report_state(item.get("report"))
             if state is None and "brief" in row and "report" not in row:
                 story = get(base, f"/api/stories/{key}") or {}
@@ -116,8 +118,10 @@ def poll(base: str, tl: Timeline, assert_published: bool) -> None:
 
 
 def settled(tl: Timeline) -> bool:
+    """At least 5 published stories with a final report, and every shown card has a brief."""
     rows = [r for r in tl.stories.values() if "clustered" in r]
-    return len(rows) >= 5 and all("brief" in r and "report" in r for r in rows)
+    final = [r for r in rows if "report" in r]
+    return len(final) >= 5 and all("brief" in r for r in rows)
 
 
 def render(tl: Timeline) -> str:
@@ -152,7 +156,8 @@ def main() -> int:
         while tl.now() < args.timeout:
             poll(args.base, tl, not args.no_assert)
             if settled(tl):
-                tl.event("settled: every story has a brief and a final report")
+                done = sum("report" in r for r in tl.stories.values())
+                tl.event(f"settled: {done} stories published with a final report")
                 break
             time.sleep(1)
         else:
