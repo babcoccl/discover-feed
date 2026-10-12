@@ -47,13 +47,15 @@ def schedule_pipeline(
     scheduler: BackgroundScheduler,
     pipeline: Pipeline,
     *,
-    interval_minutes: int = 15,
-    first_run_delay_seconds: int = 120,
+    interval_seconds: int = 60,
+    first_run_delay_seconds: int = 10,
 ) -> None:
-    """Extract + cluster on its own interval; the first run waits for the initial ingestion."""
+    """Extract + cluster on a short interval (each run only touches new or pending
+    articles), so new stories move through text extraction and clustering in about a
+    minute; the generation worker is kicked after each run."""
     scheduler.add_job(
         pipeline.run_blocking,
-        trigger=IntervalTrigger(minutes=interval_minutes),
+        trigger=IntervalTrigger(seconds=interval_seconds),
         id="pipeline",
         name="Extract text and cluster stories",
         replace_existing=True,
@@ -67,13 +69,14 @@ def schedule_summaries(
     scheduler: BackgroundScheduler,
     worker: SummaryWorker,
     *,
-    interval_minutes: int = 5,
-    first_run_delay_seconds: int = 30,
+    interval_seconds: int = 60,
+    first_run_delay_seconds: int = 15,
 ) -> None:
-    """Drain the summary queue (debounced stories and retries after backoff come due here)."""
+    """Generation worker: retries after backoff and publish timers (report wait, brief
+    fallback) come due here."""
     scheduler.add_job(
         worker.run_blocking,
-        trigger=IntervalTrigger(minutes=interval_minutes),
+        trigger=IntervalTrigger(seconds=interval_seconds),
         id="summarize",
         name="Summarize stories",
         replace_existing=True,

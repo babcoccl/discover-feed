@@ -88,7 +88,7 @@ def test_clustering_is_idempotent_and_rebuild_reproduces(demo) -> None:
 def test_story_fields_follow_members(demo) -> None:
     _, session_factory = demo
     with session_factory() as session:
-        for story in session.scalars(select(Story)):
+        for story in session.scalars(select(Story).where(Story.state != "merged")):
             members = list(session.scalars(select(Article).where(Article.story_id == story.id)))
             assert story.article_count == len(members)
             assert story.source_count == len({m.source_id for m in members})

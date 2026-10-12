@@ -270,6 +270,10 @@ class FakeLLM:
         return "invented_number" if digest[0] % 5 == 0 else "ok"
 
     async def handle(self, request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":  # GET /models (the startup health check)
+            return httpx.Response(
+                200, json={"object": "list", "data": [{"id": self.model, "object": "model"}]}
+            )
         if self.delay:
             import asyncio
 

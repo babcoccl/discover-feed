@@ -12,12 +12,13 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app import profiles as repo
+from app import story_views as views
 from app.config import CardStyle
 from app.demo_pages import FIXTURE_DIR, page_html
 from app.models import ProfileRecord, Topic
+from app.pipeline_panel import pipeline_queue, recent_attempts
 from app.runs import last_runs, text_status_counts
-from app.summarize.views import brief_views, report_views
-from app.topics import split_keywords
+from app.topics import TopicRule, split_keywords
 
 
 def _card_style(request: Request) -> dict:
@@ -36,9 +37,6 @@ TEMPLATES = Jinja2Templates(
     directory=Path(__file__).parent / "templates", context_processors=[_card_style]
 )
 PAGE_SIZE = 24
-REPORT_POLL_SECONDS = 3
-REPORT_MAX_POLLS = 40
-"""The story page stops polling for a report after this many polls (2 minutes)."""
 
 try:
     _VERSION = version("discover-feed")
@@ -129,7 +127,74 @@ def home(request: Request) -> Response:
 View = Literal["stories", "articles"]
 
 
+def _story_page(
+    session: Session, profile: ProfileRecord, topic: Topic | None, cursor: str | None
+) -> views.Page:
+    """Published stories only (newest ``last_updated_at`` first)."""
+    rule = repo.topic_rule(topic) if topic else TopicRule()
+    source_ids = {s.id for s in profile.sources}
+    if rule.source_ids:
+        source_ids &= set(rule.source_ids)
+    if not source_ids:
+        return views.Page(items=[], next_cursor=None)
+    position = repo.decode_cursor(cursor) if cursor else None
+    found, more = views.published_page(
+        session, sorted(source_ids), rule, limit=PAGE_SIZE, cursor=position
+    )
+    next_cursor = repo.encode_cursor(found[-1][0], found[-1][1]) if more and found else None
+    return views.Page(items=[story for _, _, story in found], next_cursor=next_cursor)
+
+
+def _worker(request: Request):
+    worker = getattr(request.app.state, "summaries", None)
+    return worker if worker is not None and worker.enabled else None
+
+
+def blockers(request: Request) -> list[str]:
+    """Why nothing is being generated right now (shown on the feed and Pipeline panel)."""
+    worker = _worker(request)
+    health = getattr(request.app.state, "llm_health", None)
+    if worker is None:
+        return [
+            "No LLM endpoint is set: add an llm.summarizer role to a profile "
+            "(e.g. LOCAL_LLM_BASE_URL), then restart."
+        ]
+    found = []
+    state = worker.state
+    if health is not None and health.state == "unreachable":
+        found.append(f"The LLM endpoint {health.host} is unreachable: {health.detail}")
+    if (health is not None and health.state == "unauthorized") or "401" in (state.last_error or ""):
+        found.append(
+            f"The LLM endpoint {health.host if health else ''} answered HTTP 401: "
+            "check the API key."
+        )
+    now = datetime.now(UTC)
+    if state.paused_by_admin:
+        found.append("Generation is paused (Settings > Pipeline > Resume).")
+    elif state.paused_until and state.paused_until > now:
+        found.append(
+            f"Generation paused after {state.consecutive_failures} endpoint failures in a row "
+            f"(last: {state.last_error}); retrying {reltime(state.paused_until, now)}."
+        )
+    return found
+
+
+def preparing(session: Session) -> dict:
+    """Live counts for "Preparing your first stories..."."""
+    counts = views.stage_counts(session)
+    done = counts["published"]
+    total = done + counts["clustered"] + counts["brief_ready"] + counts["report_final"]
+    return {
+        "ingested": counts["ingested"],
+        "extracting": counts["text_pending"],
+        "clustering": counts["text_final"],
+        "summarizing": (min(done + 1, total) if total > done else done, total),
+        "published": done,
+    }
+
+
 def _feed_context(
+    request: Request,
     session: Session,
     profile: ProfileRecord,
     topic_id: int | None,
@@ -139,23 +204,27 @@ def _feed_context(
     topic = _selected_topic(profile, topic_id)
     try:
         if view == "articles":
-            page = repo.feed_page(session, profile, topic, limit=PAGE_SIZE, cursor=cursor)
+            page = repo.feed_page(
+                session, profile, topic, limit=PAGE_SIZE, cursor=cursor, published_only=True
+            )
         else:
-            page = repo.story_feed_page(session, profile, topic, limit=PAGE_SIZE, cursor=cursor)
+            page = _story_page(session, profile, topic, cursor)
     except repo.InvalidCursor:
         raise HTTPException(status_code=400, detail="invalid cursor") from None
-    names = repo.source_names(session)
-    story_ids = [item.story_id for item in page.items] if view == "stories" else []
-    return _base_context(
+    context = _base_context(
         session,
         profile,
         topic=topic,
         tabs=[t for t in profile.topics if t.enabled],
         page=page,
         view=view,
-        names=names,
-        summaries=brief_views(session, story_ids, names),
+        names=repo.source_names(session),
+        blockers=blockers(request),
+        stream_url=f"/api/profiles/{profile.slug}/stream",
     )
+    if not page.items and cursor is None:
+        context["preparing"] = preparing(session)
+    return context
 
 
 @router.get("/p/{slug}", response_class=HTMLResponse)
@@ -164,7 +233,7 @@ def profile_page(
 ) -> Response:
     with _session(request) as session:
         profile = _profile_or_404(session, slug)
-        context = _feed_context(session, profile, topic, view=view)
+        context = _feed_context(request, session, profile, topic, view=view)
     return TEMPLATES.TemplateResponse(request, "feed.html", context)
 
 
@@ -179,7 +248,7 @@ def feed_partial(
     """HTMX partial: tabs + grid for a topic, or just the next cards when ``cursor`` is set."""
     with _session(request) as session:
         profile = _profile_or_404(session, slug)
-        context = _feed_context(session, profile, topic, cursor, view)
+        context = _feed_context(request, session, profile, topic, cursor, view)
     template = "_cards.html" if cursor else "_feed.html"
     return TEMPLATES.TemplateResponse(request, template, context)
 
@@ -188,97 +257,64 @@ def feed_partial(
 def story_page(
     request: Request, story_id: int, p: str | None = None, topic: int | None = None
 ) -> Response:
-    """All members of a story; with ``p`` only those from the profile's sources."""
+    """A published story; with ``p`` only members from the profile's sources. Merged ids
+    redirect to the story they joined; unpublished stories are 404 (see the Pipeline)."""
     with _session(request) as session:
         profile = _profile_or_404(session, p) if p else None
-        story = repo.get_story(session, story_id, profile)
+        target = views.resolve(session, story_id)
+        if target is not None and target != story_id:
+            query = request.url.query
+            return RedirectResponse(
+                f"/story/{target}" + (f"?{query}" if query else ""), status_code=301
+            )
+        source_ids = [s.id for s in profile.sources] if profile is not None else None
+        story = views.published_story(session, story_id, source_ids)
         if story is None:
-            raise HTTPException(status_code=404, detail=f"unknown story {story_id}")
+            raise HTTPException(status_code=404, detail=f"story {story_id} is not published")
         if profile is not None:
             selected = _selected_topic(profile, topic)
             back = f"/p/{profile.slug}" + (f"?topic={selected.id}" if selected else "")
         else:
             back = "/"
-        names = repo.source_names(session)
-        brief = brief_views(session, [story_id], names).get(story_id)
-        report = report_views(session, [story_id], names).get(story_id)
-        if report is None or report.status != "ok":
-            worker = _worker(request)
-            if worker is not None:
-                worker.request_report(story_id)
         context = _base_context(
             session,
             profile,
             story=story,
             back=back,
-            names=names,
-            brief=brief,
-            summary=brief,
-            **_report_context(request, story_id, report),
+            names=repo.source_names(session),
+            brief=story.brief,
+            summary=story.brief,
+            **_report_context(request, story),
         )
     return TEMPLATES.TemplateResponse(request, "story.html", context)
 
 
-def _worker(request: Request):
-    worker = getattr(request.app.state, "summaries", None)
-    return worker if worker is not None and worker.enabled else None
-
-
-def _report_context(request: Request, story_id: int, report, polls: int = 0) -> dict:
-    """``report_state``: ``ok`` | ``failed`` | ``skipped`` | ``pending`` | ``retrying`` |
-    ``timeout`` | ``off``. ``retrying``: the endpoint failed (e.g. timed out) and the job is
-    backing off."""
-    worker = _worker(request)
-    job = worker.report_job(story_id) if worker is not None else None
-    if job is not None and (report is None or report.status != "ok"):
-        if polls >= REPORT_MAX_POLLS:
-            state = "timeout"
-        else:
-            state = "retrying" if job.attempts else "pending"
-    elif report is not None:
-        state = report.status
-    else:
-        state = "off"
+def _report_context(request: Request, story, state: str | None = None) -> dict:
+    report = story.report if story is not None else None
     return {
-        "story_id": story_id,
+        "story_id": story.story_id if story is not None else None,
         "report": report,
-        "report_state": state,
-        "polls": polls,
-        "poll_seconds": REPORT_POLL_SECONDS,
-        "can_regenerate": worker is not None,
-        "job": job,
+        "report_state": state or (report.state if report is not None else "off"),
+        "can_regenerate": _worker(request) is not None,
         "p": request.query_params.get("p"),
     }
 
 
-@router.get("/story/{story_id}/report", response_class=HTMLResponse)
-def story_report(request: Request, story_id: int, polls: int = 0) -> Response:
-    """HTMX partial polled while a report is generating; refreshes the page when done."""
-    with _session(request) as session:
-        report = report_views(session, [story_id], repo.source_names(session)).get(story_id)
-        context = _report_context(request, story_id, report, polls)
-    if context["report_state"] not in ("pending", "retrying", "timeout"):
-        return Response(status_code=200, headers={"HX-Refresh": "true"})
-    return TEMPLATES.TemplateResponse(request, "_report.html", context)
-
-
 @router.post("/story/{story_id}/regenerate", response_class=HTMLResponse)
 def story_regenerate(request: Request, story_id: int, kind: str = "both") -> Response:
-    """Regenerate / Retry: force a new brief and/or report and show the generating state."""
+    """Regenerate / Retry (admin): queue a forced brief and/or report for this story first.
+    The published version stays until the new one passes the publish rule."""
     worker = _worker(request)
     if worker is None:
         raise HTTPException(status_code=409, detail="no summarizer configured")
-    with _session(request) as session:
-        if repo.get_story(session, story_id) is None:
-            raise HTTPException(status_code=404, detail=f"unknown story {story_id}")
-    for k in ("brief", "report"):
-        if kind in (k, "both"):
-            worker.enqueue([story_id], force=True, kind=k)
+    if kind not in ("brief", "report", "both"):
+        raise HTTPException(status_code=422, detail="kind must be brief, report or both")
+    if not worker.retry(story_id, kind):
+        raise HTTPException(status_code=404, detail=f"unknown story {story_id}")
     worker.start(story_id=story_id, manual=True)
-    context = {
-        **_report_context(request, story_id, None),
-        "report_state": "pending",
-    }
+    with _session(request) as session:
+        story = views.published_story(session, story_id)
+    context = {**_report_context(request, story, "queued"), "story_id": story_id}
     return TEMPLATES.TemplateResponse(request, "_report.html", context)
 
 
@@ -335,6 +371,10 @@ def _pipeline_context(request: Request, session: Session) -> dict:
         "text_counts": text_status_counts(session),
         "runs": last_runs(session),
         "summarizer": worker.status() if worker is not None else None,
+        "blockers": blockers(request),
+        "stages": preparing(session),
+        "queue": pipeline_queue(session, _worker(request)),
+        "attempts": recent_attempts(session),
     }
 
 
@@ -430,3 +470,52 @@ def demo_article(article_id: str) -> HTMLResponse:
     if body is None:
         raise HTTPException(404, "no such demo article")
     return HTMLResponse(body)
+
+
+# --- pipeline admin actions (Settings > Pipeline) -----------------------------------------
+
+
+def _pipeline_response(request: Request, slug: str) -> Response:
+    with _session(request) as session:
+        profile = _profile_or_404(session, slug)
+        context = _base_context(session, profile, **_pipeline_context(request, session))
+    return TEMPLATES.TemplateResponse(request, "_pipeline.html", context)
+
+
+def _admin_worker(request: Request):
+    worker = _worker(request)
+    if worker is None:
+        raise HTTPException(status_code=409, detail="no summarizer configured")
+    return worker
+
+
+@router.post("/p/{slug}/settings/pipeline/stories/{story_id}/prioritize")
+def pipeline_prioritize(request: Request, slug: str, story_id: int) -> Response:
+    worker = _admin_worker(request)
+    if not worker.prioritize(story_id):
+        raise HTTPException(status_code=404, detail=f"unknown story {story_id}")
+    worker.start()
+    return _pipeline_response(request, slug)
+
+
+@router.post("/p/{slug}/settings/pipeline/stories/{story_id}/retry")
+def pipeline_retry(request: Request, slug: str, story_id: int, kind: str = "both") -> Response:
+    worker = _admin_worker(request)
+    if not worker.retry(story_id, kind):
+        raise HTTPException(status_code=404, detail=f"unknown story {story_id}")
+    worker.start(story_id=story_id, manual=True)
+    return _pipeline_response(request, slug)
+
+
+@router.post("/p/{slug}/settings/pipeline/pause")
+def pipeline_pause(request: Request, slug: str) -> Response:
+    _admin_worker(request).set_paused(True)
+    return _pipeline_response(request, slug)
+
+
+@router.post("/p/{slug}/settings/pipeline/resume")
+def pipeline_resume(request: Request, slug: str) -> Response:
+    worker = _admin_worker(request)
+    worker.set_paused(False)
+    worker.start()
+    return _pipeline_response(request, slug)

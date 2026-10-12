@@ -48,6 +48,12 @@ class LLMRole(_Model):
     temperature: float = Field(default=0.2, ge=0, le=2)
     max_tokens: int = Field(default=600, ge=1)
     timeout_seconds: float = Field(default=120, gt=0)
+    context_tokens: int = Field(
+        default=16384,
+        ge=1024,
+        description="The model's context window; report inputs are trimmed to leave room for "
+        "the answer.",
+    )
     structured_output: StructuredOutput = StructuredOutput.JSON_SCHEMA
     disable_thinking: bool = Field(
         default=True,
@@ -70,7 +76,7 @@ class ReportMode(StrEnum):
     AUTO = "auto"
     """Generate reports in the background for recent multi-source stories."""
     ON_DEMAND = "on_demand"
-    """Generate a story's report when its page is opened."""
+    """Deprecated: pages never trigger generation now; treated as ``auto``."""
     OFF = "off"
 
 
@@ -79,9 +85,36 @@ class SummariesConfig(_Model):
 
     card_style: CardStyle = CardStyle.LEAD_BULLETS
     report_mode: ReportMode = ReportMode.AUTO
-    report_auto_max_age_hours: float = Field(default=48, gt=0)
-    max_reports_per_run: int = Field(default=3, ge=1)
-    report_concurrency: int = Field(default=1, ge=1)
+    publish_requires_report: bool = Field(
+        default=True,
+        description="Publish a story only once its report is final (ready, skipped or failed).",
+    )
+    publish_max_wait_minutes: float = Field(
+        default=30,
+        ge=0,
+        description="After this long with a valid brief, publish with the report still pending.",
+    )
+    brief_fallback_hours: float = Field(
+        default=6,
+        ge=0,
+        description="After this long without a valid brief, publish the feed snippet instead.",
+    )
+    extraction_wait_seconds: float = Field(
+        default=120, ge=0, description="Cluster a story after this long even if text is pending."
+    )
+    max_inflight: int = Field(default=1, ge=1, description="LLM requests at once (all kinds).")
+    summarize_backfill_hours: float = Field(
+        default=24, gt=0, description="Only stories updated this recently are generated."
+    )
+    summarize_backfill_max: int = Field(
+        default=40, ge=0, description="At most this many never-published stories are queued."
+    )
+    report_auto_max_age_hours: float | None = Field(default=None, deprecated=True)
+    """Deprecated, ignored (use ``summarize_backfill_hours``)."""
+    max_reports_per_run: int | None = Field(default=None, deprecated=True)
+    """Deprecated, ignored: stories go brief -> report -> publish one at a time."""
+    report_concurrency: int | None = Field(default=None, deprecated=True)
+    """Deprecated, ignored (use ``max_inflight``)."""
     report_max_articles: int = Field(default=4, ge=1)
     report_max_words_per_article: int = Field(default=600, ge=50)
     report_max_tokens: int = Field(

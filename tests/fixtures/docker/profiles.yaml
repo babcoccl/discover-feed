@@ -1,0 +1,190 @@
+# Profiles for the Docker end-to-end run (docker-compose.fake-llm.yml): the example
+# profiles with every feed served by the fixture server and every LLM role pointed at
+# the fake LLM. Generated from config/profiles.example.yaml.
+profiles:
+- id: personal-reader
+  name: Personal Reader
+  description: Long-form tech, science and culture reading, summarised daily.
+  topics:
+  - name: AI
+    include:
+    - AI
+    - artificial intelligence
+    - machine learning
+    - LLM
+    - LLMs
+    - neural network
+    - chatbot
+  - name: Home
+    include:
+    - smart home
+    - home
+    - homes
+    - heat pump
+    - thermostat
+    - housing
+    - kitchen
+    - solar panels
+  - name: Travel
+    include:
+    - travel
+    - flight
+    - flights
+    - airline
+    - airport
+    - rail
+    - train
+    - hotel
+    - passport
+    exclude:
+    - time travel
+  keywords:
+  - python
+  - open source
+  - space
+  - climate
+  sources:
+  - name: Hacker News
+    type: rss
+    url: http://fixtures:8081/feeds/hacker-news.xml
+    refresh_minutes: 30
+    tags:
+    - tech
+  - name: Ars Technica
+    type: rss
+    url: http://fixtures:8081/feeds/ars-technica.xml
+    tags:
+    - tech
+    - science
+  - name: Quanta Magazine
+    type: rss
+    url: http://fixtures:8081/feeds/quanta-magazine.xml
+    refresh_minutes: 120
+    tags:
+    - science
+  - name: The Verge
+    type: rss
+    url: http://fixtures:8081/feeds/the-verge.xml
+    tags:
+    - tech
+  - name: TechCrunch
+    type: rss
+    url: http://fixtures:8081/feeds/techcrunch.xml
+    tags:
+    - tech
+  alert_rules:
+  - name: Python releases
+    keywords:
+    - python
+    - release
+    match: all
+    sources:
+    - Hacker News
+  llm:
+    summarizer:
+      base_url: http://fake-llm:8090/v1
+      api_key: fake-e2e-key
+      model: fake-llm
+    chat:
+      base_url: http://fake-llm:8090/v1
+      api_key: fake-e2e-key
+      model: fake-llm
+      temperature: 0.3
+- id: market-monitor
+  name: Market Monitor
+  description: Watches markets and macro news, alerting on high-signal events.
+  topics:
+  - name: Markets
+    include:
+    - stocks
+    - S&P 500
+    - Nasdaq
+    - Dow
+    - Treasury
+    - yields
+    - bonds
+    - markets
+    - oil prices
+  - name: SEC filings
+    include:
+    - SEC
+    - 10-K
+    - 10-Q
+    - 8-K
+    - filing
+    - filings
+    - enforcement
+    - charges
+  - name: Earnings
+    include:
+    - earnings
+    - revenue
+    - guidance
+    - quarterly results
+    - EPS
+    - profit
+    exclude:
+    - earnings call transcript
+  - name: Fed
+    sources:
+    - Federal Reserve press releases
+  keywords:
+  - fed
+  - rate cut
+  - inflation
+  - earnings
+  - guidance
+  sources:
+  - name: Federal Reserve press releases
+    type: rss
+    url: http://fixtures:8081/feeds/federal-reserve-press-releases.xml
+    refresh_minutes: 15
+    tags:
+    - macro
+  - name: SEC press releases
+    type: rss
+    url: http://fixtures:8081/feeds/sec-press-releases.xml
+    tags:
+    - regulation
+  - name: CNBC Markets
+    type: rss
+    url: http://fixtures:8081/feeds/cnbc-markets.xml
+    refresh_minutes: 10
+    tags:
+    - markets
+  - name: Guardian Business
+    type: rss
+    url: http://fixtures:8081/feeds/guardian-business.xml
+    tags:
+    - markets
+  - name: BBC Business
+    type: rss
+    url: http://fixtures:8081/feeds/bbc-business.xml
+    tags:
+    - markets
+  alert_rules:
+  - name: Rate decisions
+    keywords:
+    - fomc
+    - rate decision
+    - federal funds rate
+    match: any
+    min_score: 0.7
+    sources:
+    - Federal Reserve press releases
+    - CNBC Markets
+  - name: Enforcement actions
+    keywords:
+    - charges
+    - settlement
+    - enforcement
+    sources:
+    - SEC press releases
+  llm:
+    summarizer:
+      base_url: http://fake-llm:8090/v1
+      api_key: fake-e2e-key
+      model: fake-llm
+      temperature: 0.0
+      timeout_seconds: 60
+      disable_thinking: false

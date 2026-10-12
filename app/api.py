@@ -1,20 +1,24 @@
+import asyncio
+import json
 from datetime import UTC, datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import RedirectResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import profiles as repo
+from app import story_views as views
 from app.cluster.service import ClusterRunResult
+from app.events import bus
 from app.extract import ExtractRunResult
 from app.ingest import SourceRunResult
 from app.models import Article, ProfileRecord, Story
-from app.summarize.views import BriefView, Point, ReportView, brief_views, report_views
-from app.summarize.worker import SummarizeRunResult, WorkerStatus
 from app.web import snippet
+from app.worker_status import SummarizeRunResult, WorkerStatus
 
 router = APIRouter(prefix="/api")
 
@@ -150,18 +154,28 @@ class BriefOut(BaseModel):
     style: Literal["brief", "summary", "snippet"]
     basis: Literal["full_text", "feed_summary", "mixed"]
     model: str
-    generated_at: datetime
+    generated_at: datetime | None
     sources: list[CitationOut] = Field(description="Numbered sources, [1] first.")
+    label: str | None = Field(
+        default=None, description="`Summary unavailable: <reason>` on a snippet fallback."
+    )
 
 
 class ReportOut(BaseModel):
-    paragraphs: list[CitedTextOut] = Field(description="3-5 paragraphs; empty unless `ok`.")
-    status: Literal["ok", "failed", "skipped"] = Field(
-        description="`failed`: generation or validation failed (no report is shown); "
-        "`skipped`: not enough source text."
+    paragraphs: list[CitedTextOut] = Field(description="3-5 paragraphs; empty unless ready.")
+    state: Literal["ready", "pending", "skipped", "failed"] = Field(
+        description="`pending`: published before its report (see `label`); `failed`: "
+        "generation or validation failed; `skipped`: not enough source text (see `details`) "
+        "or reports are off."
     )
+    status: Literal["ok", "pending", "failed", "skipped"] = Field(
+        description="Deprecated name of `state` (`ok` = `ready`)."
+    )
+    reason: str | None = None
+    label: str | None = None
+    details: list[str] = Field(default=[], description="Per-member text status and words.")
     model: str
-    generated_at: datetime
+    generated_at: datetime | None
     sources: list[CitationOut] = Field(
         description="Numbered sources, [1] first; [1]..[n] match the brief's."
     )
@@ -171,39 +185,44 @@ def _citation_out(c) -> CitationOut:
     return CitationOut(index=c.index, source=c.source, headline=c.headline, url=c.url)
 
 
-def _cited_out(point: Point) -> CitedTextOut:
+def _cited_out(point: views.Point) -> CitedTextOut:
     return CitedTextOut(text=point.text, citations=[_citation_out(c) for c in point.citations])
 
 
-def _brief_out(view: BriefView | None) -> BriefOut | None:
+def _brief_out(view: views.Brief | None) -> BriefOut | None:
     if view is None:
         return None
     return BriefOut(
         lead=view.lead_text,
         lead_citations=[_citation_out(c) for c in view.lead_citations],
         bullets=[_cited_out(b) for b in view.bullets],
-        status=view.status,
+        status="ok" if view.status == "ok" else "fallback",
         style=view.style,
         basis=view.basis,
         model=view.model,
         generated_at=view.generated_at,
         sources=[_citation_out(c) for c in view.citations],
+        label=view.label,
     )
 
 
-def _report_out(view: ReportView | None) -> ReportOut | None:
+def _report_out(view: views.Report | None) -> ReportOut | None:
     if view is None:
         return None
     return ReportOut(
         paragraphs=[_cited_out(p) for p in view.paragraphs],
+        state=view.state,
         status=view.status,
+        reason=view.reason,
+        label=view.label,
+        details=view.details,
         model=view.model,
         generated_at=view.generated_at,
         sources=[_citation_out(c) for c in view.citations],
     )
 
 
-def _summary_out(view: BriefView | None) -> SummaryOut | None:
+def _summary_out(view: views.Brief | None) -> SummaryOut | None:
     """Deprecated ``summary``: the brief's lead and bullets joined, with [n] markers."""
     if view is None or view.style == "snippet":
         return None
@@ -237,7 +256,9 @@ _REPORT_FIELD = Field(
 
 
 class StoryItemOut(BaseModel):
-    id: int | None = Field(description="Story id; null for an article not clustered yet.")
+    id: int = Field(description="Story id (only published stories are listed).")
+    version: int = Field(description="The published `story_views` version.")
+    published_at: datetime | None = Field(description="When the story was first published.")
     title: str
     image_url: str | None
     snippet: str = Field(description="The feed's own summary (fallback when `brief` is null).")
@@ -270,6 +291,8 @@ class StoryMemberOut(BaseModel):
 
 class StoryOut(BaseModel):
     id: int
+    version: int
+    published_at: datetime | None
     title: str
     representative_article_id: int
     source_count: int
@@ -405,20 +428,32 @@ def profile_feed(
         topic_out = TopicOut.model_validate(selected) if selected else None
         try:
             if group == "stories":
-                stories = repo.story_feed_page(
-                    session, profile, selected, limit=limit, cursor=cursor
+                rule = repo.topic_rule(selected) if selected else views.TopicRule()
+                source_ids = {s.id for s in profile.sources}
+                if rule.source_ids:
+                    source_ids &= set(rule.source_ids)
+                found, more = views.published_page(
+                    session,
+                    sorted(source_ids),
+                    rule,
+                    limit=limit,
+                    cursor=repo.decode_cursor(cursor) if cursor else None,
                 )
-                story_ids = [i.story_id for i in stories.items]
-                briefs = brief_views(session, story_ids, names)
-                reports = report_views(session, story_ids, names)
+                last = found[-1] if found else None
                 return StoryFeedOut(
                     profile=profile.slug,
                     topic=topic_out,
-                    items=[_story_item_out(item, names, briefs, reports) for item in stories.items],
-                    next_cursor=stories.next_cursor,
+                    items=[_story_item_out(story) for _, _, story in found],
+                    next_cursor=repo.encode_cursor(last[0], last[1]) if more and last else None,
                 )
             page = repo.feed_page(
-                session, profile, selected, limit=limit, cursor=cursor, time_field=time_field
+                session,
+                profile,
+                selected,
+                limit=limit,
+                cursor=cursor,
+                time_field=time_field,
+                published_only=True,
             )
         except repo.InvalidCursor:
             raise HTTPException(status_code=422, detail="invalid cursor") from None
@@ -436,29 +471,87 @@ def profile_feed(
     )
 
 
-def _story_item_out(
-    item: repo.StoryItem,
-    names: dict[str, str],
-    briefs: dict[int, BriefView],
-    reports: dict[int, ReportView],
-) -> StoryItemOut:
+def _story_item_out(story: views.PublishedStory) -> StoryItemOut:
     return StoryItemOut(
-        id=item.story_id,
-        title=item.title,
-        image_url=item.image_url,
-        snippet=snippet(item.snippet_source),
-        brief=_brief_out(briefs.get(item.story_id)),
-        report=_report_out(reports.get(item.story_id)),
-        summary=_summary_out(briefs.get(item.story_id)),
+        id=story.story_id,
+        version=story.version,
+        published_at=story.published_at,
+        title=story.title,
+        image_url=story.image_url,
+        snippet=snippet(story.snippet_source),
+        brief=_brief_out(story.brief),
+        report=_report_out(story.report),
+        summary=_summary_out(story.brief),
         sources=[
-            StorySourceOut(
-                name=names.get(a.source_id, a.source_id), url=a.url, published_at=a.published_at
-            )
-            for a in item.sources
+            StorySourceOut(name=m.source, url=m.url, published_at=m.published_at)
+            for m in story.sources
         ],
-        source_count=item.source_count,
-        first_seen_at=item.first_seen_at,
-        last_updated_at=item.last_updated_at,
+        source_count=story.source_count,
+        first_seen_at=story.first_seen_at,
+        last_updated_at=story.last_updated_at,
+    )
+
+
+@router.get(
+    "/profiles/{slug}/stream",
+    tags=["profiles"],
+    summary="Live arrivals (Server-Sent Events)",
+    response_class=StreamingResponse,
+)
+async def profile_stream(
+    request: Request,
+    slug: str,
+    heartbeat: Annotated[float, Query(gt=0, le=300, description="Seconds between pings.")] = 15,
+) -> StreamingResponse:
+    """`story.published` / `story.updated` events (`data: {"story_id", "version"}`) for
+    stories with a member from the profile's sources, plus a `heartbeat` event every
+    `heartbeat` seconds. Read-only: listening never starts generation."""
+    with _session(request) as session:
+        source_ids = {s.id for s in _profile_or_404(session, slug).sources}
+    queue = bus.subscribe()
+
+    async def events():
+        try:
+            yield "retry: 5000\n\n"
+            while True:
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=heartbeat)
+                except TimeoutError:
+                    if await request.is_disconnected():
+                        break
+                    yield "event: heartbeat\ndata: {}\n\n"
+                    continue
+                if source_ids & set(item.source_ids):
+                    yield f"event: {item.type}\ndata: {json.dumps(item.payload())}\n\n"
+        finally:
+            bus.unsubscribe(queue)
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+class PublishedSinceOut(BaseModel):
+    count: int
+    stories: list[dict[str, int]] = Field(description='`[{"story_id", "version"}]`, newest first.')
+
+
+@router.get("/profiles/{slug}/published", response_model=PublishedSinceOut, tags=["profiles"])
+def published_since(
+    request: Request,
+    slug: str,
+    since: Annotated[datetime, Query(description="ISO time; usually when the page loaded.")],
+) -> PublishedSinceOut:
+    """Stories first published after `since` (the polling fallback for the stream)."""
+    with _session(request) as session:
+        profile = _profile_or_404(session, slug)
+        if since.tzinfo is None:
+            since = since.replace(tzinfo=UTC)
+        rows = views.published_since(session, [s.id for s in profile.sources], since)
+    return PublishedSinceOut(
+        count=len(rows), stories=[{"story_id": i, "version": v} for i, v in rows]
     )
 
 
@@ -472,33 +565,40 @@ def get_story(
 ) -> StoryOut:
     with _session(request) as session:
         record = _profile_or_404(session, profile) if profile else None
-        item = repo.get_story(session, story_id, record)
-        if item is None:
-            raise HTTPException(status_code=404, detail=f"unknown story {story_id}")
-        names = repo.source_names(session)
-        brief = brief_views(session, [story_id], names).get(story_id)
-        report = report_views(session, [story_id], names).get(story_id)
+        target = views.resolve(session, story_id)
+        if target is not None and target != story_id:
+            query = request.url.query
+            return RedirectResponse(
+                f"/api/stories/{target}" + (f"?{query}" if query else ""), status_code=301
+            )
+        story = views.published_story(
+            session, story_id, [s.id for s in record.sources] if record else None
+        )
+        if story is None:
+            raise HTTPException(status_code=404, detail=f"story {story_id} is not published")
     return StoryOut(
         id=story_id,
-        title=item.title,
-        representative_article_id=item.representative.id,
-        source_count=item.source_count,
-        first_seen_at=item.first_seen_at,
-        last_updated_at=item.last_updated_at,
-        brief=_brief_out(brief),
-        report=_report_out(report),
-        summary=_summary_out(brief),
+        version=story.version,
+        published_at=story.published_at,
+        title=story.title,
+        representative_article_id=story.representative.id,
+        source_count=story.source_count,
+        first_seen_at=story.first_seen_at,
+        last_updated_at=story.last_updated_at,
+        brief=_brief_out(story.brief),
+        report=_report_out(story.report),
+        summary=_summary_out(story.brief),
         members=[
             StoryMemberOut(
                 id=m.id,
                 title=m.title,
                 source_id=m.source_id,
-                source=names.get(m.source_id, m.source_id),
+                source=m.source,
                 url=m.url,
                 published_at=m.published_at,
                 summary=m.summary_raw,
             )
-            for m in item.members
+            for m in story.members
         ],
     )
 

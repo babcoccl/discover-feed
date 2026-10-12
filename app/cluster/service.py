@@ -10,7 +10,8 @@ from sqlalchemy import delete, or_, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.cluster.base import ArticleDoc, Clusterer, StoryDoc, representative
-from app.models import Article, Story, StorySummary, SummaryJob
+from app.lifecycle import PRE_CLUSTER, advance_text_states, ensure_stories
+from app.models import Article, Story, StoryState, StorySummary, StoryView, SummaryJob, utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -51,53 +52,69 @@ def doc(article: Article) -> ArticleDoc:
 
 
 def run_clustering(
-    session_factory: sessionmaker, clusterer: Clusterer, *, rebuild: bool = False
+    session_factory: sessionmaker,
+    clusterer: Clusterer,
+    *,
+    rebuild: bool = False,
+    extraction_wait: timedelta = timedelta(0),
 ) -> ClusterRunResult:
-    """Assign every article with ``story_id IS NULL``; idempotent (a second run is a no-op)."""
+    """Cluster every one-member story whose text is final (``extraction_wait``: how long a
+    story waits for pending text first); idempotent (a second run is a no-op)."""
     if not _lock.acquire(blocking=False):
         return ClusterRunResult(status="busy", rebuild=rebuild)
     try:
         with session_factory() as session:
-            result = _run(session, clusterer, rebuild=rebuild)
+            result = _run(session, clusterer, rebuild=rebuild, wait=extraction_wait)
             session.commit()
             return result
     finally:
         _lock.release()
 
 
-def _run(session: Session, clusterer: Clusterer, *, rebuild: bool) -> ClusterRunResult:
+def _run(
+    session: Session, clusterer: Clusterer, *, rebuild: bool, wait: timedelta = timedelta(0)
+) -> ClusterRunResult:
+    now = utcnow()
     if rebuild:
         session.execute(update(Article).values(story_id=None))
         session.execute(delete(Story))
+        session.execute(delete(StoryView))
         # Story ids are reassigned: detach old summaries (still reusable by input hash).
         session.execute(update(StorySummary).values(story_id=None))
         session.execute(delete(SummaryJob))
         session.flush()
+        ensure_stories(session, now)
+        session.execute(update(Story).values(state=StoryState.TEXT_FINAL.value))
+    else:
+        ensure_stories(session, now)
+    session.flush()
+    advance_text_states(session, now, wait)
+    session.flush()
 
-    new = list(session.scalars(select(Article).where(Article.story_id.is_(None))))
+    new = list(
+        session.scalars(
+            select(Article)
+            .join(Story, Article.story_id == Story.id)
+            .where(Story.state == StoryState.TEXT_FINAL)
+            .order_by(Article.id)
+        )
+    )
     result = ClusterRunResult(rebuild=rebuild, processed=len(new))
     if new:
         stories = _candidate_stories(session, new, clusterer.window)
         assignments = clusterer.assign([doc(a) for a in new], stories)
         by_id = {a.id: a for a in new}
-        created: dict[int, Story] = {}
+        groups: dict[int, list[Article]] = {}
         touched: set[int] = set()
         for assignment in assignments:
             article = by_id[assignment.article_id]
             if assignment.story_id is not None:
+                _merge(session, article.story_id, assignment.story_id)
                 article.story_id = assignment.story_id
                 result.joined_existing += 1
+                touched.add(article.story_id)
             else:
-                story = created.get(assignment.new_story)
-                if story is None:
-                    story = Story(
-                        first_seen_at=article.published_at, last_updated_at=article.published_at
-                    )
-                    session.add(story)
-                    session.flush()
-                    created[assignment.new_story] = story
-                article.story_id = story.id
-            touched.add(article.story_id)
+                groups.setdefault(assignment.new_story, []).append(article)
             if assignment.score is not None:
                 result.joins.append(
                     Joined(
@@ -106,15 +123,47 @@ def _run(session: Session, clusterer: Clusterer, *, rebuild: bool) -> ClusterRun
                         score=round(assignment.score, 3),
                     )
                 )
-        result.new_stories = len(created)
+        for group in groups.values():
+            keep = min(a.story_id for a in group)  # the oldest story id survives
+            for article in group:
+                if article.story_id != keep:
+                    _merge(session, article.story_id, keep)
+                    article.story_id = keep
+            story = session.get(Story, keep)
+            story.state, story.state_reason = StoryState.CLUSTERED.value, None
+            story.clustered_at = now
+            touched.add(keep)
+        for join in result.joins:  # ids after merging new stories
+            join.story_id = by_id[join.article_id].story_id
+        for story_id in touched:
+            story = session.get(Story, story_id)
+            if story.state not in PRE_CLUSTER:
+                story.state = StoryState.CLUSTERED.value  # regenerate; published version stays
+        result.new_stories = len(groups)
         session.flush()
         refresh_stories(session, touched)
         result.story_ids = sorted(touched)
 
     session.flush()
-    result.stories = session.query(Story).count()
-    result.multi_source_stories = session.query(Story).filter(Story.source_count >= 2).count()
+    clustered = Story.state.not_in([s.value for s in PRE_CLUSTER] + [StoryState.MERGED.value])
+    result.stories = session.query(Story).filter(clustered).count()
+    result.multi_source_stories = (
+        session.query(Story).filter(clustered, Story.source_count >= 2).count()
+    )
     return result
+
+
+def _merge(session: Session, old_id: int | None, target_id: int) -> None:
+    """``old_id`` (a one-member story) joined ``target_id``: old links redirect there."""
+    if old_id is None or old_id == target_id:
+        return
+    old = session.get(Story, old_id)
+    if old is None:
+        return
+    old.state, old.merged_into = StoryState.MERGED.value, target_id
+    old.article_count = old.source_count = 0
+    old.published_version = None
+    session.execute(update(Story).where(Story.merged_into == old_id).values(merged_into=target_id))
 
 
 def _candidate_stories(
@@ -125,7 +174,11 @@ def _candidate_stories(
     stmt = (
         select(Article)
         .join(Story, Article.story_id == Story.id)
-        .where(Story.last_updated_at >= earliest, Story.first_seen_at <= latest)
+        .where(
+            Story.last_updated_at >= earliest,
+            Story.first_seen_at <= latest,
+            Story.state.not_in([s.value for s in PRE_CLUSTER] + [StoryState.MERGED.value]),
+        )
         .order_by(Article.published_at, Article.id)
     )
     stories: dict[int, StoryDoc] = {}
@@ -147,7 +200,7 @@ def refresh_stories(session: Session, story_ids: set[int]) -> None:
     for story_id in story_ids:
         story = session.get(Story, story_id)
         articles = members.get(story_id)
-        if story is None:
+        if story is None or story.state == StoryState.MERGED:
             continue
         if not articles:
             session.delete(story)
@@ -164,6 +217,7 @@ def refresh_stories(session: Session, story_ids: set[int]) -> None:
 
 def orphaned_story_ids(session: Session) -> list[int]:
     stmt = select(Story.id).where(
-        or_(Story.article_count == 0, ~Story.id.in_(select(Article.story_id).distinct()))
+        Story.state != StoryState.MERGED,
+        or_(Story.article_count == 0, ~Story.id.in_(select(Article.story_id).distinct())),
     )
     return list(session.scalars(stmt))

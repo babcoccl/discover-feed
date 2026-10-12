@@ -30,6 +30,7 @@ def init_db(engine: Engine) -> None:
     _add_article_url(engine)
     _add_article_pipeline_columns(engine)
     _add_summary_kind(engine)
+    _add_story_lifecycle(engine)
 
 
 def _add_article_url(engine: Engine) -> None:
@@ -108,6 +109,33 @@ def _add_summary_kind(engine: Engine) -> None:
             )
         )
         conn.execute(text("DROP TABLE summary_jobs_old"))
+
+
+_STORY_COLUMNS = {
+    # Stories from before the publish gate were already clustered.
+    "state": "VARCHAR(20) NOT NULL DEFAULT 'clustered'",
+    "state_reason": "TEXT",
+    "priority": "INTEGER NOT NULL DEFAULT 0",
+    "merged_into": "INTEGER",
+    "ingested_at": "DATETIME",
+    "clustered_at": "DATETIME",
+    "brief_ready_at": "DATETIME",
+    "published_version": "INTEGER",
+    "published_at": "DATETIME",
+    "published_sort_at": "DATETIME",
+}
+
+
+def _add_story_lifecycle(engine: Engine) -> None:
+    """Pre-publish-gate DBs: add the story state columns (``story_views`` is built from the
+    old summaries at startup, see ``app.publish.migrate``)."""
+    with engine.begin() as conn:
+        existing = {c["name"] for c in inspect(conn).get_columns("stories")}
+        for name, ddl in _STORY_COLUMNS.items():
+            if name not in existing:
+                conn.execute(text(f"ALTER TABLE stories ADD COLUMN {name} {ddl}"))
+        for name in ("state", "published_version", "published_sort_at"):
+            conn.execute(text(f"CREATE INDEX IF NOT EXISTS ix_stories_{name} ON stories ({name})"))
 
 
 def ping(engine: Engine) -> bool:

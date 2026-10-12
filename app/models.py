@@ -92,6 +92,81 @@ class Story(Base):
     """Latest member published_at."""
     article_count: Mapped[int] = mapped_column(Integer, default=0)
     source_count: Mapped[int] = mapped_column(Integer, default=0)
+    state: Mapped[str] = mapped_column(String(20), default="ingested", index=True)
+    """``StoryState``: where the story is in ingest -> ... -> published (``merged``: its
+    articles joined ``merged_into``, which old links redirect to)."""
+    state_reason: Mapped[str | None] = mapped_column(Text)
+    """Why the story is waiting (e.g. ``timeout``, ``insufficient_text``)."""
+    priority: Mapped[int] = mapped_column(Integer, default=0)
+    """Pipeline > Prioritize: higher goes first; ties go newest first."""
+    merged_into: Mapped[int | None] = mapped_column(Integer)
+    ingested_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    clustered_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    brief_ready_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    published_version: Mapped[int | None] = mapped_column(Integer, index=True)
+    """``story_views.version`` the feed and story page serve; NULL until first published."""
+    published_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    """When the story was first published."""
+    published_sort_at: Mapped[datetime | None] = mapped_column(UTCDateTime, index=True)
+    """``last_updated_at`` of the served version (feed order)."""
+
+
+class StoryState(StrEnum):
+    INGESTED = "ingested"
+    TEXT_PENDING = "text_pending"
+    TEXT_FINAL = "text_final"
+    CLUSTERED = "clustered"
+    BRIEF_READY = "brief_ready"
+    REPORT_FINAL = "report_final"
+    PUBLISHED = "published"
+    MERGED = "merged"
+
+
+class StoryView(Base):
+    """A ready-to-render story (everything the feed card and story page show). Versions are
+    append-only; ``stories.published_version`` points at the one being served."""
+
+    __tablename__ = "story_views"
+    __table_args__ = (UniqueConstraint("story_id", "version"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    story_id: Mapped[int] = mapped_column(Integer, index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    schema_version: Mapped[int] = mapped_column(Integer, default=1)
+    state: Mapped[str] = mapped_column(String(20))
+    """``complete`` | ``report_pending`` | ``brief_fallback`` | ``draft`` (not publishable)."""
+    published_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    doc: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
+class GenerationAttempt(Base):
+    """One LLM request for a brief or report (the last 500 are kept)."""
+
+    __tablename__ = "generation_attempts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    story_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    kind: Mapped[str] = mapped_column(String(10))
+    model: Mapped[str] = mapped_column(String(200), default="")
+    endpoint_host: Mapped[str] = mapped_column(String(300), default="")
+    members: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    """``[{article_id, source, text_status, words}]`` of the prompt's sources."""
+    input_words: Mapped[int] = mapped_column(Integer, default=0)
+    estimated_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer)
+    finish_reason: Mapped[str | None] = mapped_column(String(40))
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    content_length: Mapped[int] = mapped_column(Integer, default=0)
+    reasoning_length: Mapped[int] = mapped_column(Integer, default=0)
+    raw_content: Mapped[str] = mapped_column(Text, default="")
+    """First 2,000 characters of the answer."""
+    validation_errors: Mapped[list[str]] = mapped_column(JSON, default=list)
+    outcome: Mapped[str] = mapped_column(String(10))
+    """``ok`` | ``failed``."""
+    reason: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
 
 
 class PipelineRun(Base):

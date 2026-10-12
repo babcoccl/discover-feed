@@ -5,7 +5,9 @@ llama.cpp's ``chat_template_kwargs``, auth), so llama.cpp and cloud providers sh
 API keys never reach the logs: errors are passed through :func:`redact`.
 """
 
+import asyncio
 import logging
+import threading
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -18,6 +20,44 @@ from app.config import LLMRole, StructuredOutput
 logger = logging.getLogger(__name__)
 
 Message = dict[str, str]
+
+
+class _Inflight:
+    """Process-wide cap on concurrent LLM requests (``summaries.max_inflight``), shared by
+    every client, kind and thread."""
+
+    def __init__(self, limit: int = 1) -> None:
+        self._lock = threading.Lock()
+        self.limit = limit
+        self.active = 0
+        self.peak = 0
+
+    def set_limit(self, limit: int) -> None:
+        with self._lock:
+            self.limit = max(1, limit)
+
+    def _try(self) -> bool:
+        with self._lock:
+            if self.active >= self.limit:
+                return False
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+            return True
+
+    async def acquire(self) -> None:
+        while not self._try():
+            await asyncio.sleep(0.02)
+
+    def release(self) -> None:
+        with self._lock:
+            self.active -= 1
+
+
+INFLIGHT = _Inflight()
+
+
+def set_max_inflight(limit: int) -> None:
+    INFLIGHT.set_limit(limit)
 
 
 class LLMError(Exception):
@@ -54,6 +94,8 @@ class ChatResult:
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     finish_reason: str | None = None
+    reasoning_length: int = 0
+    """Characters of ``reasoning_content`` (thinking) the model returned."""
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
     @property
@@ -91,7 +133,9 @@ def build_payload(
     *,
     json_schema: dict[str, Any] | None = None,
     schema_name: str = "response",
+    structured_output: StructuredOutput | None = None,
 ) -> dict[str, Any]:
+    mode = structured_output or role.structured_output
     payload: dict[str, Any] = {
         "model": role.model,
         "messages": list(messages),
@@ -100,12 +144,12 @@ def build_payload(
         "stream": False,
     }
     if json_schema is not None:
-        if role.structured_output is StructuredOutput.JSON_SCHEMA:
+        if mode is StructuredOutput.JSON_SCHEMA:
             payload["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {"name": schema_name, "strict": True, "schema": json_schema},
             }
-        elif role.structured_output is StructuredOutput.JSON_OBJECT:
+        elif mode is StructuredOutput.JSON_OBJECT:
             payload["response_format"] = {"type": "json_object"}
     if role.disable_thinking:
         payload["chat_template_kwargs"] = {"enable_thinking": False}
@@ -135,6 +179,9 @@ def parse_response(data: Any, *, latency_ms: int = 0, default_model: str = "") -
         prompt_tokens=usage.get("prompt_tokens"),
         completion_tokens=usage.get("completion_tokens"),
         finish_reason=choice.get("finish_reason"),
+        reasoning_length=len(
+            _content_text(message.get("reasoning_content") or message.get("reasoning"))
+        ),
         raw=data,
     )
 
@@ -152,18 +199,29 @@ class LLMClient:
     def url(self) -> str:
         return chat_url(self.role)
 
+    @property
+    def endpoint_host(self) -> str:
+        """Host (and port) of the endpoint, for attempt logs; never the key."""
+        return httpx.URL(str(self.role.base_url)).netloc.decode()
+
     async def chat(
         self,
         messages: Sequence[Message],
         *,
         json_schema: dict[str, Any] | None = None,
         schema_name: str = "response",
+        structured_output: StructuredOutput | None = None,
     ) -> ChatResult:
         payload = build_payload(
-            self.role, messages, json_schema=json_schema, schema_name=schema_name
+            self.role,
+            messages,
+            json_schema=json_schema,
+            schema_name=schema_name,
+            structured_output=structured_output,
         )
         key = _api_key(self.role)
         logger.debug("POST %s model=%s", self.url, self.role.model)
+        await INFLIGHT.acquire()
         started = time.perf_counter()
         try:
             async with httpx.AsyncClient(
@@ -178,6 +236,8 @@ class LLMClient:
             ) from exc
         except httpx.HTTPError as exc:
             raise self._fail(LLMConnectionError(f"{type(exc).__name__}: {exc}"), key) from exc
+        finally:
+            INFLIGHT.release()
         latency_ms = round((time.perf_counter() - started) * 1000)
         if response.status_code >= 400:
             body = " ".join(response.text.split())[:300]
@@ -188,7 +248,15 @@ class LLMClient:
             data = response.json()
         except ValueError:
             raise self._fail(LLMBadResponse("response is not JSON"), key) from None
-        return parse_response(data, latency_ms=latency_ms, default_model=self.role.model)
+        result = parse_response(data, latency_ms=latency_ms, default_model=self.role.model)
+        if self.role.disable_thinking and result.reasoning_length:
+            logger.warning(
+                "%s returned %d characters of reasoning although disable_thinking is set; "
+                "the server may ignore chat_template_kwargs",
+                self.endpoint_host,
+                result.reasoning_length,
+            )
+        return result
 
     def _fail(self, error: LLMError, key: str | None) -> LLMError:
         error.args = (redact(str(error), key),)

@@ -1,0 +1,36 @@
+# End-to-end override: the fake LLM and the demo fixture feeds as extra services, so a fresh
+# volume runs the whole always-on pipeline with no network and no real LLM.
+#   docker compose -f docker-compose.yml -f docker-compose.fake-llm.yml up --build -d
+#   python scripts/docker_e2e.py   (does the above on a fresh volume, then tears down)
+services:
+  app:
+    environment:
+      DISCOVER_CONFIG_PATH: /fixtures/docker/profiles.yaml
+      DISCOVER_REFRESH_JITTER_SECONDS: "5"
+      DISCOVER_EXTRACT_DOMAIN_DELAY_SECONDS: "0.2"
+      DISCOVER_EXTRACT_MAX_ARTICLES: "100"
+    volumes:
+      - ./tests/fixtures:/fixtures:ro
+    depends_on:
+      - fixtures
+      - fake-llm
+  fixtures:
+    build: .
+    image: discover-feed:local
+    command: ["python", "-m", "app.fixture_server", "--port", "8081",
+              "--base", "http://fixtures:8081", "--fixture-dir", "/fixtures/demo"]
+    volumes:
+      - ./tests/fixtures:/fixtures:ro
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/health')"]
+      interval: 5s
+  fake-llm:
+    build: .
+    image: discover-feed:local
+    command: ["python", "-m", "app.summarize.fake_server", "--port", "8090",
+              "--mode", "demo", "--delay", "${FAKE_LLM_DELAY:-2}"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health')"]
+      interval: 5s

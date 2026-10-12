@@ -18,10 +18,10 @@ import os
 import threading
 import webbrowser
 from collections.abc import Sequence
+from datetime import timedelta
 from pathlib import Path
 
 import httpx
-from sqlalchemy import select
 
 from app.cluster.service import ClusterRunResult
 from app.config import Source, load_config
@@ -29,7 +29,6 @@ from app.db import init_db, make_engine, make_session_factory
 from app.demo_pages import DEMO_PATH, FIXTURE_DIR, feed_xml, page_html, robots_txt
 from app.extract import ExtractRunResult
 from app.ingest import Ingestor, SourceRunResult
-from app.models import Story
 from app.pipeline import (
     Pipeline,
     clusterer_from_settings,
@@ -166,11 +165,8 @@ def build_demo(
         worker = summary_worker_from_settings(
             session_factory, settings, load_config(config_path), transport=transport
         )
-        worker.enqueue_missing()
-        if worker.report_mode.value == "auto":
-            with session_factory() as session:
-                multi = list(session.scalars(select(Story.id).where(Story.source_count >= 2)))
-            worker.enqueue(multi, kind="report")
+        # The fixtures are older than the backfill window: generate every story.
+        worker.backfill, worker.backfill_max = timedelta(days=36500), 100_000
         summarized = asyncio.run(worker.run(manual=True, limit=summarize_limit or 100_000))
         if fake_delay and not real_llm:
             transport = FakeLLM("demo", delay=fake_delay).transport()

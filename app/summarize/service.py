@@ -1,18 +1,26 @@
 """Generate, validate and store a story's brief (cards) and report (story page)."""
 
 import logging
+import re
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel
-from sqlalchemy import func, or_, select
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import delete, func, or_, select
+from sqlalchemy.orm import Session, sessionmaker
 
 from app import profiles as repo
-from app.llm import ChatResult, LLMClient, LLMError
-from app.models import StorySummary, SummaryKind, SummaryStatus, utcnow
+from app.config import StructuredOutput
+from app.llm import ChatResult, LLMBadResponse, LLMClient, LLMError, LLMHTTPError
+from app.models import (
+    GenerationAttempt,
+    StorySummary,
+    SummaryKind,
+    SummaryStatus,
+    TextStatus,
+    utcnow,
+)
 from app.summarize.prompt import (
     PROMPT_VERSIONS,
     PROMPTS,
@@ -30,6 +38,7 @@ from app.summarize.validate import (
     validate_summary,
 )
 from app.web import snippet
+from app.worker_status import SummaryOutcome
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +72,8 @@ class Generation:
     completion_tokens: int = 0
     errors: list[str] = field(default_factory=list)
     raw_responses: list[str] = field(default_factory=list)
+    attempt_log: list[dict[str, Any]] = field(default_factory=list)
+    """One entry per request (``GenerationAttempt`` columns minus story/members)."""
 
     @property
     def tokens_per_second(self) -> float | None:
@@ -83,22 +94,58 @@ class Generation:
         self.raw_responses.append(result.content)
 
 
+RAW_CONTENT_CHARS = 2000
+ATTEMPTS_KEPT = 500
+PROMPT_OVERHEAD_TOKENS = 700
+"""System prompt, schema and per-source headers, roughly."""
+
+
+def estimate_tokens(words: int) -> int:
+    return round(words * 1.35)
+
+
+def error_reason(exc: LLMError) -> str:
+    """``timeout`` | ``http_<status>`` | ``connection`` | ``invalid_json`` | ``error``."""
+    if isinstance(exc, LLMHTTPError):
+        return f"http_{exc.status_code}"
+    if isinstance(exc, LLMBadResponse):
+        return "invalid_json"
+    return exc.kind
+
+
+def content_reason(result: ChatResult, error: str) -> str:
+    """Why an answer was rejected: ``empty_content``, ``truncated``,
+    ``reasoning_consumed_budget``, ``invalid_json`` or ``validation:<rule>``."""
+    if result.finish_reason == "length":
+        if not result.content and result.reasoning_length:
+            return "reasoning_consumed_budget"
+        return "truncated"
+    if not result.content:
+        return "reasoning_consumed_budget" if result.reasoning_length else "empty_content"
+    if "not a valid JSON object" in error:
+        return "invalid_json"
+    rule = re.sub(r"[^a-z0-9]+", "_", error.lower().split(":")[0]).strip("_")[:48]
+    return f"validation:{rule or 'invalid'}"
+
+
+def trim_sources(
+    sources: Sequence[SourceDoc], *, context_tokens: int, max_tokens: int
+) -> list[SourceDoc]:
+    """Cut every source's text proportionally so prompt + answer fit the context window."""
+    budget = context_tokens - max_tokens - PROMPT_OVERHEAD_TOKENS
+    words = [len(s.text.split()) for s in sources]
+    total = estimate_tokens(sum(words))
+    if total <= budget or not total:
+        return list(sources)
+    ratio = max(budget, 0) / total
+    return [
+        replace(s, text=" ".join(s.text.split()[: max(20, int(n * ratio))]))
+        for s, n in zip(sources, words, strict=True)
+    ]
+
+
 def _attempt_reason(errors: Sequence[str]) -> str:
     return "; ".join(f"attempt {i}: {e}" for i, e in enumerate(errors, 1))
-
-
-class SummaryOutcome(BaseModel):
-    story_id: int
-    kind: str = "brief"
-    status: Literal["ok", "fallback", "failed", "rejected", "cached", "reused", "skipped"]
-    """``cached``: input unchanged, no model call. ``reused``: an identical input was already
-    summarized for another story id (e.g. before a re-cluster), copied without a model call.
-    ``rejected``: a report failed validation (stored as failed, no endpoint problem)."""
-    reason: str | None = None
-    summary_id: int | None = None
-    attempts: int = 0
-    latency_ms: int | None = None
-    completion_tokens: int | None = None
 
 
 class Summarizer:
@@ -134,6 +181,8 @@ class Summarizer:
         self.report_max_words = report_max_words
         self.duplicate_threshold = duplicate_threshold
         self.clock = clock
+        self.on_save: Callable[[Session, int], None] | None = None
+        """Called with the saving session before commit (the worker rebuilds the view)."""
 
     # --- generation (no DB) ----------------------------------------------------------------
 
@@ -145,27 +194,66 @@ class Summarizer:
         check: Callable[[str], Any],
         gen: Generation,
     ) -> tuple[Any | None, list[str]]:
-        """Two attempts; the retry gets the rejected answer and the validation error.
-        Raises :class:`LLMError` on endpoint errors."""
+        """Two attempts (the retry gets the rejected answer and the validation error), then
+        for briefs and reports one last ``structured_output: json_object`` attempt (JSON is
+        extracted leniently; every validation rule still applies). Raises :class:`LLMError`
+        on endpoint errors."""
         _system, schema, _ask = PROMPTS[kind]
         previous = error = None
         errors: list[str] = []
-        for _ in (1, 2):
+        tries = (1, 2, 3) if kind in KINDS else (1, 2)
+        for attempt in tries:
+            final = attempt == 3
             gen.attempts += 1
-            result = await client.chat(
-                build_messages(sources, previous=previous, error=error, kind=kind),
-                json_schema=schema,
-                schema_name=f"story_{kind}",
-            )
-            gen.add(result)
+            messages = build_messages(sources, previous=previous, error=error, kind=kind)
+            words = sum(len(str(m["content"]).split()) for m in messages)
+            entry: dict[str, Any] = {
+                "kind": kind if kind in KINDS else "brief",
+                "model": client.model,
+                "endpoint_host": client.endpoint_host,
+                "input_words": words,
+                "estimated_tokens": estimate_tokens(words),
+                "structured_output": "json_object" if final else client.role.structured_output,
+            }
+            gen.attempt_log.append(entry)
             try:
-                return check(result.content), errors
+                result = await client.chat(
+                    messages,
+                    json_schema=schema,
+                    schema_name=f"story_{kind}",
+                    structured_output=StructuredOutput.JSON_OBJECT if final else None,
+                )
+            except LLMError as exc:
+                entry.update(outcome="failed", reason=error_reason(exc))
+                raise
+            gen.add(result)
+            entry.update(
+                model=result.model or client.model,
+                prompt_tokens=result.prompt_tokens,
+                completion_tokens=result.completion_tokens,
+                finish_reason=result.finish_reason,
+                latency_ms=result.latency_ms,
+                content_length=len(result.content),
+                reasoning_length=result.reasoning_length,
+                raw_content=result.content[:RAW_CONTENT_CHARS],
+                tokens_per_second=result.tokens_per_second,
+            )
+            try:
+                value = check(result.content)
             except SummaryInvalid as exc:
                 error = str(exc)
                 if not result.content and result.finish_reason:
                     error += f" (finish_reason={result.finish_reason})"
                 errors.append(error)
+                entry.update(
+                    outcome="failed",
+                    reason=content_reason(result, str(exc)),
+                    validation_errors=[error],
+                )
                 previous = result.content
+                continue
+            entry.update(outcome="ok", reason=None, validation_errors=[])
+            return value, errors
         return None, errors
 
     async def generate(self, sources: Sequence[SourceDoc]) -> Generation:
@@ -249,12 +337,17 @@ class Summarizer:
         self, item: repo.StoryItem, names: dict[str, str], kind: str
     ) -> list[SourceDoc]:
         if kind == SummaryKind.REPORT:
-            return select_sources(
-                item.members,
-                names,
-                max_articles=self.report_max_articles,
-                max_words=self.report_max_words,
-                numbered_first=self.max_articles,
+            role = self.report_client.role
+            return trim_sources(
+                select_sources(
+                    item.members,
+                    names,
+                    max_articles=self.report_max_articles,
+                    max_words=self.report_max_words,
+                    numbered_first=self.max_articles,
+                ),
+                context_tokens=role.context_tokens,
+                max_tokens=role.max_tokens,
             )
         return select_sources(
             item.members, names, max_articles=self.max_articles, max_words=self.max_words
@@ -275,11 +368,8 @@ class Summarizer:
 
     @staticmethod
     def insufficient_text(item: repo.StoryItem, sources: Sequence[SourceDoc]) -> bool:
-        """``feed_summary`` basis: every member failed extraction, or a single member has
-        under 150 words of text."""
-        if basis(sources) == "feed_summary":
-            return True
-        return len(item.members) == 1 and len(sources[0].text.split()) < REPORT_MIN_SOURCE_WORDS
+        """No included member has extracted text (``text_status=ok``) of 150+ words."""
+        return not report_eligibility(item, sources)
 
     # --- storing ---------------------------------------------------------------------------
 
@@ -319,9 +409,26 @@ class Summarizer:
             prompt_version=PROMPT_VERSIONS[kind],
             input_hash=key,
         )
+        members = [
+            {
+                "article_id": m.id,
+                "source": next((s.source for s in sources if s.article_id == m.id), m.source_id),
+                "text_status": m.text_status,
+                "words": m.word_count or 0,
+                "included": any(s.article_id == m.id for s in sources),
+            }
+            for m in item.members
+        ]
         if insufficient:
             row.status, row.reason = SummaryStatus.SKIPPED.value, INSUFFICIENT_TEXT
-            self._save(session_factory, story_id, row)
+            skipped = {
+                "kind": kind,
+                "model": self.client.model,
+                "endpoint_host": self.client.endpoint_host,
+                "outcome": "skipped",
+                "reason": INSUFFICIENT_TEXT,
+            }
+            self._save(session_factory, story_id, row, [skipped], members)
             return SummaryOutcome(
                 story_id=story_id,
                 kind=kind,
@@ -335,7 +442,7 @@ class Summarizer:
         else:
             gen = await self.generate_brief(sources)
         _fill(row, gen, fallback_text)
-        self._save(session_factory, story_id, row)
+        self._save(session_factory, story_id, row, gen.attempt_log, members)
         if gen.status != "ok":
             logger.info("story %s %s %s: %s", story_id, kind, gen.status, gen.reason)
         return SummaryOutcome(
@@ -364,8 +471,17 @@ class Summarizer:
         )
         return session.scalar(stmt)
 
-    def _save(self, session_factory: sessionmaker, story_id: int, row: StorySummary) -> None:
+    def _save(
+        self,
+        session_factory: sessionmaker,
+        story_id: int,
+        row: StorySummary,
+        attempts: Sequence[dict[str, Any]] = (),
+        members: Sequence[dict[str, Any]] = (),
+    ) -> None:
         with session_factory() as session:
+            if attempts:
+                record_attempts(session, story_id, attempts, members)
             latest = session.scalar(
                 select(func.max(StorySummary.version)).where(StorySummary.story_id == story_id)
             )
@@ -373,7 +489,40 @@ class Summarizer:
             row.version = (latest or 0) + 1
             row.created_at = self.clock()
             session.add(row)
+            if self.on_save is not None:  # the story's view, in the same transaction
+                session.flush()
+                self.on_save(session, story_id)
             session.commit()
+
+
+_ATTEMPT_COLUMNS = {c.name for c in GenerationAttempt.__table__.columns} - {"id", "story_id"}
+
+
+def record_attempts(
+    session: Session,
+    story_id: int | None,
+    attempts: Sequence[dict[str, Any]],
+    members: Sequence[dict[str, Any]] = (),
+) -> None:
+    """Store attempt rows and keep only the newest ``ATTEMPTS_KEPT``."""
+    for entry in attempts:
+        values = {k: v for k, v in entry.items() if k in _ATTEMPT_COLUMNS}
+        session.add(GenerationAttempt(story_id=story_id, members=list(members), **values))
+    session.flush()
+    newest = session.scalar(select(func.max(GenerationAttempt.id))) or 0
+    session.execute(delete(GenerationAttempt).where(GenerationAttempt.id <= newest - ATTEMPTS_KEPT))
+
+
+def report_eligibility(item: repo.StoryItem, sources: Sequence[SourceDoc]) -> bool:
+    """A report needs at least one included member with extracted text of 150+ words
+    (decided without the LLM)."""
+    included = {s.article_id for s in sources}
+    return any(
+        m.id in included
+        and m.text_status == TextStatus.OK
+        and (m.word_count or 0) >= REPORT_MIN_SOURCE_WORDS
+        for m in item.members
+    )
 
 
 def _fill(row: StorySummary, gen: Generation, fallback_text: str) -> None:
