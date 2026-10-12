@@ -1,6 +1,7 @@
 # Profiles for the Docker end-to-end run (docker-compose.fake-llm.yml): the example
 # profiles with every feed served by the fixture server and every LLM role pointed at
 # the fake LLM. Generated from config/profiles.example.yaml.
+# summaries: fixture articles have fixed past dates, so backfill covers them all.
 profiles:
 - id: personal-reader
   name: Personal Reader
@@ -90,6 +91,9 @@ profiles:
       api_key: fake-e2e-key
       model: fake-llm
       temperature: 0.3
+  summaries:
+    summarize_backfill_hours: 100000
+    summarize_backfill_max: 1000
 - id: market-monitor
   name: Market Monitor
   description: Watches markets and macro news, alerting on high-signal events.
@@ -188,3 +192,6 @@ profiles:
       temperature: 0.0
       timeout_seconds: 60
       disable_thinking: false
+  summaries:
+    summarize_backfill_hours: 100000
+    summarize_backfill_max: 1000
