@@ -2,6 +2,7 @@
 
 import logging
 import re
+import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -11,7 +12,7 @@ from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app import profiles as repo
-from app.config import StructuredOutput
+from app.config import StructuredOutput, SummariesConfig
 from app.llm import ChatResult, LLMBadResponse, LLMClient, LLMError, LLMHTTPError
 from app.models import (
     GenerationAttempt,
@@ -24,6 +25,7 @@ from app.models import (
 from app.summarize.prompt import (
     PROMPT_VERSIONS,
     PROMPTS,
+    VERBATIM_SHINGLE,
     SourceDoc,
     build_messages,
 )
@@ -33,6 +35,7 @@ from app.summarize.validate import (
     ValidBrief,
     ValidReport,
     ValidSummary,
+    VerbatimGuard,
     validate_brief,
     validate_report,
     validate_summary,
@@ -74,6 +77,7 @@ class Generation:
     raw_responses: list[str] = field(default_factory=list)
     attempt_log: list[dict[str, Any]] = field(default_factory=list)
     """One entry per request (``GenerationAttempt`` columns minus story/members)."""
+    run_id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
     @property
     def tokens_per_second(self) -> float | None:
@@ -134,6 +138,7 @@ def content_reason(result: ChatResult, error: str) -> str:
 
 _VALIDATION_RULES = (
     ("not found in its cited sources", "invented_number"),
+    ("phrases appear in the sources", "verbatim_ratio"),
     ("word for word", "verbatim_overlap"),
     ("valid source indexes", "citation_range"),
     ("cite", "citation"),
@@ -166,6 +171,24 @@ def _attempt_reason(errors: Sequence[str]) -> str:
     return "; ".join(f"attempt {i}: {e}" for i, e in enumerate(errors, 1))
 
 
+def summarizer_options(o: SummariesConfig) -> dict[str, Any]:
+    """:class:`Summarizer` keyword arguments from a profile's ``summaries:`` section."""
+    return {
+        "report_max_articles": o.report_max_articles,
+        "report_total_words": o.report_total_words,
+        "report_max_tokens": o.report_max_tokens,
+        "report_timeout_seconds": o.report_timeout_seconds,
+        "duplicate_threshold": o.duplicate_threshold,
+        "verbatim": VerbatimGuard(
+            max_run=o.verbatim_max_run,
+            max_ratio=o.verbatim_max_ratio,
+            shingle=VERBATIM_SHINGLE,
+            allow=tuple(o.verbatim_allow),
+        ),
+        "retry_temperature_bump": o.retry_temperature_bump,
+    }
+
+
 class Summarizer:
     def __init__(
         self,
@@ -174,10 +197,12 @@ class Summarizer:
         max_articles: int = 5,
         max_words: int = 1200,
         report_max_articles: int = 4,
-        report_max_words: int = 600,
+        report_total_words: int = 2400,
         report_max_tokens: int | None = None,
         report_timeout_seconds: float | None = None,
         duplicate_threshold: float = 0.6,
+        verbatim: VerbatimGuard | None = None,
+        retry_temperature_bump: float = 0.2,
         clock: Callable[[], datetime] = utcnow,
     ) -> None:
         self.client = client
@@ -196,13 +221,25 @@ class Summarizer:
         self.max_articles = max_articles
         self.max_words = max_words
         self.report_max_articles = report_max_articles
-        self.report_max_words = report_max_words
+        self.report_total_words = report_total_words
         self.duplicate_threshold = duplicate_threshold
+        self.verbatim = verbatim or VerbatimGuard()
+        self.retry_temperature_bump = retry_temperature_bump
+        self.raw_content_chars: int | None = RAW_CONTENT_CHARS
+        """Raw answer kept per attempt (``None``: all of it, for ``diagnose --full``)."""
         self.clock = clock
         self.on_save: Callable[[Session, int], None] | None = None
         """Called with the saving session before commit (the worker rebuilds the view)."""
 
     # --- generation (no DB) ----------------------------------------------------------------
+
+    def _retry_client(self, client: LLMClient) -> LLMClient:
+        """``client`` with the temperature raised by ``retry_temperature_bump``."""
+        if not self.retry_temperature_bump:
+            return client
+        temperature = min(2.0, client.role.temperature + self.retry_temperature_bump)
+        role = client.role.model_copy(update={"temperature": round(temperature, 3)})
+        return LLMClient(role, transport=client.transport)
 
     async def _ask(
         self,
@@ -214,28 +251,37 @@ class Summarizer:
     ) -> tuple[Any | None, list[str]]:
         """Two attempts (the retry gets the rejected answer and the validation error), then
         for briefs and reports one last ``structured_output: json_object`` attempt (JSON is
-        extracted leniently; every validation rule still applies). Raises :class:`LLMError`
-        on endpoint errors."""
+        extracted leniently; every validation rule still applies). Retries quote the copied
+        phrases and run ``retry_temperature_bump`` hotter. Raises :class:`LLMError` on endpoint
+        errors."""
         _system, schema, _ask = PROMPTS[kind]
         previous = error = None
+        phrases: tuple[str, ...] = ()
         errors: list[str] = []
         tries = (1, 2, 3) if kind in KINDS else (1, 2)
+        retry_client = self._retry_client(client)
         for attempt in tries:
             final = attempt == 3
             gen.attempts += 1
-            messages = build_messages(sources, previous=previous, error=error, kind=kind)
+            messages = build_messages(
+                sources, previous=previous, error=error, kind=kind, phrases=phrases
+            )
             words = sum(len(str(m["content"]).split()) for m in messages)
             entry: dict[str, Any] = {
                 "kind": kind if kind in KINDS else "brief",
+                "prompt": kind,
+                "attempt": attempt,
+                "run_id": gen.run_id,
                 "model": client.model,
                 "endpoint_host": client.endpoint_host,
                 "input_words": words,
                 "estimated_tokens": estimate_tokens(words),
                 "structured_output": "json_object" if final else client.role.structured_output,
+                "temperature": (client if attempt == 1 else retry_client).role.temperature,
             }
             gen.attempt_log.append(entry)
             try:
-                result = await client.chat(
+                result = await (client if attempt == 1 else retry_client).chat(
                     messages,
                     json_schema=schema,
                     schema_name=f"story_{kind}",
@@ -253,7 +299,7 @@ class Summarizer:
                 latency_ms=result.latency_ms,
                 content_length=len(result.content),
                 reasoning_length=result.reasoning_length,
-                raw_content=result.content[:RAW_CONTENT_CHARS],
+                raw_content=result.content[: self.raw_content_chars],
                 tokens_per_second=result.tokens_per_second,
             )
             try:
@@ -268,9 +314,14 @@ class Summarizer:
                     reason=content_reason(result, str(exc)),
                     validation_errors=[error],
                 )
-                previous = result.content
+                previous, phrases = result.content, exc.phrases
                 continue
-            entry.update(outcome="ok", reason=None, validation_errors=[])
+            entry.update(
+                outcome="ok",
+                reason=None,
+                validation_errors=[],
+                warnings=list(getattr(value, "warnings", ())),
+            )
             return value, errors
         return None, errors
 
@@ -303,7 +354,10 @@ class Summarizer:
                 "brief",
                 sources,
                 lambda c: validate_brief(
-                    c, grounding, duplicate_threshold=self.duplicate_threshold
+                    c,
+                    grounding,
+                    duplicate_threshold=self.duplicate_threshold,
+                    allow=self.verbatim.allow,
                 ),
                 gen,
             )
@@ -325,9 +379,9 @@ class Summarizer:
             gen.style, gen.reason = "snippet", f"{reason}; summary {_attempt_reason(errors)}"
         return gen
 
-    async def generate_report(self, sources: Sequence[SourceDoc]) -> Generation:
-        """A report; after two invalid answers ``failed`` with an ``invalid:`` reason (no
-        lesser substitute is shown)."""
+    async def generate_report(self, sources: Sequence[SourceDoc], title: str = "") -> Generation:
+        """A report; after three invalid answers ``failed`` with an ``invalid:`` reason (no
+        lesser substitute is shown). ``title`` (the story's) words may be copied freely."""
         gen = Generation(status="failed", kind="report", model=self.client.model)
         grounding = [s.grounding for s in sources]
         try:
@@ -336,7 +390,11 @@ class Summarizer:
                 "report",
                 sources,
                 lambda c: validate_report(
-                    c, grounding, duplicate_threshold=self.duplicate_threshold
+                    c,
+                    grounding,
+                    duplicate_threshold=self.duplicate_threshold,
+                    guard=self.verbatim,
+                    title=title,
                 ),
                 gen,
             )
@@ -361,7 +419,7 @@ class Summarizer:
                     item.members,
                     names,
                     max_articles=self.report_max_articles,
-                    max_words=self.report_max_words,
+                    total_words=self.report_total_words,
                     numbered_first=self.max_articles,
                 ),
                 context_tokens=role.context_tokens,
@@ -456,7 +514,7 @@ class Summarizer:
             )
 
         if kind == SummaryKind.REPORT:
-            gen = await self.generate_report(sources)
+            gen = await self.generate_report(sources, item.title)
         else:
             gen = await self.generate_brief(sources)
         _fill(row, gen, fallback_text)

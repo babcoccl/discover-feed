@@ -1,11 +1,13 @@
 """Diagnose brief/report generation for one story against the configured endpoint.
 
     python -m app.summarize.diagnose [--story-id N | --auto] [--kind brief|report|both]
-                                     [--dry-run] [--markdown]
+                                     [--dry-run] [--markdown] [--full]
 
 Prints the story's members (text status, word counts, which are sent), the prompt size, and
 for every attempt the raw response, finish reason, usage, tokens/second and validation
-result. ``--dry-run`` stops before calling the model. Nothing is written to the database.
+result, then the validated text as it would be stored. ``--dry-run`` stops before calling
+the model. Raw answers and prompts are cut to 1,500 characters unless ``--full``. Nothing is
+written to the database.
 """
 
 import argparse
@@ -54,6 +56,7 @@ async def diagnose(
     parser.add_argument("--kind", choices=("brief", "report", "both"), default="both")
     parser.add_argument("--dry-run", action="store_true", help="show the prompt; no LLM call")
     parser.add_argument("--markdown", action="store_true")
+    parser.add_argument("--full", action="store_true", help="print prompts and answers uncut")
     args = parser.parse_args(argv)
     settings = settings or get_settings()
     config = load_config(settings.config_path)
@@ -63,6 +66,7 @@ async def diagnose(
     worker = summary_worker_from_settings(factory, settings, config, transport=transport)
     summarizer = worker.summarizer
     md = args.markdown
+    limit = None if args.full else RAW_CHARS
     out: list[str] = []
 
     def head(text: str) -> None:
@@ -77,6 +81,8 @@ async def diagnose(
     if summarizer is None:
         engine.dispose()
         return "No summarizer endpoint is configured (profile llm.summarizer)."
+    if args.full:
+        summarizer.raw_content_chars = None
     with factory() as session:
         story_id = _pick(session, args.story_id)
         item = repo.get_story(session, story_id) if story_id is not None else None
@@ -111,11 +117,12 @@ async def diagnose(
             line("report: skipped(insufficient_text) - no member has 150+ extracted words")
             continue
         if args.dry_run:
-            block(str(messages[-1]["content"])[:RAW_CHARS])
+            block(str(messages[-1]["content"])[:limit])
             continue
-        gen = await (summarizer.generate_report if kind == "report" else summarizer.generate_brief)(
-            sources
-        )
+        if kind == "report":
+            gen = await summarizer.generate_report(sources, item.title)
+        else:
+            gen = await summarizer.generate_brief(sources)
         for n, a in enumerate(gen.attempt_log, 1):
             head(f"{kind}: attempt {n} ({a.get('structured_output')})")
             tps = a.get("tokens_per_second")
@@ -132,8 +139,15 @@ async def diagnose(
                 line(f"validation: {err}")
             if a.get("outcome") == "ok":
                 line("validation: passed")
-            block((a.get("raw_content") or "")[:RAW_CHARS] or "(empty)")
+            for warning in a.get("warnings") or []:
+                line(f"warning: {warning}")
+            block((a.get("raw_content") or "")[:limit] or "(empty)")
         line(f"result: {gen.status}{f' ({gen.reason})' if gen.reason else ''}")
+        stored = gen.report or gen.brief
+        text = stored.text if stored is not None else gen.summary.summary if gen.summary else ""
+        if text:
+            head(f"{kind}: stored text")
+            block(text[:limit])
     engine.dispose()
     return "\n".join(out).strip() + "\n"
 

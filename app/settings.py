@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ENV_FILE = Path(os.environ.get("DISCOVER_ENV_FILE", ".env"))
@@ -30,6 +31,12 @@ class Settings(BaseSettings):
     refresh_jitter_seconds: int = 60
     contact_email: str | None = None
     log_level: str = "info"
+
+    # Optional auth (app/auth.py); both off when unset
+    api_keys: SecretStr | None = None
+    """``DISCOVER_API_KEYS``: comma-separated keys for ``/api/v1`` (Bearer or X-API-Key)."""
+    admin_key: SecretStr | None = None
+    """``DISCOVER_ADMIN_KEY``: guards ``/api/admin/*`` and the Settings pages (``/login``)."""
 
     # Text extraction (app/extract.py)
     pipeline_interval_seconds: int = 60

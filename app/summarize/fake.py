@@ -18,7 +18,7 @@ from collections.abc import Sequence
 
 import httpx
 
-from app.summarize.prompt import PROMPTS, VERBATIM_RUN, parse_sources
+from app.summarize.prompt import PROMPTS, VERBATIM_SHINGLE, parse_sources
 from app.summarize.validate import copied_run, overlap, split_sentences, tokens
 
 MODES = (
@@ -145,10 +145,10 @@ def _paraphrase(sentence: str) -> str:
 
 def _break_runs(text: str, grams_sources: Sequence[str]) -> str:
     """Break any run of 8 words still copied from a source with an adverb, so the report
-    passes the verbatim-overlap guard."""
+    passes the verbatim guards (no long runs, no copied 8-word phrases)."""
     words = text.split()
     for n in range(80):
-        run = copied_run(" ".join(words), grams_sources, VERBATIM_RUN)
+        run = copied_run(" ".join(words), grams_sources, VERBATIM_SHINGLE)
         if run is None:
             break
         first = run.split()[0]
@@ -159,10 +159,11 @@ def _break_runs(text: str, grams_sources: Sequence[str]) -> str:
                 position += 1
         starts = [
             k
-            for k in range(len(spans) - VERBATIM_RUN + 1)
-            if spans[k][0] == first and " ".join(t for t, _ in spans[k : k + VERBATIM_RUN]) == run
+            for k in range(len(spans) - VERBATIM_SHINGLE + 1)
+            if spans[k][0] == first
+            and " ".join(t for t, _ in spans[k : k + VERBATIM_SHINGLE]) == run
         ]
-        cut = spans[starts[0] + VERBATIM_RUN // 2][1] if starts else len(words) // 2
+        cut = spans[starts[0] + VERBATIM_SHINGLE // 2][1] if starts else len(words) // 2
         words.insert(cut, _BREAKERS[n % len(_BREAKERS)])
     return " ".join(words)
 
@@ -201,10 +202,10 @@ def fake_report(user_message: str, *, copy: bool = False, short: bool = False) -
         return len(" ".join(body).split())
 
     rounds = 0
-    while words() < 300 and any(p[2] for p in pools) and rounds < 50:
+    while words() < 360 and any(p[2] for p in pools) and rounds < 50:
         rounds += 1
         for n in range(len(pools)):
-            if words() >= 300:
+            if words() >= 360:
                 break
             added = take(n, 1)
             if added:
@@ -214,7 +215,7 @@ def fake_report(user_message: str, *, copy: bool = False, short: bool = False) -
         {"text": " ".join(details), "citations": sorted(set(detail_cites)) or [pools[first][0]]}
     )
     for filler in _FILLERS:
-        if words() >= 280:
+        if words() >= 340:
             break
         closing["text"] += " " + filler
     paragraphs.append(closing)
@@ -226,7 +227,7 @@ def fake_report(user_message: str, *, copy: bool = False, short: bool = False) -
     if short:
         paragraphs = [
             {"text": p["text"].split(". ")[0].rstrip(".") + ".", "citations": p["citations"]}
-            for p in paragraphs[:3]
+            for p in paragraphs[:4]
         ]
     return {"paragraphs": paragraphs}
 

@@ -7,6 +7,7 @@ from sqlalchemy import (
     Boolean,
     Column,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     String,
@@ -166,6 +167,31 @@ class GenerationAttempt(Base):
     outcome: Mapped[str] = mapped_column(String(10))
     """``ok`` | ``failed``."""
     reason: Mapped[str | None] = mapped_column(Text)
+    run_id: Mapped[str | None] = mapped_column(String(32))
+    """Shared by the attempts of one generation (quality metrics)."""
+    attempt: Mapped[int | None] = mapped_column(Integer)
+    """1-based position within its prompt's attempts."""
+    prompt: Mapped[str | None] = mapped_column(String(10))
+    """What was asked: ``brief``, ``report`` or ``summary`` (a brief's fallback)."""
+    temperature: Mapped[float | None] = mapped_column(Float)
+    warnings: Mapped[list[str]] = mapped_column(JSON, default=list)
+    """Non-fatal validator findings (suspected glued words)."""
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
+
+
+class StoryEventRow(Base):
+    """A published/updated/retracted story, kept ``summaries.event_retention_days`` so stream
+    clients can resume (``Last-Event-ID``)."""
+
+    __tablename__ = "story_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    type: Mapped[str] = mapped_column(String(20))
+    """``story.published`` | ``story.updated`` | ``story.retracted``."""
+    story_id: Mapped[int] = mapped_column(Integer, index=True)
+    version: Mapped[int | None] = mapped_column(Integer)
+    profiles: Mapped[list[str]] = mapped_column(JSON, default=list)
+    """Slugs of the profiles following one of the story's sources."""
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
 
 

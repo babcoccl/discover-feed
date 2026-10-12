@@ -3,7 +3,7 @@ HOST ?= 0.0.0.0
 PORT ?= 8000
 DEMO_HOST ?= 127.0.0.1
 
-.PHONY: install test lint format run demo docker-up docker-down
+.PHONY: install test lint format run demo docker-up docker-down openapi
 
 install:
 	$(PYTHON) -m pip install -e ".[dev]"
@@ -26,6 +26,10 @@ run:
 # Fake LLM by default; real endpoint: make demo DEMO_ARGS="--real-llm --model <name>"
 demo:
 	$(PYTHON) -m app.demo --host $(DEMO_HOST) --port $(PORT) $(DEMO_ARGS)
+
+# Regenerate the committed /api/v1 contract (tests fail while it is out of date).
+openapi:
+	$(PYTHON) -m app.openapi
 
 docker-up:
 	docker compose up --build

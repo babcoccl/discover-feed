@@ -58,7 +58,7 @@ async def run(env, limit: int, kind: str = "both") -> int:
                 passed["report"] += 0
                 print("  result: skipped (insufficient_text)")
             else:
-                gen = await summ.generate_report(sources)
+                gen = await summ.generate_report(sources, story.title)
                 passed["report"] += gen.status == "ok"
                 if gen.report is not None:
                     for paragraph in cited(gen.report.paragraphs):

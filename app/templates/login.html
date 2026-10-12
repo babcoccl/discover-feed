@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Log in · Discover Feed{% endblock %}
+{% block content %}
+<section class="mx-auto max-w-sm rounded-xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900">
+  <h1 class="mb-1 text-lg font-semibold">Admin login</h1>
+  <p class="mb-4 text-sm text-slate-600 dark:text-slate-400">Settings and pipeline actions need the admin key (<code>DISCOVER_ADMIN_KEY</code>).</p>
+  {% if error %}<p class="mb-3 text-sm text-rose-700 dark:text-rose-400" role="alert" data-login-error>{{ error }}</p>{% endif %}
+  <form method="post" action="/login" class="space-y-3">
+    <input type="hidden" name="next" value="{{ next }}">
+    <label class="block text-sm font-medium" for="key">Admin key</label>
+    <input id="key" name="key" type="password" autocomplete="current-password" required class="w-full rounded-md border border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800">
+    <button type="submit" class="rounded-md bg-sky-700 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-800">Log in</button>
+  </form>
+</section>
+{% endblock %}

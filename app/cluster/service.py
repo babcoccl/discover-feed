@@ -10,6 +10,7 @@ from sqlalchemy import delete, or_, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.cluster.base import ArticleDoc, Clusterer, StoryDoc, representative
+from app.events import record
 from app.lifecycle import PRE_CLUSTER, advance_text_states, ensure_stories
 from app.models import Article, Story, StoryState, StorySummary, StoryView, SummaryJob, utcnow
 
@@ -160,6 +161,11 @@ def _merge(session: Session, old_id: int | None, target_id: int) -> None:
     old = session.get(Story, old_id)
     if old is None:
         return
+    if old.published_version is not None:
+        sources = session.scalars(
+            select(Article.source_id).where(Article.story_id.in_([old_id, target_id])).distinct()
+        )
+        record(session, "story.retracted", old_id, old.published_version, list(sources))
     old.state, old.merged_into = StoryState.MERGED.value, target_id
     old.article_count = old.source_count = 0
     old.published_version = None

@@ -31,6 +31,7 @@ def init_db(engine: Engine) -> None:
     _add_article_pipeline_columns(engine)
     _add_summary_kind(engine)
     _add_story_lifecycle(engine)
+    _add_attempt_quality_columns(engine)
 
 
 def _add_article_url(engine: Engine) -> None:
@@ -136,6 +137,23 @@ def _add_story_lifecycle(engine: Engine) -> None:
                 conn.execute(text(f"ALTER TABLE stories ADD COLUMN {name} {ddl}"))
         for name in ("state", "published_version", "published_sort_at"):
             conn.execute(text(f"CREATE INDEX IF NOT EXISTS ix_stories_{name} ON stories ({name})"))
+
+
+_ATTEMPT_COLUMNS = {
+    "run_id": "VARCHAR(32)",
+    "attempt": "INTEGER",
+    "prompt": "VARCHAR(10)",
+    "temperature": "FLOAT",
+    "warnings": "JSON",
+}
+
+
+def _add_attempt_quality_columns(engine: Engine) -> None:
+    with engine.begin() as conn:
+        existing = {c["name"] for c in inspect(conn).get_columns("generation_attempts")}
+        for name, ddl in _ATTEMPT_COLUMNS.items():
+            if name not in existing:
+                conn.execute(text(f"ALTER TABLE generation_attempts ADD COLUMN {name} {ddl}"))
 
 
 def ping(engine: Engine) -> bool:
