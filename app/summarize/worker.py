@@ -159,7 +159,9 @@ class SummaryWorker:
         if not paused:
             state.consecutive_failures = 0
 
-    def candidates(self, session, story_id: int | None = None) -> list[int]:
+    def candidates(
+        self, session, story_id: int | None = None, *, manual: bool = False
+    ) -> list[int]:
         """Stories to work on, in order: Prioritize first, then newest. Never-published
         stories must be updated within ``backfill_hours`` (at most ``backfill_max``)."""
         now = self.clock()
@@ -173,8 +175,8 @@ class SummaryWorker:
         stmt = select(Story.id, Story.published_version).where(
             Story.state.in_(_LIVE),
             or_(Story.state.in_(WORK_STATES), Story.id.in_(requested)),
-            ~Story.id.in_(backing_off) | Story.id.in_(requested),
-            ~brief_failed | Story.id.in_(requested),
+            ~Story.id.in_(backing_off) | Story.id.in_(requested) | manual,
+            ~brief_failed | Story.id.in_(select(SummaryJob.story_id)) | manual,
             or_(
                 Story.published_version.is_not(None),
                 Story.last_updated_at >= now - self.backfill,
@@ -233,7 +235,11 @@ class SummaryWorker:
             done: set[int] = set()
             while budget > 0 and not self._paused(self.clock(), manual):
                 with self.session_factory() as session:
-                    ids = [i for i in self.candidates(session, story_id) if i not in done]
+                    ids = [
+                        i
+                        for i in self.candidates(session, story_id, manual=manual)
+                        if i not in done
+                    ]
                 if not ids:
                     break
                 for sid in ids:
@@ -341,6 +347,11 @@ class SummaryWorker:
     async def _summarize(
         self, story_id: int, kind: Kind, force: bool, attempts: int
     ) -> SummaryOutcome:
+        # A job row while generating: a failure saved mid-run reads as "retrying", not final.
+        with self.session_factory() as session:
+            if session.get(SummaryJob, (story_id, kind)) is None:
+                session.add(SummaryJob(story_id=story_id, kind=kind, queued_at=self.clock()))
+                session.commit()
         try:
             outcome = await self.summarizer.summarize_story(
                 self.session_factory, story_id, force=force, kind=kind

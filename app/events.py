@@ -70,6 +70,6 @@ def _after_commit(session: Session) -> None:
         bus.publish(item)
 
 
-@event.listens_for(Session, "after_rollback")
-def _after_rollback(session: Session) -> None:
+@event.listens_for(Session, "after_soft_rollback")
+def _after_rollback(session: Session, previous_transaction=None) -> None:
     session.info.pop("story_events", None)
