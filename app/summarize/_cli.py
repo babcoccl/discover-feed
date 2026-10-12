@@ -42,6 +42,8 @@ class Env:
     session_factory: sessionmaker
     fake: bool
     options: SummariesConfig = field(default_factory=SummariesConfig)
+    chat: LLMRole | None = None
+    """The profile's ``llm.chat`` role (``app.chat.smoke``, ``compare --chat``)."""
 
     def client(self, role: LLMRole | None = None) -> LLMClient:
         transport = FakeLLM().transport() if self.fake else None
@@ -66,7 +68,12 @@ def load(args: argparse.Namespace) -> Env:
     engine = make_engine(settings.database_url)
     init_db(engine)
     return Env(
-        settings, profile.llm.summarizer, make_session_factory(engine), args.fake, profile.summaries
+        settings,
+        profile.llm.summarizer,
+        make_session_factory(engine),
+        args.fake,
+        profile.summaries,
+        profile.llm.chat,
     )
 
 

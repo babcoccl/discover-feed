@@ -115,6 +115,8 @@ def build_demo(
     summarize_limit: int | None = None,
     report_mode: str | None = None,
     fake_delay: float = 0,
+    fake_chat_mode: str | None = None,
+    fake_token_delay: float = 0.03,
     demo_base: str = DEMO_BASE,
 ) -> DemoBuild:
     """``summarize_limit``: summarize only the newest N stories now (default: all); the rest
@@ -171,8 +173,10 @@ def build_demo(
         # Show the "Summary unavailable" fallback right away instead of after hours.
         worker.policy = replace(worker.policy, brief_fallback=timedelta(0))
         summarized = asyncio.run(worker.run(manual=True, limit=summarize_limit or 100_000))
-        if fake_delay and not real_llm:
-            transport = FakeLLM("demo", delay=fake_delay).transport()
+        if not real_llm:
+            transport = FakeLLM(
+                "demo", delay=fake_delay, chat_mode=fake_chat_mode, token_delay=fake_token_delay
+            ).transport()
     finally:
         engine.dispose()
     return DemoBuild(settings, results, extracted, clustered, summarized, transport)
@@ -212,6 +216,21 @@ def main() -> None:
         help="override the profiles' summaries.report_mode",
     )
     parser.add_argument(
+        "--fake-chat-mode",
+        choices=[
+            "ok",
+            "stream_error",
+            "stall",
+            "empty",
+            "invalid_citation",
+            "invented_number",
+            "http_500",
+            "timeout",
+        ],
+        help="how the fake LLM answers story questions (shows the chat panel's error and "
+        "unverified states)",
+    )
+    parser.add_argument(
         "--fake-llm-delay",
         type=float,
         default=0,
@@ -232,6 +251,7 @@ def main() -> None:
         summarize_limit=args.summaries if args.real_llm else None,
         report_mode=args.report_mode,
         fake_delay=args.fake_llm_delay,
+        fake_chat_mode=args.fake_chat_mode,
         demo_base=f"http://localhost:{args.port}",
     )
     settings = build.settings

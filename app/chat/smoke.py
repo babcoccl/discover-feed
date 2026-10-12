@@ -20,12 +20,8 @@ from app.summarize.fake import FakeLLM
 
 
 def chat_role(env):
-    from app.config import load_config
-
-    config = load_config(env.settings.config_path) if env.settings.config_path.exists() else None
-    profile = config.get_profile(env.profile) if config and env.profile else None
-    profile = profile or (config.profiles[0] if config and config.profiles else None)
-    return (profile.llm.chat if profile else None) or env.role
+    """The profile's ``llm.chat`` role, else its summarizer."""
+    return env.chat or env.role
 
 
 async def answer_once(env, role, story_id: int, question: str, history, *, echo=True):
@@ -69,7 +65,8 @@ async def run(env, story_id: int, question: str, history) -> int:
         via = f" via {c['via']}" if c["via"] else ""
         print(f"  [{c['index']}] {c['publisher']}{via}: {c['headline']}\n      {c['url']}")
     if answer.verification:
-        print(f"verified: {answer.verification['verified']}  refusal: {answer.verification['refusal']}")
+        v = answer.verification
+        print(f"verified: {v['verified']}  refusal: {v['refusal']}")
         for check in answer.verification["checks"]:
             mark = "ok" if check["ok"] else check["level"].upper()
             print(f"  {mark:<8}{check['name']} {check['detail']}")
@@ -88,7 +85,6 @@ def main(argv: list[str] | None = None) -> int:
     if len(args.history) % 2:
         p.error("--history takes question/answer pairs")
     env = load(args)
-    env.profile = args.profile
     pairs = list(zip(args.history[::2], args.history[1::2], strict=True))
     return asyncio.run(run(env, args.story_id, args.question, pairs))
 
