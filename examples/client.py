@@ -60,6 +60,8 @@ def follow(
                 for event_id, name, data, retry in events(r):
                     if retry:
                         retry_s = int(retry) / 1000
+                    if data is None:  # a bare "retry:" hint
+                        continue
                     if name == "hello":
                         print(
                             f"connected; latest event {data['latest_id']}, resuming after "
