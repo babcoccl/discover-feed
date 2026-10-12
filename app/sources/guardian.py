@@ -4,7 +4,7 @@ from typing import Any
 
 from app.config import Source, SourceType
 from app.sources.api import JsonApiAdapter, api_key, as_int, parse_datetime
-from app.sources.base import FetchError, FetchState, RawArticle, register
+from app.sources.base import FetchError, FetchState, QuotaExhausted, RawArticle, register
 
 GUARDIAN_API = "https://content.guardianapis.com"
 
@@ -31,13 +31,18 @@ class GuardianAdapter(JsonApiAdapter):
         items: list[RawArticle] = []
         page = 1
         while True:
-            body = await self.get_json(
-                f"{base}/search",
-                params={**query, "page": page},
-                headers={"api-key": key},
-                secret=key,
-                quota=quota,
-            )
+            try:
+                body = await self.get_json(
+                    f"{base}/search",
+                    params={**query, "page": page},
+                    headers={"api-key": key},
+                    secret=key,
+                    quota=quota,
+                )
+            except QuotaExhausted:
+                if items:  # budget ran out mid-pagination: keep what was fetched
+                    return items
+                raise
             response = body.get("response") if isinstance(body, dict) else None
             if not isinstance(response, dict) or not isinstance(response.get("results"), list):
                 raise FetchError("Guardian returned an unexpected JSON shape")
@@ -60,7 +65,9 @@ class GuardianAdapter(JsonApiAdapter):
 
     def is_quota_error(self, body: Any) -> bool:
         detail = (self.error_detail(body) or "").lower()
-        return "limit" in detail and "rate" not in detail
+        return (
+            "quota" in detail or "daily" in detail or ("limit" in detail and "rate" not in detail)
+        )
 
 
 def _item(result: dict[str, Any]) -> RawArticle:

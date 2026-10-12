@@ -213,7 +213,7 @@ API_HOMES = {
     SourceType.NEWSDATA: "https://newsdata.io/",
     SourceType.X: "https://api.x.com/",
 }
-_ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_API_KEY_ENV = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def slugify(value: str) -> str:
@@ -272,7 +272,7 @@ class Source(_Model):
             self.id = slugify(self.name)
         if not self.id:
             raise ValueError(f"cannot derive an id from source name {self.name!r}; set `id`")
-        if self.api_key is not None and not _ENV_NAME.match(self.api_key):
+        if self.api_key is not None and not _API_KEY_ENV.match(self.api_key):
             raise ValueError(f"source {self.id!r} api_key must be an environment variable name")
         if self.type in API_TYPES:
             allowed = API_PARAMS[self.type]

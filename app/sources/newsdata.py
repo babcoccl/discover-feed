@@ -4,7 +4,7 @@ from typing import Any
 
 from app.config import Source, SourceType
 from app.sources.api import JsonApiAdapter, api_key, as_int, parse_datetime
-from app.sources.base import FetchError, FetchState, RawArticle, register
+from app.sources.base import FetchError, FetchState, QuotaExhausted, RawArticle, register
 
 NEWSDATA_API = "https://newsdata.io"
 _PAID_ONLY = "ONLY AVAILABLE IN PAID PLANS"
@@ -26,13 +26,18 @@ class NewsDataAdapter(JsonApiAdapter):
         page_token: str | None = None
         for _ in range(max_pages):
             params = {**query, **({"page": page_token} if page_token else {})}
-            body = await self.get_json(
-                f"{base}/api/1/latest",
-                params=params,
-                headers={"X-ACCESS-KEY": key},
-                secret=key,
-                quota=quota,
-            )
+            try:
+                body = await self.get_json(
+                    f"{base}/api/1/latest",
+                    params=params,
+                    headers={"X-ACCESS-KEY": key},
+                    secret=key,
+                    quota=quota,
+                )
+            except QuotaExhausted:
+                if items:  # budget ran out mid-pagination: keep what was fetched
+                    return items
+                raise
             if not isinstance(body, dict):
                 raise FetchError("NewsData returned an unexpected JSON shape")
             if body.get("status") != "success":
