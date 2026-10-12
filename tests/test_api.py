@@ -143,8 +143,10 @@ def test_scheduler_registers_ingestion_jobs(tmp_path: Path) -> None:
         assert ids == {f"ingest:{s.id}" for s in app.state.config.all_sources()} | {
             "pipeline",
             "summarize",
+            "chat-health",
+            "chat-retention",
         }
-        assert len(ids) == 12
+        assert len(ids) == 14
 
 
 def test_warns_when_sec_source_has_no_contact_email(

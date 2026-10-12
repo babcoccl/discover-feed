@@ -368,16 +368,20 @@ GLUED_ALLOW = frozenset(
 )
 
 
-def glued_words(text: str, allow: Sequence[str] = ()) -> list[str]:
+def glued_words(text: str, allow: Sequence[str] = (), sources: Sequence[str] = ()) -> list[str]:
     """Words that look like two words glued together (``tasksAI``, ``AIworkloads``): a
     lowercase letter followed by an uppercase one inside a token, or capitals run into a
     lowercase word. Warning only: known brand spellings (``iPhone``), ``Mc``/``Mac`` names
-    and ``allow`` terms are skipped."""
+    and ``allow`` terms are skipped, and so is any word that occurs verbatim in one of the
+    ``sources`` (proper names such as ``FocusBench``)."""
     allowed = GLUED_ALLOW | {a.lower() for a in allow}
     found = []
     for m in _GLUED.finditer(text):
         word = m.group(0)
         if word.lower() in allowed or re.fullmatch(r"Ma?c[A-Z][a-z]+", word):
+            continue
+        verbatim = re.compile(rf"(?<![A-Za-z]){re.escape(word)}(?![A-Za-z])")
+        if any(verbatim.search(s) for s in sources):
             continue
         found.append(word)
     return list(dict.fromkeys(found))
@@ -471,11 +475,13 @@ def _check_duplicates(points: Sequence[tuple[str, CitedText]], threshold: float)
                 raise SummaryInvalid(f"{name_b} repeats {name_a}; make every point distinct")
 
 
-def _glue_warnings(points: Sequence[tuple[str, CitedText]], allow: Sequence[str]) -> tuple:
+def _glue_warnings(
+    points: Sequence[tuple[str, CitedText]], allow: Sequence[str], sources: Sequence[str] = ()
+) -> tuple:
     return tuple(
         f"{name} has suspected glued words: {', '.join(found)}"
         for name, point in points
-        if (found := glued_words(point.text, allow))
+        if (found := glued_words(point.text, allow, sources))
     )
 
 
@@ -517,7 +523,10 @@ def validate_brief(
         _check_numbers(point, name, sources)
     _check_duplicates(points, duplicate_threshold)
     return ValidBrief(
-        lead.text, lead.citations, [p for _, p in points[1:]], _glue_warnings(points, allow)
+        lead.text,
+        lead.citations,
+        [p for _, p in points[1:]],
+        _glue_warnings(points, allow, sources),
     )
 
 
@@ -558,7 +567,7 @@ def validate_report(
     points = [
         (f"paragraph {n}", _point(p, f"paragraph {n}", k)) for n, p in enumerate(paragraphs, 1)
     ]
-    report = ValidReport([p for _, p in points], _glue_warnings(points, guard.allow))
+    report = ValidReport([p for _, p in points], _glue_warnings(points, guard.allow, sources))
     if not low <= report.word_count <= high:
         raise SummaryInvalid(
             f"the report has {report.word_count} words; write {low}-{high} words in total"
@@ -568,3 +577,56 @@ def validate_report(
     _check_duplicates(points, duplicate_threshold)
     check_verbatim([(name, p.text) for name, p in points], sources, guard, title=title)
     return report
+
+
+@dataclass(frozen=True)
+class ValidFollowups:
+    questions: list[str]
+
+    @property
+    def text(self) -> str:
+        return "\n".join(self.questions)
+
+    def as_json(self) -> dict:
+        return {"questions": self.questions}
+
+
+def validate_followups(
+    content: str, sources: Sequence[str], *, duplicate_threshold: float = 0.6
+) -> ValidFollowups:
+    """Check ``{"questions": [str x3]}``: exactly 3 non-empty questions of at most 12 words,
+    no two alike, each sharing a content word with the sources, numbers from the sources."""
+    from app.summarize.prompt import FOLLOWUP_COUNT, FOLLOWUP_MAX_WORDS
+
+    data = parse_json(content)
+    questions = data.get("questions")
+    if not isinstance(questions, list) or not all(isinstance(q, str) for q in questions):
+        raise SummaryInvalid('"questions" must be a list of strings')
+    if len(questions) != FOLLOWUP_COUNT:
+        raise SummaryInvalid(f"write exactly {FOLLOWUP_COUNT} questions; got {len(questions)}")
+    vocabulary = {t for s in sources for t in tokens(s)} - _STOPWORDS
+    available = set().union(*(numbers_in(s) for s in sources)) if sources else set()
+    cleaned: list[str] = []
+    for n, raw in enumerate(questions, 1):
+        q = _clean(raw).strip().lstrip("-*0123456789.) ").strip()
+        if not q:
+            raise SummaryInvalid(f"question {n} is empty")
+        if not q.endswith("?"):
+            q = q.rstrip(".!") + "?"
+        words = len(q.split())
+        if words > FOLLOWUP_MAX_WORDS:
+            raise SummaryInvalid(
+                f"question {n} has {words} words; the limit is {FOLLOWUP_MAX_WORDS}"
+            )
+        if not ({t for t in tokens(q)} - _STOPWORDS) & vocabulary:
+            raise SummaryInvalid(f"question {n} is not about the sources")
+        missing = sorted(numbers_in(q) - available)
+        if missing:
+            raise SummaryInvalid(f"question {n} contains number(s) {missing} not in the sources")
+        cleaned.append(q)
+    for i, a in enumerate(cleaned):
+        for j in range(i + 1, len(cleaned)):
+            b = cleaned[j]
+            if a.casefold() == b.casefold() or overlap(a, b) >= duplicate_threshold:
+                raise SummaryInvalid(f"question {j + 1} repeats question {i + 1}")
+    return ValidFollowups(cleaned)

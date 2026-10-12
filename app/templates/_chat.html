@@ -1,0 +1,216 @@
+{#- "Ask a follow-up": streamed answers from POST /api/v1/stories/{id}/ask (fetch +
+    ReadableStream, since EventSource cannot POST). The conversation id lives in
+    localStorage per story; the page never generates anything itself. -#}
+<section id="chat" class="mb-6 max-w-3xl rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900" aria-labelledby="chat-heading" data-chat="{{ chat_state }}" data-story="{{ story.story_id }}" data-profile="{{ chat_profile or '' }}">
+  <div class="mb-2 flex items-center justify-between gap-2">
+    <h2 id="chat-heading" class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Ask a follow-up</h2>
+    {% if chat_state == "ok" %}<button type="button" id="chat-clear" hidden class="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800" data-chat-clear>Clear conversation</button>{% endif %}
+  </div>
+  {% if chat_state != "ok" %}
+  <p class="text-sm text-slate-600 dark:text-slate-400" role="status" data-chat-disabled>{{ chat_message }}</p>
+  {% else %}
+  <ol id="chat-log" class="mb-3 space-y-3" aria-live="polite" data-chat-log></ol>
+  <div id="chat-chips" class="mb-3 flex flex-wrap gap-2" data-followups {% if not followups %}hidden{% endif %}>
+    {% for q in followups %}<button type="button" class="rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-left text-sm text-sky-900 hover:bg-sky-100 dark:border-sky-900 dark:bg-sky-950 dark:text-sky-200 dark:hover:bg-sky-900" data-followup>{{ q }}</button>{% endfor %}
+  </div>
+  <form id="chat-form" class="flex flex-col gap-2 sm:flex-row sm:items-end" data-chat-form>
+    <label for="chat-input" class="sr-only">Your question</label>
+    <textarea id="chat-input" rows="2" maxlength="500" required placeholder="Ask about this story…" class="min-h-[2.75rem] w-full flex-1 resize-y rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-500/30 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"></textarea>
+    <button id="chat-send" type="submit" class="shrink-0 rounded-lg bg-sky-700 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-800 disabled:opacity-50 dark:bg-sky-600 dark:hover:bg-sky-500" data-chat-send>Send</button>
+  </form>
+  <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">Answers come only from this story's sources{% if chat_model %} · {{ chat_model }}{% endif %}. <span id="chat-count">0</span>/500</p>
+  {% endif %}
+</section>
+{% if chat_state == "ok" %}<script>
+(function () {
+  var root = document.getElementById("chat");
+  var storyId = root.dataset.story, profile = root.dataset.profile;
+  var key = "discover-chat:" + storyId;
+  var log = document.getElementById("chat-log"), form = document.getElementById("chat-form");
+  var input = document.getElementById("chat-input"), send = document.getElementById("chat-send");
+  var clear = document.getElementById("chat-clear"), chips = document.getElementById("chat-chips");
+  var count = document.getElementById("chat-count");
+  var conversation = localStorage.getItem(key), controller = null;
+  var qs = profile ? "?profile=" + encodeURIComponent(profile) : "";
+
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text) e.textContent = text;
+    return e;
+  }
+  function byIndex(citations) {
+    var m = {};
+    (citations || []).forEach(function (c) { m[c.index] = c; });
+    return m;
+  }
+  // Answer text with [n] markers linked to the cited article.
+  function render(target, text, citations) {
+    target.textContent = "";
+    var cites = byIndex(citations), re = /\[(\d+(?:\s*,\s*\d+)*)\]/g, last = 0, m;
+    while ((m = re.exec(text))) {
+      target.appendChild(document.createTextNode(text.slice(last, m.index)));
+      m[1].split(",").forEach(function (raw) {
+        var n = raw.trim(), c = cites[n], a = el(c ? "a" : "span", "ml-0.5 align-super text-[0.7em] font-semibold " + (c ? "text-sky-700 hover:underline dark:text-sky-400" : "text-slate-400"), "[" + n + "]");
+        if (c) { a.href = c.url; a.target = "_blank"; a.rel = "noopener noreferrer"; a.title = "[" + n + "] " + c.publisher + (c.via ? " via " + c.via : "") + ": " + c.headline; a.dataset.citation = n; }
+        target.appendChild(a);
+      });
+      last = re.lastIndex;
+    }
+    target.appendChild(document.createTextNode(text.slice(last)));
+  }
+  function bubble(role, text) {
+    var li = el("li", role === "user" ? "ml-auto max-w-[85%] rounded-2xl rounded-br-sm bg-sky-700 px-3 py-2 text-sm text-white dark:bg-sky-600" : "max-w-full rounded-2xl rounded-bl-sm bg-slate-100 px-3 py-2 text-sm leading-relaxed text-slate-800 dark:bg-slate-800 dark:text-slate-100");
+    li.dataset.role = role;
+    var body = el("p", "whitespace-pre-wrap break-words", text);
+    li.appendChild(body);
+    log.appendChild(li);
+    clear.hidden = false;
+    return { li: li, body: body };
+  }
+  function status(b, cls, text, attr) {
+    var p = el("p", "mt-1 text-xs " + cls, text);
+    p.setAttribute(attr, "");
+    b.li.appendChild(p);
+    return p;
+  }
+  function finish(b, msg) {
+    var cites = msg.citations || [];
+    render(b.body, msg.content, cites);
+    if (cites.length) {
+      var used = el("p", "mt-1 text-xs text-slate-500 dark:text-slate-400", "Sources used: ");
+      used.setAttribute("data-sources-used", "");
+      cites.forEach(function (c, i) {
+        var a = el("a", "hover:underline", "[" + c.index + "] " + c.publisher + (c.via ? " via " + c.via : ""));
+        a.href = c.url; a.target = "_blank"; a.rel = "noopener noreferrer";
+        if (i) used.appendChild(document.createTextNode(" · "));
+        used.appendChild(a);
+      });
+      b.li.appendChild(used);
+    }
+    var v = msg.verification;
+    if (v && !v.verified) status(b, "text-amber-700 dark:text-amber-400", "Some details could not be verified against the sources.", "data-unverified");
+    if (msg.status === "incomplete") status(b, "text-slate-500 dark:text-slate-400", msg.error === "client_disconnected" ? "Stopped." : "Incomplete answer (" + msg.error + ").", "data-incomplete");
+    if (msg.status === "error") status(b, "text-rose-700 dark:text-rose-400", "Error: " + (msg.message || msg.error), "data-chat-error");
+  }
+  function busy(on) {
+    send.textContent = on ? "Stop" : "Send";
+    send.type = on ? "button" : "submit";
+    send.dataset.state = on ? "stop" : "send";
+    input.disabled = on;
+  }
+  function restore() {
+    if (!conversation) return;
+    fetch("/api/v1/conversations/" + encodeURIComponent(conversation), { credentials: "same-origin" })
+      .then(function (r) {
+        if (r.status === 404) { localStorage.removeItem(key); conversation = null; return null; }
+        return r.ok ? r.json() : null;
+      })
+      .then(function (data) {
+        if (!data) return;
+        data.messages.forEach(function (m) {
+          var b = bubble(m.role, m.content);
+          if (m.role === "assistant") finish(b, m);
+        });
+        root.dataset.restored = String(data.messages.length);
+      });
+  }
+  async function ask(question) {
+    var q = bubble("user", question);
+    var b = bubble("assistant", "");
+    var waiting = status(b, "text-slate-500 dark:text-slate-400", "Waiting for the model…", "data-chat-waiting");
+    var text = "", msg = { content: "", status: "incomplete", error: "client_disconnected" };
+    controller = new AbortController();
+    busy(true);
+    try {
+      var r = await fetch("/api/v1/stories/" + storyId + "/ask" + qs, {
+        method: "POST", credentials: "same-origin", signal: controller.signal,
+        headers: { "Content-Type": "application/json", "Accept": "text/event-stream" },
+        body: JSON.stringify({ question: question, conversation_id: conversation })
+      });
+      if (!r.ok) {
+        var detail = "";
+        try { detail = (await r.json()).detail; } catch (e) {}
+        if (r.status === 401) detail = "log in to ask questions (API key auth is on)";
+        if (r.status === 404 && conversation) { localStorage.removeItem(key); conversation = null; }
+        throw new Error(typeof detail === "string" && detail ? detail : "HTTP " + r.status);
+      }
+      var reader = r.body.getReader(), decoder = new TextDecoder(), buf = "";
+      for (;;) {
+        var chunk = await reader.read();
+        if (chunk.done) break;
+        buf += decoder.decode(chunk.value, { stream: true });
+        var parts = buf.split("\n\n");
+        buf = parts.pop();
+        parts.forEach(function (block) {
+          var ev = "message", data = "";
+          block.split("\n").forEach(function (line) {
+            if (line.indexOf("event:") === 0) ev = line.slice(6).trim();
+            else if (line.indexOf("data:") === 0) data += line.slice(5).trim();
+          });
+          if (!data) return;
+          var d = JSON.parse(data);
+          if (ev === "meta") { conversation = d.conversation_id; localStorage.setItem(key, conversation); }
+          else if (ev === "waiting") { waiting.textContent = d.message || "Waiting for the model…"; }
+          else if (ev === "token") { if (waiting) { waiting.remove(); waiting = null; } text += d.text; b.body.textContent = text; }
+          else if (ev === "citations") { msg.citations = d.citations; }
+          else if (ev === "done") { msg.status = "complete"; msg.verification = d.verification; msg.error = null; }
+          else if (ev === "error") { msg.status = text ? "incomplete" : "error"; msg.error = d.reason; msg.message = d.message; }
+        });
+      }
+    } catch (e) {
+      if (e.name !== "AbortError") { msg.status = text ? "incomplete" : "error"; msg.error = "request_failed"; msg.message = e.message; }
+    } finally {
+      if (waiting) waiting.remove();
+      msg.content = text;
+      if (!text && msg.status === "incomplete") msg.status = "error", msg.message = "Stopped before the model answered.";
+      finish(b, msg);
+      busy(false);
+      controller = null;
+      input.focus();
+    }
+  }
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    var question = input.value.trim();
+    if (!question || controller) return;
+    input.value = ""; count.textContent = "0";
+    ask(question);
+  });
+  send.addEventListener("click", function (e) {
+    if (controller) { e.preventDefault(); controller.abort(); }
+  });
+  input.addEventListener("input", function () { count.textContent = String(input.value.length); });
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); form.requestSubmit(); }
+  });
+  chips.addEventListener("click", function (e) {
+    var chip = e.target.closest("[data-followup]");
+    if (chip && !controller) ask(chip.textContent.trim());
+  });
+  clear.addEventListener("click", function () {
+    if (controller) controller.abort();
+    if (conversation) fetch("/api/v1/conversations/" + encodeURIComponent(conversation), { method: "DELETE", credentials: "same-origin" });
+    localStorage.removeItem(key); conversation = null; log.textContent = ""; clear.hidden = true;
+  });
+  // Suggested questions appear once generated (after the report); poll briefly if pending.
+  if (chips.hidden) {
+    var tries = 0, poll = setInterval(function () {
+      if (++tries > 24) return clearInterval(poll);
+      fetch("/api/v1/stories/" + storyId + "/followups" + qs, { credentials: "same-origin" })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) {
+          if (!d || d.state === "pending") return;
+          clearInterval(poll);
+          d.questions.forEach(function (q) {
+            var c = el("button", "rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-left text-sm text-sky-900 hover:bg-sky-100 dark:border-sky-900 dark:bg-sky-950 dark:text-sky-200 dark:hover:bg-sky-900", q);
+            c.type = "button"; c.dataset.followup = "";
+            chips.appendChild(c);
+          });
+          chips.hidden = !d.questions.length;
+        });
+    }, 5000);
+  }
+  restore();
+})();
+</script>{% endif %}

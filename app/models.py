@@ -179,6 +179,45 @@ class GenerationAttempt(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
 
 
+class Conversation(Base):
+    """A story Q&A thread. No accounts: the unguessable id is the only key (the story page
+    keeps it in localStorage); idle ones are deleted after ``chat_retention_days``."""
+
+    __tablename__ = "conversations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    story_id: Mapped[int] = mapped_column(Integer, index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    last_active_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
+
+
+class ChatMessage(Base):
+    """A question (``user``) or an answer (``assistant``) in a conversation."""
+
+    __tablename__ = "messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    conversation_id: Mapped[str] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), index=True
+    )
+    role: Mapped[str] = mapped_column(String(10))
+    content: Mapped[str] = mapped_column(Text, default="")
+    citations_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    """The sources the answer's [n] markers resolve to."""
+    verification_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    model: Mapped[str] = mapped_column(String(200), default="")
+    prompt_version: Mapped[str] = mapped_column(String(40), default="")
+    tokens: Mapped[int | None] = mapped_column(Integer)
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    time_to_first_token_ms: Mapped[int | None] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(12), default="complete")
+    """``complete`` | ``streaming`` | ``incomplete`` (stopped or failed mid-answer; the
+    partial text is kept) | ``error`` (no answer)."""
+    error: Mapped[str | None] = mapped_column(Text)
+    """Why an answer is incomplete or failed (``client_disconnected``, ``timeout``, ...)."""
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
+
+
 class StoryEventRow(Base):
     """A published/updated/retracted story, kept ``summaries.event_retention_days`` so stream
     clients can resume (``Last-Event-ID``)."""
@@ -238,6 +277,8 @@ class SourceRecord(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     refresh_minutes: Mapped[int] = mapped_column(Integer, default=30)
     tags: Mapped[list[str]] = mapped_column(JSON, default=list)
+    aggregator: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    first_party: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
 
     def to_config(self) -> Source:
         return Source(
@@ -248,6 +289,8 @@ class SourceRecord(Base):
             enabled=self.enabled,
             refresh_minutes=self.refresh_minutes,
             tags=list(self.tags or []),
+            aggregator=bool(self.aggregator),
+            first_party=bool(self.first_party),
         )
 
 

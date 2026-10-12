@@ -47,7 +47,28 @@ def make_handler(fake: FakeLLM, timeout_seconds: float = 30) -> type[BaseHTTPReq
                 time.sleep(timeout_seconds)  # let the client's own timeout fire
                 self._send(504, b'{"error":{"message":"fake timeout"}}')
                 return
+            if response.headers.get("content-type") == "text/event-stream":
+                self._stream(response)
+                return
             self._send(response.status_code, response.content)
+
+        def _stream(self, response: httpx.Response) -> None:
+            self.send_response(response.status_code)
+            self.send_header("content-type", "text/event-stream")
+            self.send_header("cache-control", "no-cache")
+            self.end_headers()
+
+            async def pump() -> None:
+                try:
+                    async for chunk in response.stream:
+                        self.wfile.write(chunk)
+                        self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError, httpx.HTTPError):
+                    pass
+                finally:
+                    await response.stream.aclose()
+
+            asyncio.run(pump())
 
         def log_message(self, format: str, *args: object) -> None:
             print(f"fake-llm {self.command} {self.path} {args[1] if len(args) > 1 else ''}")
@@ -61,8 +82,9 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8090)
     parser.add_argument("--mode", nargs="+", default=["demo"], choices=MODES)
     parser.add_argument("--delay", type=float, default=0, help="seconds per answer")
+    parser.add_argument("--token-delay", type=float, default=0.03, help="seconds per chat token")
     args = parser.parse_args()
-    fake = FakeLLM(args.mode, delay=args.delay)
+    fake = FakeLLM(args.mode, delay=args.delay, token_delay=args.token_delay)
     server = ThreadingHTTPServer((args.host, args.port), make_handler(fake))
     print(f"fake LLM ({' '.join(args.mode)}, {args.delay}s/answer) on :{args.port}", flush=True)
     server.serve_forever()

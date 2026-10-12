@@ -4,6 +4,7 @@ import hashlib
 import json
 from collections.abc import Sequence
 
+from app.labels import publisher_of, via_of
 from app.models import Article, TextStatus
 from app.summarize.prompt import SourceDoc
 
@@ -22,14 +23,19 @@ def _words(text: str | None, limit: int) -> str:
 
 def source_doc(index: int, article: Article, names: dict[str, str], max_words: int) -> SourceDoc:
     full = article.text_status == TextStatus.OK and bool(article.text)
+    name = names.get(article.source_id, article.source_id)
+    publisher = publisher_of(article.url, name)
     return SourceDoc(
         index=index,
         article_id=article.id,
-        source=names.get(article.source_id, article.source_id),
+        source=name,
         headline=" ".join((article.title or "").split()),
         url=article.url,
         text=_words(article.text if full else article.summary_raw, max_words),
         full_text=full,
+        publisher=publisher,
+        via=via_of(article.source_id, name, publisher, getattr(names, "aggregators", ())),
+        first_party=article.source_id in getattr(names, "first_party", ()),
     )
 
 

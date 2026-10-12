@@ -12,15 +12,28 @@ that about one brief in five gets an invented number (so the demo shows fallback
 story's report fails validation the first time (so the demo shows Retry).
 """
 
+import asyncio
 import hashlib
 import json
-from collections.abc import Sequence
+import re
+from collections.abc import AsyncIterator, Sequence
 
 import httpx
 
-from app.summarize.prompt import PROMPTS, VERBATIM_SHINGLE, parse_sources
+from app.summarize.prompt import ATTRIBUTED_PROMPTS, PROMPTS, VERBATIM_SHINGLE, parse_sources
 from app.summarize.validate import copied_run, overlap, split_sentences, tokens
 
+CHAT_MODES = (
+    "stream_error",
+    "stall",
+    "invalid_citation",
+    "injection_echo",
+)
+"""Chat-only modes (``chat_mode=`` or the call's mode): ``stream_error`` drops the stream
+after a few tokens, ``stall`` stops sending (the idle timeout fires), ``invalid_citation``
+cites a source that does not exist, ``injection_echo`` obeys an instruction hidden in a source
+(a deliberately bad model, to test the UI and verification). ``empty``, ``invented_number``,
+``http_500``, ``timeout`` and ``http_401`` apply to chat too."""
 MODES = (
     "ok",
     "prose",
@@ -38,6 +51,7 @@ MODES = (
     "reasoning_only",
     "http_401",
     "demo",
+    *CHAT_MODES,
 )
 FAKE_MODEL = "fake-llm"
 INVENTED = "Officials said 987654 people were affected."
@@ -232,18 +246,136 @@ def fake_report(user_message: str, *, copy: bool = False, short: bool = False) -
     return {"paragraphs": paragraphs}
 
 
+_WORD = re.compile(r"[A-Za-z][A-Za-z'-]{3,}")
+_QUESTION_STOP = frozenset(
+    "what when where which with about after does have there their they this that from will "  # noqa: SIM905
+    "would could should were been into more most other some such than then them these those "
+    "said says tell know sources source story article happen happened happens next".split()
+)
+
+
+def _keywords(text: str) -> set[str]:
+    return {w.lower() for w in _WORD.findall(text)} - _QUESTION_STOP
+
+
+def fake_chat_answer(system: str, question: str, mode: str = "ok") -> str:
+    """Up to two source sentences that share words with the question, each cited; a plain
+    "the sources don't say" when none does."""
+    from app.chat.prompt import parse_chat_sources
+
+    sources = parse_chat_sources(system)
+    wanted = _keywords(question)
+    scored = []
+    for index, _label, headline, text in sources:
+        for sentence in _body_sentences(f"{headline}.\n{text}", 30):
+            score = len(wanted & _keywords(sentence))
+            if score:
+                scored.append((-score, index, sentence))
+    scored.sort()
+    picked, used = [], set()
+    for _score, index, sentence in scored:
+        if sentence in used:
+            continue
+        used.add(sentence)
+        picked.append(f"{sentence.rstrip('.')} [{index}].")
+        if len(picked) == 2:
+            break
+    if mode == "injection_echo":
+        for _index, _label, _headline, text in sources:
+            if m := re.search(r"say (?:only )?[\"']([^\"']+)[\"']", text, re.I):
+                return m.group(1)
+    if not picked:
+        return "The sources don't say. They cover " + (
+            f'"{sources[0][2]}" [1].' if sources else "nothing on that."
+        )
+    answer = " ".join(picked)
+    k = len(sources)
+    if mode == "invalid_citation":
+        answer += f" More details are in another report [{k + 3}]."
+    elif mode == "invented_number":
+        answer += " " + INVENTED.rstrip(".") + " [1]."
+    return answer
+
+
+def fake_followups(user_message: str) -> dict:
+    sources = parse_sources(user_message)
+    headline = sources[0][2] if sources else "this story"
+    words = [w for w in re.findall(r"[A-Za-z][A-Za-z-]+", headline) if len(w) > 2][:3]
+    topic = " ".join(words) or "this story"
+    return {
+        "questions": [
+            f"What happens next with {topic}?",
+            f"Who is affected by {topic}?",
+            f"How did the sources describe {topic}?",
+        ]
+    }
+
+
+class _ChatStream(httpx.AsyncByteStream):
+    """``text/event-stream`` chunks like llama-server's, with optional per-token delay and
+    failure modes. Records an early close (the client cancelled) on the fake."""
+
+    def __init__(self, fake: "FakeLLM", text: str, mode: str, prompt_tokens: int) -> None:
+        self.fake, self.text, self.mode, self.prompt_tokens = fake, text, mode, prompt_tokens
+        self.finished = False
+
+    def _chunk(self, data: dict) -> bytes:
+        return f"data: {json.dumps(data)}\n\n".encode()
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        pieces = re.findall(r"\S+\s*", self.text)
+        base = {"id": "fake-stream", "object": "chat.completion.chunk", "model": self.fake.model}
+        yield self._chunk({**base, "choices": [{"index": 0, "delta": {"role": "assistant"}}]})
+        for n, piece in enumerate(pieces):
+            if self.mode == "stream_error" and n == 4:
+                raise httpx.RemoteProtocolError("fake: upstream closed mid-stream")
+            if self.mode == "stall" and n == 3:
+                await asyncio.sleep(3600)
+            if self.fake.token_delay:
+                await asyncio.sleep(self.fake.token_delay)
+            self.fake.streamed_tokens += 1
+            yield self._chunk({**base, "choices": [{"index": 0, "delta": {"content": piece}}]})
+        usage = {"prompt_tokens": self.prompt_tokens, "completion_tokens": len(pieces)}
+        yield self._chunk(
+            {
+                **base,
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                "usage": usage,
+            }
+        )
+        yield b"data: [DONE]\n\n"
+        self.finished = True
+
+    async def aclose(self) -> None:
+        if not self.finished:
+            self.fake.cancelled_streams += 1
+
+
 class FakeLLM:
     def __init__(
-        self, mode: str | Sequence[str] = "ok", *, model: str = FAKE_MODEL, delay: float = 0
+        self,
+        mode: str | Sequence[str] = "ok",
+        *,
+        model: str = FAKE_MODEL,
+        delay: float = 0,
+        chat_mode: str | None = None,
+        token_delay: float = 0,
     ) -> None:
         modes = [mode] if isinstance(mode, str) else list(mode)
-        unknown = set(modes) - set(MODES)
+        unknown = set(modes + ([chat_mode] if chat_mode else [])) - set(MODES)
         if unknown or not modes:
             raise ValueError(f"unknown fake LLM mode(s) {sorted(unknown)}; choose from {MODES}")
         self.modes = modes
         self.model = model
         self.delay = delay
+        self.chat_mode = chat_mode
+        """Overrides the mode for chat requests (the demo's ``--fake-chat-mode``)."""
+        self.token_delay = token_delay
+        """Seconds between streamed chat tokens."""
         self.requests: list[dict] = []
+        self.cancelled_streams = 0
+        """Chat streams the client closed before the end (upstream cancellation)."""
+        self.streamed_tokens = 0
         self._demo_report_failures: dict[str, int] = {}
 
     @property
@@ -255,11 +387,17 @@ class FakeLLM:
 
     @staticmethod
     def kind_of(body: dict) -> str:
+        from app.chat.prompt import CHAT_SYSTEM_PROMPT
+
         system = next(
             (m["content"] for m in body.get("messages", []) if m.get("role") == "system"), ""
         )
+        if system.startswith(CHAT_SYSTEM_PROMPT):
+            return "chat"
+        if system == PROMPTS["followups"][0]:
+            return "followups"
         for kind in ("report", "brief"):
-            if system == PROMPTS[kind][0]:
+            if system in (PROMPTS[kind][0], ATTRIBUTED_PROMPTS[kind]):
                 return kind
         return "summary"
 
@@ -278,17 +416,17 @@ class FakeLLM:
             return httpx.Response(
                 200, json={"object": "list", "data": [{"id": self.model, "object": "model"}]}
             )
-        if self.delay:
-            import asyncio
-
-            await asyncio.sleep(self.delay)
         body = json.loads(request.content or b"{}")
+        if self.delay and self.kind_of(body) != "chat":
+            await asyncio.sleep(self.delay)
         self.requests.append(body)
         mode = self.modes[min(len(self.requests), len(self.modes)) - 1]
         user = next((m["content"] for m in body.get("messages", []) if m.get("role") == "user"), "")
         kind = self.kind_of(body)
         sources = parse_sources(user)
         k = len(sources)
+        if kind == "chat":
+            return self._chat(body, self.chat_mode or mode, request)
         if mode == "demo":
             mode = self._demo_mode(kind, sources[0][2] if sources else "")
         if mode == "http_500":
@@ -297,7 +435,12 @@ class FakeLLM:
             return httpx.Response(401, json={"error": {"message": "invalid api key"}})
         if mode == "timeout":
             raise httpx.ReadTimeout("fake timeout", request=request)
-        if kind == "report":
+        if kind == "followups":
+            answer = fake_followups(user)
+            points = None
+            if mode == "duplicate_bullets":
+                answer["questions"][1] = answer["questions"][0]
+        elif kind == "report":
             answer = fake_report(user, copy=mode == "copied_report", short=mode == "short_report")
             points = answer["paragraphs"]
         elif kind == "brief":
@@ -310,13 +453,15 @@ class FakeLLM:
         else:
             answer = fake_summary(user)
             points = None
-        if mode == "out_of_range":
+        if kind == "followups":
+            pass
+        elif mode == "out_of_range":
             if points is None:
                 answer["citations"][-1] = [k + 1]
             else:
                 points[-1]["citations"] = [k + 1]
         elif mode == "invented_number":
-            if points is None:
+            if points is None and "summary" in answer:
                 answer["summary"] += " " + INVENTED
                 answer["citations"].append([1])
             else:
@@ -359,4 +504,36 @@ class FakeLLM:
                     "total_tokens": prompt_tokens + len(content.split()),
                 },
             },
+        )
+
+    def _chat(self, body: dict, mode: str, request: httpx.Request) -> httpx.Response:
+        messages = body.get("messages", [])
+        system = messages[0]["content"] if messages else ""
+        question = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
+        if mode == "http_500":
+            return httpx.Response(500, json={"error": {"message": "fake server error"}})
+        if mode == "http_401":
+            return httpx.Response(401, json={"error": {"message": "invalid api key"}})
+        if mode == "timeout":
+            raise httpx.ReadTimeout("fake timeout", request=request)
+        text = "" if mode == "empty" else fake_chat_answer(system, question, mode)
+        prompt_tokens = sum(len(str(m.get("content", "")).split()) for m in messages)
+        if not body.get("stream"):
+            return httpx.Response(
+                200,
+                json={
+                    "model": self.model,
+                    "choices": [
+                        {"message": {"role": "assistant", "content": text}, "finish_reason": "stop"}
+                    ],
+                    "usage": {
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": len(text.split()),
+                    },
+                },
+            )
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=_ChatStream(self, text, mode, prompt_tokens),
         )

@@ -12,6 +12,8 @@ from app.api import router as api_router
 from app.api_v1 import PREFIX as V1_PREFIX
 from app.api_v1 import router as v1_router
 from app.auth import AuthConfig, legacy_api_guard, web_guard
+from app.chat.api import router as chat_router
+from app.chat.service import build_hub
 from app.config import AppConfig, Source, load_config
 from app.db import init_db, make_engine, make_session_factory, ping
 from app.ingest import Ingestor, build_user_agent, sources_requiring_contact
@@ -22,13 +24,15 @@ from app.pipeline import (
     Pipeline,
     clusterer_from_settings,
     extractor_from_settings,
+    summarize_profile,
     summarizer_role,
     summary_worker_from_settings,
 )
-from app.profiles import active_sources, seed_from_config
+from app.profiles import active_sources, seed_from_config, sync_source_flags
 from app.publish import migrate
 from app.scheduler import (
     create_scheduler,
+    schedule_chat,
     schedule_ingestion,
     schedule_pipeline,
     schedule_summaries,
@@ -125,6 +129,7 @@ def create_app(
         with app.state.session_factory() as session:
             if seed_from_config(session, app.state.config):
                 logger.info("Seeded profiles, sources and topics from %s", settings.config_path)
+            sync_source_flags(session, app.state.config)
             sources = active_sources(session)
         app.state.ingestor = Ingestor(
             app.state.session_factory,
@@ -152,6 +157,14 @@ def create_app(
         app.state.llm_health = await check_endpoint(
             summarizer_role(app.state.config, settings), transport=llm_transport
         )
+        app.state.chat = build_hub(
+            app.state.session_factory,
+            app.state.config,
+            summarize_profile(app.state.config, settings),
+            transport=llm_transport,
+        )
+        await app.state.chat.check_all()
+        app.state.chat.cleanup_blocking()
         _warn_missing_contact(sources, settings)
         scheduler = create_scheduler()
         if settings.scheduler_enabled:
@@ -172,6 +185,7 @@ def create_app(
                     app.state.summaries,
                     interval_seconds=settings.summarize_interval_seconds,
                 )
+            schedule_chat(scheduler, app.state.chat)
             scheduler.start()
         app.state.scheduler = scheduler
         try:
@@ -189,6 +203,7 @@ def create_app(
     )
     app.state.auth = AuthConfig.from_settings(settings)
     app.include_router(v1_router)
+    app.include_router(chat_router)
     app.include_router(api_router, dependencies=[Depends(legacy_api_guard)])
     app.include_router(login_router)
     app.include_router(web_router, dependencies=[Depends(web_guard)])

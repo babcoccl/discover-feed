@@ -58,6 +58,8 @@ def seed_from_config(session: Session, config: AppConfig) -> bool:
                     enabled=source.enabled,
                     refresh_minutes=source.refresh_minutes,
                     tags=list(source.tags),
+                    aggregator=source.aggregator,
+                    first_party=source.first_party,
                 )
             record.sources.append(sources[source.id])
         ids_by_name = {s.name: s.id for s in profile.sources}
@@ -106,8 +108,47 @@ def get_source(session: Session, source_id: str) -> Source | None:
     return record.to_config() if record else None
 
 
-def source_names(session: Session) -> dict[str, str]:
-    return {sid: name for sid, name in session.execute(select(SourceRecord.id, SourceRecord.name))}
+class SourceNames(dict[str, str]):
+    """Source id -> name, plus the ids flagged ``aggregator`` / ``first_party``."""
+
+    def __init__(
+        self,
+        names: dict[str, str] | None = None,
+        aggregators: frozenset[str] = frozenset(),
+        first_party: frozenset[str] = frozenset(),
+    ) -> None:
+        super().__init__(names or {})
+        self.aggregators = aggregators
+        self.first_party = first_party
+
+
+def source_names(session: Session) -> SourceNames:
+    rows = session.execute(
+        select(
+            SourceRecord.id, SourceRecord.name, SourceRecord.aggregator, SourceRecord.first_party
+        )
+    ).all()
+    return SourceNames(
+        {r.id: r.name for r in rows},
+        frozenset(r.id for r in rows if r.aggregator),
+        frozenset(r.id for r in rows if r.first_party),
+    )
+
+
+def sync_source_flags(session: Session, config: AppConfig) -> int:
+    """Copy ``aggregator`` / ``first_party`` from the YAML onto existing sources (the YAML
+    otherwise only seeds an empty DB; these flags are not editable in the UI)."""
+    changed = 0
+    for source in config.all_sources(enabled_only=False):
+        record = session.get(SourceRecord, source.id)
+        if record is None:
+            continue
+        flags = (bool(source.aggregator), bool(source.first_party))
+        if (bool(record.aggregator), bool(record.first_party)) != flags:
+            record.aggregator, record.first_party = flags
+            changed += 1
+    session.commit()
+    return changed
 
 
 def source_statuses(session: Session, source_ids: Sequence[str]) -> dict[str, SourceStatus]:

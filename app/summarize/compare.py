@@ -7,6 +7,11 @@ Each endpoint is ``name=base_url:model`` (the model is everything after the URL'
 ``llama3.1:8b`` works). The API key comes from ``LLM_API_KEY_<NAME>`` (name upper-cased), else
 ``LOCAL_LLM_API_KEY``. Other settings (temperature, structured_output...) come from the
 profile's ``llm.summarizer``. ``--kind brief|report|both`` (default both). Nothing is stored.
+
+``--chat`` instead asks the same 5 questions (``CHAT_QUESTIONS``; the last one is not answerable
+from any story, so a good model refuses) about each story through every endpoint, using the
+profile's ``llm.chat`` settings, and prints time to first token, tokens/sec, verification and
+refusal rates and the answers.
 """
 
 import asyncio
@@ -151,6 +156,77 @@ async def run(env, endpoints, n_stories: int, kind: str = "both") -> int:
     return 0
 
 
+CHAT_QUESTIONS = (
+    "What happened?",
+    "Who is involved?",
+    "Why does it matter?",
+    "What happens next?",
+    "What did the sources say about the weather on Mars?",
+)
+
+
+async def run_chat(env, endpoints, n_stories: int) -> int:
+    from app.chat.smoke import answer_once, chat_role
+
+    stories = newest_stories(env, n_stories)
+    base = chat_role(env)
+    results: dict[str, list] = {}
+    for name, url, model in endpoints:
+        key = os.environ.get(f"LLM_API_KEY_{name.upper()}") or os.environ.get("LOCAL_LLM_API_KEY")
+        role = base.model_copy(
+            update={"base_url": url, "model": model, "api_key": SecretStr(key) if key else None}
+        )
+        print(f"{name}: {len(stories)} stories x {len(CHAT_QUESTIONS)} questions", file=sys.stderr)
+        results[name] = [
+            (s, q, (await answer_once(env, role, s.story_id, q, [], echo=False))[0])
+            for s in stories
+            for q in CHAT_QUESTIONS
+        ]
+    print(f"# Chat comparison ({len(stories)} stories x {len(CHAT_QUESTIONS)} questions)\n")
+    print(
+        "| Endpoint | Model | Complete | Verified | Refused unanswerable | Refused answerable "
+        "| Median first token | Median total | Tokens/sec | Avg words | Errors |"
+    )
+    print("|---" * 11 + "|")
+    for name, _url, model in endpoints:
+        rows = results[name]
+        done = [a for _s, _q, a in rows if a.status == "complete"]
+        verified = sum(bool(a.verification and a.verification["verified"]) for a in done)
+        last = CHAT_QUESTIONS[-1]
+        refusals = [
+            (q == last, bool(a.verification and a.verification["refusal"]))
+            for _s, q, a in rows
+            if a.status == "complete"
+        ]
+        unanswerable = sum(r for u, r in refusals if u), sum(u for u, _ in refusals)
+        answerable = sum(r for u, r in refusals if not u), sum(not u for u, _ in refusals)
+        errors = {}
+        for _s, _q, a in rows:
+            if a.error:
+                errors[a.error] = errors.get(a.error, 0) + 1
+        tps = [a.done_event()["tokens_per_second"] for a in done]
+        print(
+            f"| {name} | {_cell(model)} | {len(done)}/{len(rows)} | {verified}/{len(done)} | "
+            f"{unanswerable[0]}/{unanswerable[1]} | {answerable[0]}/{answerable[1]} | "
+            f"{_median(a.time_to_first_token_ms for a in done)} ms | "
+            f"{_median(a.latency_ms for a in done)} ms | {_median(tps)} | "
+            f"{_mean(len(a.text.split()) for a in done)} | "
+            f"{_cell(', '.join(f'{k} x{v}' for k, v in errors.items()) or '-')} |"
+        )
+    names = [e[0] for e in endpoints]
+    print("\n## Answers\n")
+    print("| Story | Question | " + " | ".join(names) + " |")
+    print("|---" * (len(names) + 2) + "|")
+    for i, (story, question, _a) in enumerate(results[names[0]]):
+        cells = []
+        for name in names:
+            a = results[name][i][2]
+            flag = "" if a.verification and a.verification["verified"] else " (unverified)"
+            cells.append(_cell((a.text or f"[{a.error}]")[:300] + flag))
+        print(f"| {_cell(story.title[:60])} | {question} | " + " | ".join(cells) + " |")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     utf8_stdout()
     p = parser(__doc__.splitlines()[0])
@@ -158,11 +234,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--stories", type=int, default=20)
     p.add_argument("--kind", choices=["brief", "report", "both"], default="both")
     p.add_argument("--markdown", action="store_true", help="Markdown output (the default)")
+    p.add_argument("--chat", action="store_true", help="compare story Q&A answers instead")
     args = p.parse_args(argv)
     try:
         endpoints = parse_endpoints(args.endpoints)
     except ValueError as exc:
         p.error(str(exc))
+    if args.chat:
+        return asyncio.run(run_chat(load(args), endpoints, args.stories))
     return asyncio.run(run(load(args), endpoints, args.stories, args.kind))
 
 

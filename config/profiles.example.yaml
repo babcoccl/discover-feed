@@ -23,6 +23,8 @@ profiles:
         url: https://hnrss.org/frontpage
         refresh_minutes: 30
         tags: [tech]
+        # Links to other publishers: citations show the article's domain "via Hacker News".
+        aggregator: true
       - name: Ars Technica
         type: rss
         url: https://feeds.arstechnica.com/arstechnica/index
@@ -85,11 +87,14 @@ profiles:
         url: https://www.federalreserve.gov/feeds/press_all.xml
         refresh_minutes: 15
         tags: [macro]
+        # The publisher is the subject: briefs/reports say "according to the Fed".
+        first_party: true
       # sec.gov asks for a contact in the User-Agent: set DISCOVER_CONTACT_EMAIL.
       - name: SEC press releases
         type: rss
         url: https://www.sec.gov/news/pressreleases.rss
         tags: [regulation]
+        first_party: true
       - name: CNBC Markets
         type: rss
         url: https://www.cnbc.com/id/20910258/device/rss/rss.html

@@ -43,12 +43,13 @@
 {% endif %}
 <p id="story-updated" hidden class="mb-4 max-w-3xl rounded-lg bg-sky-50 px-3 py-2 text-sm text-sky-900 dark:bg-sky-950 dark:text-sky-200" role="status">A newer version of this story is ready. <a href="" class="font-semibold underline">Reload</a></p>
 {% include "_report.html" %}
+{% include "_chat.html" %}
 {% if numbered %}
 <section class="mb-6 max-w-3xl" aria-labelledby="sources-heading">
   <h2 id="sources-heading" class="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Sources</h2>
   <ol class="divide-y divide-slate-200 overflow-hidden rounded-xl border border-slate-200 bg-white text-sm dark:divide-slate-800 dark:border-slate-800 dark:bg-slate-900" aria-label="Cited sources">
     {% for c in numbered %}
-    <li id="source-{{ c.index }}" class="flex gap-2 p-3"><span class="shrink-0 font-semibold text-sky-700 dark:text-sky-400">[{{ c.index }}]</span><span><a href="{{ c.url }}" target="_blank" rel="noopener noreferrer" class="font-medium hover:underline">{{ c.headline }} <span aria-hidden="true" class="text-sky-700 dark:text-sky-400">↗</span></a> <span class="text-slate-500 dark:text-slate-400">· {{ c.source }}</span></span></li>
+    <li id="source-{{ c.index }}" class="flex gap-2 p-3"><span class="shrink-0 font-semibold text-sky-700 dark:text-sky-400">[{{ c.index }}]</span><span><a href="{{ c.url }}" target="_blank" rel="noopener noreferrer" class="font-medium hover:underline">{{ c.headline }} <span aria-hidden="true" class="text-sky-700 dark:text-sky-400">↗</span></a> <span class="text-slate-500 dark:text-slate-400">· <span data-publisher>{{ c.publisher or c.source }}</span>{% if c.via %} <span class="text-xs" data-via>via {{ c.via }}</span>{% endif %}</span></span></li>
     {% endfor %}
   </ol>
 </section>
@@ -60,7 +61,7 @@
   {% for article in others %}
   <li class="p-4">
     <div class="mb-1 flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
-      <span class="font-medium text-slate-700 dark:text-slate-300">{{ names.get(article.source_id, article.source_id) }}</span>
+      <span class="font-medium text-slate-700 dark:text-slate-300" data-publisher>{{ article.publisher or article.source }}</span>{% if article.via %}<span data-via>via {{ article.via }}</span>{% endif %}
       <span aria-hidden="true">·</span>
       <time datetime="{{ article.published_at.isoformat() }}" title="{{ article.published_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ article.published_at | reltime }}</time>
     </div>

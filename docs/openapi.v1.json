@@ -1,6 +1,33 @@
 {
   "components": {
     "schemas": {
+      "AskV1": {
+        "properties": {
+          "conversation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Continue this conversation; omit to start one.",
+            "title": "Conversation Id"
+          },
+          "question": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Question",
+            "type": "string"
+          }
+        },
+        "required": [
+          "question"
+        ],
+        "title": "AskV1",
+        "type": "object"
+      },
       "BriefOut": {
         "properties": {
           "basis": {
@@ -101,6 +128,116 @@
         "title": "BriefOut",
         "type": "object"
       },
+      "ChatCitationV1": {
+        "properties": {
+          "article_id": {
+            "title": "Article Id",
+            "type": "integer"
+          },
+          "headline": {
+            "title": "Headline",
+            "type": "string"
+          },
+          "index": {
+            "title": "Index",
+            "type": "integer"
+          },
+          "publisher": {
+            "title": "Publisher",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          },
+          "via": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Via"
+          }
+        },
+        "required": [
+          "index",
+          "article_id",
+          "source",
+          "publisher",
+          "headline",
+          "url"
+        ],
+        "title": "ChatCitationV1",
+        "type": "object"
+      },
+      "ChatStatusV1": {
+        "examples": [
+          {
+            "message": "",
+            "model": "qwen3.5-9b",
+            "profile": "personal-reader",
+            "prompt_version": "chat-v1",
+            "state": "ok"
+          }
+        ],
+        "properties": {
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profile"
+          },
+          "prompt_version": {
+            "default": "chat-v1",
+            "title": "Prompt Version",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "ok",
+              "unset",
+              "unreachable",
+              "unauthorized"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile",
+          "state",
+          "message"
+        ],
+        "title": "ChatStatusV1",
+        "type": "object"
+      },
       "CitationOut": {
         "properties": {
           "headline": {
@@ -112,6 +249,12 @@
             "title": "Index",
             "type": "integer"
           },
+          "publisher": {
+            "default": "",
+            "description": "The primary label: the article URL's domain (e.g. `ai.meta.com`).",
+            "title": "Publisher",
+            "type": "string"
+          },
           "source": {
             "title": "Source",
             "type": "string"
@@ -120,6 +263,18 @@
             "description": "The cited article's own permalink (never the canonical URL).",
             "title": "Url",
             "type": "string"
+          },
+          "via": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The aggregator feed it came through (`Hacker News`), shown as \"via ...\"; null for a publisher's own feed.",
+            "title": "Via"
           }
         },
         "required": [
@@ -151,6 +306,86 @@
           "citations"
         ],
         "title": "CitedTextOut",
+        "type": "object"
+      },
+      "ConversationV1": {
+        "examples": [
+          {
+            "created_at": "2026-10-12T08:30:00Z",
+            "id": "0b6c3f9e-8a51-4c1e-9f0e-2d7a1b5c4e10",
+            "last_active_at": "2026-10-12T08:31:00Z",
+            "messages": [
+              {
+                "content": "When does it ship?",
+                "created_at": "2026-10-12T08:30:00Z",
+                "id": 1,
+                "role": "user",
+                "status": "complete"
+              },
+              {
+                "citations": [
+                  {
+                    "article_id": 7,
+                    "headline": "Meta unveils ...",
+                    "index": 1,
+                    "publisher": "ai.meta.com",
+                    "source": "Hacker News",
+                    "url": "https://ai.meta.com/blog/...",
+                    "via": "Hacker News"
+                  }
+                ],
+                "content": "The company says it ships in May [1].",
+                "created_at": "2026-10-12T08:30:05Z",
+                "id": 2,
+                "role": "assistant",
+                "status": "complete",
+                "verification": {
+                  "cited": [
+                    1
+                  ],
+                  "refusal": false,
+                  "verified": true
+                }
+              }
+            ],
+            "story_id": 42
+          }
+        ],
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "last_active_at": {
+            "format": "date-time",
+            "title": "Last Active At",
+            "type": "string"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/MessageV1"
+            },
+            "title": "Messages",
+            "type": "array"
+          },
+          "story_id": {
+            "title": "Story Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "story_id",
+          "created_at",
+          "last_active_at",
+          "messages"
+        ],
+        "title": "ConversationV1",
         "type": "object"
       },
       "FeedV1": {
@@ -256,6 +491,74 @@
         "title": "FeedV1",
         "type": "object"
       },
+      "FollowupsV1": {
+        "examples": [
+          {
+            "generated_at": "2026-10-12T08:30:00Z",
+            "model": "qwen3.5-9b",
+            "questions": [
+              "When will the chip ship?",
+              "Who are its first customers?",
+              "How does it compare with rivals?"
+            ],
+            "state": "ready",
+            "story_id": 42
+          }
+        ],
+        "properties": {
+          "generated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generated At"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "questions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Questions",
+            "type": "array"
+          },
+          "state": {
+            "description": "`pending`: not generated yet (they appear after the report); `unavailable`: chat is off or generation failed.",
+            "enum": [
+              "ready",
+              "pending",
+              "unavailable"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "story_id": {
+            "title": "Story Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "story_id",
+          "state",
+          "questions"
+        ],
+        "title": "FollowupsV1",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -305,6 +608,125 @@
           "version"
         ],
         "title": "HealthV1",
+        "type": "object"
+      },
+      "MessageV1": {
+        "properties": {
+          "citations": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ChatCitationV1"
+            },
+            "title": "Citations",
+            "type": "array"
+          },
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "latency_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency Ms"
+          },
+          "model": {
+            "default": "",
+            "title": "Model",
+            "type": "string"
+          },
+          "prompt_version": {
+            "default": "",
+            "title": "Prompt Version",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "user",
+              "assistant"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "complete",
+              "streaming",
+              "incomplete",
+              "error"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "time_to_first_token_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time To First Token Ms"
+          },
+          "tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens"
+          },
+          "verification": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`{verified, refusal, cited, checks}` (answers only).",
+            "title": "Verification"
+          }
+        },
+        "required": [
+          "id",
+          "role",
+          "content",
+          "status",
+          "created_at"
+        ],
+        "title": "MessageV1",
         "type": "object"
       },
       "ProfileV1": {
@@ -688,6 +1110,12 @@
             "title": "Published At",
             "type": "string"
           },
+          "publisher": {
+            "default": "",
+            "description": "The primary label: the article URL's domain (`ai.meta.com`).",
+            "title": "Publisher",
+            "type": "string"
+          },
           "title": {
             "title": "Title",
             "type": "string"
@@ -696,6 +1124,18 @@
             "description": "The publisher's own permalink (the raw feed URL).",
             "title": "Url",
             "type": "string"
+          },
+          "via": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The aggregator feed (`Hacker News`) when there is one.",
+            "title": "Via"
           }
         },
         "required": [
@@ -745,6 +1185,7 @@
               {
                 "name": "The Verge",
                 "published_at": "2026-10-12T08:30:00Z",
+                "publisher": "theverge.com",
                 "title": "Chipmaker unveils agent-ready accelerator",
                 "url": "https://www.theverge.com/2026/10/12/chip-launch"
               }
@@ -1093,6 +1534,156 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/chat": {
+      "get": {
+        "operationId": "chat_status_api_v1_chat_get",
+        "parameters": [
+          {
+            "description": "Default: the worker's profile.",
+            "in": "query",
+            "name": "profile",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Default: the worker's profile.",
+              "title": "Profile"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatStatusV1"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Is story Q&A available?",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
+    "/api/v1/conversations/{conversation_id}": {
+      "delete": {
+        "operationId": "delete_conversation_api_v1_conversations__conversation_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Delete a conversation",
+        "tags": [
+          "v1"
+        ]
+      },
+      "get": {
+        "operationId": "get_conversation_api_v1_conversations__conversation_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationV1"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "A conversation with its messages",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
     "/api/v1/health": {
       "get": {
         "operationId": "health_api_v1_health_get",
@@ -1554,6 +2145,155 @@
           }
         ],
         "summary": "One published story",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
+    "/api/v1/stories/{story_id}/ask": {
+      "post": {
+        "description": "Answers come only from the story's numbered sources, with `[n]` citations, checked\nafterwards (`done.verification`). Unpublished stories are 404.",
+        "operationId": "ask_api_v1_stories__story_id__ask_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "story_id",
+            "required": true,
+            "schema": {
+              "title": "Story Id",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Whose `llm.chat` answers; default: the worker's.",
+            "in": "query",
+            "name": "profile",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Whose `llm.chat` answers; default: the worker's.",
+              "title": "Profile"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AskV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {}
+            },
+            "description": "`text/event-stream`, in this order:\n- `meta` `{conversation_id, message_id, model}`\n- `waiting` `{reason, message}` (only while the model is busy with background work)\n- `token` `{text}` (one per streamed chunk)\n- `citations` `{citations: [{index, article_id, source, publisher, via, headline, url}]}`\n- `done` `{verification: {verified, refusal, cited, checks}, tokens, latency_ms,\n  time_to_first_token_ms, tokens_per_second, finish_reason, model}`\n- or, instead of `citations`/`done`, `error` `{reason, message, detail, partial}` with\n  `reason` one of `timeout`, `model_busy`, `unreachable`, `upstream_error`, `empty_output`,\n  `http_<status>`, `story_unavailable`. A partial answer is stored as `incomplete`.\n\nClosing the connection stops generation upstream."
+          },
+          "404": {
+            "description": "Story not published, or unknown conversation."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "description": "No chat endpoint is configured for the profile."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Ask a follow-up question (streams the answer)",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
+    "/api/v1/stories/{story_id}/followups": {
+      "get": {
+        "operationId": "followups_api_v1_stories__story_id__followups_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "story_id",
+            "required": true,
+            "schema": {
+              "title": "Story Id",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Default: the worker's profile.",
+            "in": "query",
+            "name": "profile",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Default: the worker's profile.",
+              "title": "Profile"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FollowupsV1"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Up to 3 suggested follow-up questions",
         "tags": [
           "v1"
         ]

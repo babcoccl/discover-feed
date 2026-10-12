@@ -32,6 +32,7 @@ def init_db(engine: Engine) -> None:
     _add_summary_kind(engine)
     _add_story_lifecycle(engine)
     _add_attempt_quality_columns(engine)
+    _add_source_flags(engine)
 
 
 def _add_article_url(engine: Engine) -> None:
@@ -154,6 +155,16 @@ def _add_attempt_quality_columns(engine: Engine) -> None:
         for name, ddl in _ATTEMPT_COLUMNS.items():
             if name not in existing:
                 conn.execute(text(f"ALTER TABLE generation_attempts ADD COLUMN {name} {ddl}"))
+
+
+def _add_source_flags(engine: Engine) -> None:
+    with engine.begin() as conn:
+        existing = {c["name"] for c in inspect(conn).get_columns("sources")}
+        for name in ("aggregator", "first_party"):
+            if name not in existing:
+                conn.execute(
+                    text(f"ALTER TABLE sources ADD COLUMN {name} BOOLEAN NOT NULL DEFAULT 0")
+                )
 
 
 def ping(engine: Engine) -> bool:

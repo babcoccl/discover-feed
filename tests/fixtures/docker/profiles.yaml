@@ -51,6 +51,7 @@ profiles:
     refresh_minutes: 30
     tags:
     - tech
+    aggregator: true
   - name: Ars Technica
     type: rss
     url: http://fixtures:8081/feeds/ars-technica.xml
