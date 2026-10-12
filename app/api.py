@@ -166,7 +166,7 @@ class ReportOut(BaseModel):
     state: Literal["ready", "pending", "skipped", "failed"] = Field(
         description="`pending`: published before its report (see `label`); `failed`: "
         "generation or validation failed; `skipped`: not enough source text (see `details`) "
-        "or reports are off."
+        "the brief failed for good (`brief_failed`) or reports are off."
     )
     status: Literal["ok", "pending", "failed", "skipped"] = Field(
         description="Deprecated name of `state` (`ok` = `ready`)."

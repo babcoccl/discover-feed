@@ -42,6 +42,7 @@ logger = logging.getLogger(__name__)
 
 REPORT_PENDING_LABEL = "Detailed report still generating"
 REPORTS_OFF = "reports_off"
+BRIEF_FAILED = "brief_failed"
 
 
 @dataclass(frozen=True)
@@ -128,6 +129,9 @@ def assess(
     report_job = session.get(SummaryJob, (story_id, SummaryKind.REPORT.value))
     if policy.reports_off:
         report, report_reason = "skipped", REPORTS_OFF
+    elif report_row is None and brief == "failed" and report_job is None:
+        # The worker writes no report once the brief has failed for good.
+        report, report_reason = "skipped", BRIEF_FAILED
     elif report_row is None:
         report, report_reason = "pending", None
     elif report_row.status == SummaryStatus.OK:

@@ -21,7 +21,7 @@
   {%- elif report_state == "skipped" %}
   <div class="text-sm text-slate-600 dark:text-slate-400" data-report-skipped>
     {% if report.reason == "reports_off" %}<p>Reports are turned off for this profile.</p>
-    {% else %}<p>Report unavailable ({{ "not enough source text" if report.reason == "insufficient_text" else report.reason }}).</p>
+    {% else %}<p>Report unavailable ({{ {"insufficient_text": "not enough source text", "brief_failed": "the summary could not be generated", "reports_off": "reports are off"}.get(report.reason, report.reason) }}).</p>
     {% if report.details %}<ul class="mt-1 list-disc pl-5 text-xs text-slate-500 dark:text-slate-400" data-report-details>{% for d in report.details %}<li>{{ d }}</li>{% endfor %}</ul>{% endif %}{% endif %}
   </div>
   {%- else %}

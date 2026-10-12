@@ -462,7 +462,7 @@ def test_story_page_states(demo) -> None:
         i
         for p in ("personal-reader", "market-monitor")
         for i in _feed(demo, p)
-        if i["report"]["state"] == "skipped"
+        if i["report"]["state"] == "skipped" and i["report"]["reason"] == "insufficient_text"
     )
     page = demo.get(f"/story/{skipped['id']}").text
     assert 'data-report="skipped"' in page and "not enough source text" in page

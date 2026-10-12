@@ -118,9 +118,9 @@ def build_demo(
     demo_base: str = DEMO_BASE,
 ) -> DemoBuild:
     """``summarize_limit``: summarize only the newest N stories now (default: all); the rest
-    stay queued for "Summarize now" in Settings > Pipeline. Reports are generated now for
-    every multi-source story (the fixtures are older than the auto window) unless
-    ``report_mode`` is ``on_demand`` or ``off``. ``fake_delay``: seconds the fake LLM takes
+    stay queued for "Summarize now" in Settings > Pipeline. Every story is generated and
+    published now (the fixtures are older than the backfill window) unless ``report_mode``
+    is ``off``. ``fake_delay``: seconds the fake LLM takes
     per answer once the app runs (shows the "Generating detailed report" state)."""
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -208,9 +208,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--report-mode",
-        choices=["auto", "on_demand", "off"],
-        help="override the profiles' summaries.report_mode (on_demand: reports are written "
-        "when a story page is opened)",
+        choices=["auto", "off"],
+        help="override the profiles' summaries.report_mode",
     )
     parser.add_argument(
         "--fake-llm-delay",
