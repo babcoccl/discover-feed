@@ -96,8 +96,8 @@
   <p class="mb-3 max-w-3xl text-sm text-slate-600 dark:text-slate-400">Secrets are environment references like <code>${NTFY_TOKEN}</code>: only the variable name is stored, the value is read when sending.</p>
   <div class="grid gap-3 md:grid-cols-2" data-channels>
   {% for c in channels %}
-    <article class="{{ card }} p-4" data-channel="{{ c.key }}">
-      <div class="flex items-start justify-between gap-2">
+    <article class="{{ card }} min-w-0 p-4" data-channel="{{ c.key }}">
+      <div class="flex flex-wrap items-start justify-between gap-2">
         <div class="min-w-0"><h3 class="font-semibold">{{ c.name }} <span class="text-xs font-normal text-slate-500">{{ c.type }} · {{ c.key }}{% if not c.enabled %} · disabled{% endif %}</span></h3>
           <p class="truncate text-xs text-slate-500 dark:text-slate-400">{% if c.type == 'webhook' %}{{ c.config.url }}{% elif c.type == 'ntfy' %}{{ c.config.server }} / {{ c.config.topic }}{% else %}{{ c.config.host }}:{{ c.config.port }} ({{ c.config.tls }}) → {{ (c.config.to or []) | join(", ") }}{% endif %}</p>
           {% if c.secret_env %}<p class="text-xs text-slate-500">{% for k, v in c.secret_env.items() %}{{ k }}: <code>${ {{- v -}} }</code> {% endfor %}</p>{% endif %}
