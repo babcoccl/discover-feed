@@ -488,9 +488,7 @@ def test_card_href_is_the_feeds_raw_link(demo_client: TestClient) -> None:
     _ingest_raw_link(demo_client)
     html = demo_client.get("/p/personal-reader").text
     href = RAW_LINK.replace("&", "&amp;")
-    assert (
-        html.count(f'href="{href}" target="_blank" rel="noopener noreferrer"') == 3
-    )  # not clustered yet: the card links to the article
+    assert href not in html  # not published yet: only the Pipeline panel shows it
     assert "raw-link-story?" not in html  # never the canonical (dedup) form
 
 
@@ -504,6 +502,7 @@ def test_articles_api_returns_url_and_canonical_url(demo_client: TestClient) -> 
     assert item["url"] == RAW_LINK
     assert item["canonical_url"] == "https://news.example.com/2026/10/raw-link-story/?id=42"
     feed = demo_client.get("/api/profiles/personal-reader/feed?group=articles&limit=100").json()
-    assert next(i for i in feed["items"] if i["title"] == "Raw link story")["url"] == RAW_LINK
+    assert all(i["title"] != "Raw link story" for i in feed["items"])  # unpublished
+    assert feed["items"] and all(i["url"].startswith("http") for i in feed["items"])
     schema = demo_client.get("/openapi.json").json()["components"]["schemas"]["ArticleOut"]
     assert "link to show users" in schema["properties"]["url"]["description"].lower()

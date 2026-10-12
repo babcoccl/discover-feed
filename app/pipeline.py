@@ -149,6 +149,8 @@ class Pipeline:
         if self.summaries is None or not self.summaries.enabled:
             return
         try:
+            if result.rebuild:  # new story ids: regenerate all (cached input -> no LLM call)
+                self.summaries.enqueue_all()
             if result.story_ids or result.rebuild:
                 self.summaries.start()
         except Exception:

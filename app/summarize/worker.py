@@ -163,15 +163,23 @@ class SummaryWorker:
         """Stories to work on, in order: Prioritize first, then newest. Never-published
         stories must be updated within ``backfill_hours`` (at most ``backfill_max``)."""
         now = self.clock()
-        backing_off = select(SummaryJob.story_id).where(
-            SummaryJob.next_attempt_at > now, SummaryJob.force.is_(False)
-        )
-        forced = select(SummaryJob.story_id).where(_due(now), SummaryJob.force.is_(True))
+        backing_off = select(SummaryJob.story_id).where(SummaryJob.next_attempt_at > now)
+        # Asked for explicitly (Retry, Regenerate, the admin API) or a retry that came due.
+        requested = select(SummaryJob.story_id).where(_due(now))
+        # A brief that failed for good (no retry queued) waits for the fallback timer.
+        brief_failed = (Story.state == StoryState.CLUSTERED) & func.coalesce(
+            Story.state_reason, ""
+        ).startswith("brief failed")
         stmt = select(Story.id, Story.published_version).where(
             Story.state.in_(_LIVE),
-            or_(Story.state.in_(WORK_STATES), Story.id.in_(forced)),
-            ~Story.id.in_(backing_off) | Story.id.in_(forced),
-            or_(Story.published_version.is_not(None), Story.last_updated_at >= now - self.backfill),
+            or_(Story.state.in_(WORK_STATES), Story.id.in_(requested)),
+            ~Story.id.in_(backing_off) | Story.id.in_(requested),
+            ~brief_failed | Story.id.in_(requested),
+            or_(
+                Story.published_version.is_not(None),
+                Story.last_updated_at >= now - self.backfill,
+                Story.id.in_(requested),
+            ),
         )
         if story_id is not None:
             stmt = select(Story.id, Story.published_version).where(Story.id == story_id)
@@ -221,13 +229,22 @@ class SummaryWorker:
                 self.state.paused_until = None
             self.state.running = True
             result = SummarizeRunResult()
-            with self.session_factory() as session:
-                ids = self.candidates(session, story_id)
-            for sid in ids[: limit or self.max_per_run]:
-                if self._paused(self.clock(), manual):
+            budget = limit or self.max_per_run  # stories needing the LLM (cache hits are free)
+            done: set[int] = set()
+            while budget > 0 and not self._paused(self.clock(), manual):
+                with self.session_factory() as session:
+                    ids = [i for i in self.candidates(session, story_id) if i not in done]
+                if not ids:
                     break
-                self.state.current_story = sid
-                result.outcomes.extend(await self.process(sid, kinds, manual=manual))
+                for sid in ids:
+                    if budget <= 0 or self._paused(self.clock(), manual):
+                        break
+                    done.add(sid)
+                    self.state.current_story = sid
+                    outcomes = await self.process(sid, kinds, manual=manual)
+                    result.outcomes.extend(outcomes)
+                    if any(o.status not in ("cached", "reused", "skipped") for o in outcomes):
+                        budget -= 1
             for outcome in result.outcomes:
                 result.processed += 1
                 key = outcome.status
@@ -304,10 +321,10 @@ class SummaryWorker:
             if story is None or item is None or story.state in _DEAD:
                 return None
             job = session.get(SummaryJob, (story_id, kind))
-            if job is not None and job.force:
-                return True, job.attempts
             if job is not None and job.next_attempt_at and job.next_attempt_at > now and not manual:
                 return None
+            if job is not None and job.force:
+                return True, job.attempts
             a = assess(
                 session, story_id, item, repo.source_names(session), self.summarizer, self.policy
             )
@@ -349,7 +366,7 @@ class SummaryWorker:
                 if job is None:
                     job = SummaryJob(story_id=story_id, kind=kind, queued_at=self.clock())
                     session.add(job)
-                job.force = False
+                job.force = job.force or force  # a Retry stays forced across backoff
                 job.attempts = attempts + 1
                 job.last_error = outcome.reason
                 delay = min(2**job.attempts, MAX_RETRY_MINUTES)

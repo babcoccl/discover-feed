@@ -1,5 +1,6 @@
 import json
 import re
+import time
 from pathlib import Path
 
 import pytest
@@ -157,8 +158,18 @@ def test_admin_extract_and_cluster_endpoints(app_client: TestClient) -> None:
     assert extract.status_code == 200 and extract.json()["processed"] == 0
     cluster = app_client.post("/api/admin/cluster").json()
     assert cluster["processed"] == 0 and cluster["multi_source_stories"] == 4
+    feed_url = "/api/profiles/personal-reader/feed?limit=100"
+    before = len(app_client.get(feed_url).json()["items"])
     rebuilt = app_client.post("/api/admin/cluster?rebuild=true").json()
     assert rebuilt["rebuild"] and rebuilt["multi_source_stories"] == 4
+    # New story ids are unpublished until regenerated (cached summaries: no LLM call).
+    for _ in range(200):
+        items = app_client.get(feed_url).json()["items"]
+        if any(i["source_count"] == 4 for i in items) and len(items) == before:
+            break
+        time.sleep(0.05)
+    else:
+        raise AssertionError("stories were not republished after a rebuild")
 
 
 def test_story_cards_badges_and_story_page(app_client: TestClient) -> None:
@@ -173,7 +184,8 @@ def test_story_cards_badges_and_story_page(app_client: TestClient) -> None:
     ai = next(t for t in topics if t["name"] == "AI")
     page = app_client.get(f"/story/{story_id}?p=personal-reader&topic={ai['id']}").text
     assert f'href="/p/personal-reader?topic={ai["id"]}"' in page and "Back to feed" in page
-    assert page.count('<li class="p-4">') == 4
+    # Every member is listed once: as a numbered source, or under "More coverage".
+    assert page.count('<li class="p-4">') + page.count('<li id="source-') == 4
     assert 'target="_blank" rel="noopener noreferrer"' in page
     story = app_client.get(f"/api/stories/{story_id}").json()
     for member in story["members"]:

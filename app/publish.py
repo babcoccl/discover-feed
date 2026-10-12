@@ -255,7 +255,9 @@ def decide(story: Story, a: Assessment, policy: Policy, now: datetime) -> tuple[
         waited = now - ready_at >= policy.max_wait
         return "report_pending", (not policy.requires_report) or waited
     if a.brief == "failed":
-        since = story.clustered_at or story.first_seen_at
+        # From the first article's publication (or clustering, if earlier): an old story
+        # re-clustered by a rebuild doesn't wait the fallback period again.
+        since = min(t for t in (story.clustered_at, story.first_seen_at, now) if t)
         if now - since >= policy.brief_fallback:
             return "brief_fallback", True
     return "draft", False

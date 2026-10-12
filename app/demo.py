@@ -18,6 +18,7 @@ import os
 import threading
 import webbrowser
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 
@@ -167,6 +168,8 @@ def build_demo(
         )
         # The fixtures are older than the backfill window: generate every story.
         worker.backfill, worker.backfill_max = timedelta(days=36500), 100_000
+        # Show the "Summary unavailable" fallback right away instead of after hours.
+        worker.policy = replace(worker.policy, brief_fallback=timedelta(0))
         summarized = asyncio.run(worker.run(manual=True, limit=summarize_limit or 100_000))
         if fake_delay and not real_llm:
             transport = FakeLLM("demo", delay=fake_delay).transport()

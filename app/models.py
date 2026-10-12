@@ -92,7 +92,7 @@ class Story(Base):
     """Latest member published_at."""
     article_count: Mapped[int] = mapped_column(Integer, default=0)
     source_count: Mapped[int] = mapped_column(Integer, default=0)
-    state: Mapped[str] = mapped_column(String(20), default="ingested", index=True)
+    state: Mapped[str] = mapped_column(String(20), default="clustered", index=True)
     """``StoryState``: where the story is in ingest -> ... -> published (``merged``: its
     articles joined ``merged_into``, which old links redirect to)."""
     state_reason: Mapped[str | None] = mapped_column(Text)

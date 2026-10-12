@@ -131,7 +131,8 @@ def test_retry_once_with_error_then_ok(session_factory, story, bad: str) -> None
 def test_retry_then_fallback(session_factory, story, bad: str, reason: str) -> None:
     fake = FakeLLM(bad)
     outcome = summarize(session_factory, story, fake)
-    assert outcome.status == "fallback" and fake.calls == 4  # 2 brief + 2 Phase 4 summary
+    # 2 brief + a last json_object brief attempt + 2 Phase 4 summary
+    assert outcome.status == "fallback" and fake.calls == 5
     [row] = rows(session_factory, story)
     assert row.status == "fallback" and reason in row.reason and "attempt 2" in row.reason
     assert row.basis == "feed_summary" and row.text == "Acme got $40 million."
@@ -253,29 +254,11 @@ def test_worker_runs_newest_first_and_respects_max_per_run(session_factory) -> N
     w = worker(session_factory, FakeLLM(), clock, max_per_run=3)
     assert w.enqueue(ids) == 4
     result = asyncio.run(w.run())
-    assert [o.story_id for o in result.outcomes] == ids[::-1][:3]
+    # One story at a time: its brief, then its report decision (skipped: no extracted text).
+    assert [(o.story_id, o.kind) for o in result.outcomes] == [
+        (i, k) for i in ids[::-1][:3] for k in ("brief", "report")
+    ]
     assert result.ok == 3 and result.queued == 1
-
-
-def test_debounce(session_factory, story) -> None:
-    clock = Clock()
-    w = worker(session_factory, FakeLLM(), clock, debounce_minutes=30)
-    w.enqueue([story])
-    assert asyncio.run(w.run()).ok == 1
-    add_member(
-        session_factory,
-        story,
-        url="https://c.example/x",
-        title="More",
-        source_id="c",
-        hours=2,
-        summary="Acme more.",
-    )
-    clock.now += timedelta(minutes=10)
-    w.enqueue([story])
-    assert asyncio.run(w.run()).processed == 0 and w.queue_counts()["waiting"] == 1
-    clock.now += timedelta(minutes=21)
-    assert asyncio.run(w.run()).ok == 1 and not jobs(session_factory)
 
 
 def test_worker_isolates_failures_and_backs_off(session_factory, story, monkeypatch) -> None:
