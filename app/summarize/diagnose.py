@@ -102,9 +102,10 @@ async def diagnose(
             )
         messages = build_messages(sources, kind=kind)
         words = sum(len(str(m["content"]).split()) for m in messages)
+        role = summarizer.report_client.role if kind == "report" else summarizer.client.role
         line(
-            f"prompt: {words} words, ~{estimate_tokens(words)} tokens; context "
-            f"{summarizer.report_client.role.context_tokens if kind == 'report' else summarizer.client.role.context_tokens} tokens"
+            f"prompt: {words} words, ~{estimate_tokens(words)} tokens; "
+            f"context {role.context_tokens} tokens, max_tokens {role.max_tokens}"
         )
         if kind == "report" and not report_eligibility(item, sources):
             line("report: skipped(insufficient_text) - no member has 150+ extracted words")
