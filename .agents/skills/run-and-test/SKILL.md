@@ -151,3 +151,19 @@ update it when fixtures or defaults change. README "Tuning clustering" has the f
   `summaries.max_inflight`.
 - Bump `BRIEF_PROMPT_VERSION` / `REPORT_PROMPT_VERSION` in `app/summarize/prompt.py` whenever
   that prompt changes (regenerates that kind for every story).
+
+## Story Q&A (chat)
+
+- Code: `app/chat/` (`context`, `prompt` with `CHAT_PROMPT_VERSION`, `service` streaming +
+  priority + cancellation, `verify`, `store`, `api`); streaming client `LLMClient.stream_chat`.
+- Profile keys in `summaries:`: `chat_context_words` (3000), `chat_history_turns` (6),
+  `chat_retention_days` (30), `chat_priority` (true), `chat_max_concurrent` (1), `followups` (true).
+  Source keys: `aggregator`, `first_party`.
+- Endpoints: `POST /api/v1/stories/{id}/ask` (SSE), `GET|DELETE /api/v1/conversations/{id}`,
+  `GET /api/v1/stories/{id}/followups`, `GET /api/v1/chat`. Example `examples/ask.py`.
+- Fake LLM chat modes: `stream_error stall empty invalid_citation invented_number injection_echo
+  http_500 timeout` (`FakeLLM(mode, chat_mode=..., token_delay=...)`; records
+  `cancelled_streams`). Demo: `--fake-chat-mode <mode>`. Tests: `tests/test_chat.py`.
+- Real model: `python -m app.chat.smoke --story-id N --question "..."`,
+  `python -m app.summarize.compare --chat --endpoints a=http://h:8080/v1:m --stories 5`.
+- llama-server: `-np` slots split `-c`; chat has priority over background generation with `-np 1`.
