@@ -124,8 +124,26 @@ def content_reason(result: ChatResult, error: str) -> str:
         return "reasoning_consumed_budget" if result.reasoning_length else "empty_content"
     if "not a valid JSON object" in error:
         return "invalid_json"
-    rule = re.sub(r"[^a-z0-9]+", "_", error.lower().split(":")[0]).strip("_")[:48]
+    low = error.lower()
+    for needle, rule in _VALIDATION_RULES:
+        if needle in low:
+            return f"validation:{rule}"
+    rule = re.sub(r"[^a-z0-9]+", "_", low.split(":")[0]).strip("_")[:48]
     return f"validation:{rule or 'invalid'}"
+
+
+_VALIDATION_RULES = (
+    ("not found in its cited sources", "invented_number"),
+    ("word for word", "verbatim_overlap"),
+    ("valid source indexes", "citation_range"),
+    ("cite", "citation"),
+    ("duplicate", "duplicate"),
+    ("repeats", "duplicate"),
+    ("words", "length"),
+    ("bullet", "bullet_count"),
+    ("paragraph", "paragraph_count"),
+    ("sentence", "lead_sentence"),
+)
 
 
 def trim_sources(
