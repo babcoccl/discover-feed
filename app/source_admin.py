@@ -198,7 +198,15 @@ def remove_source(session: Session, record: SourceRecord) -> SourceRecord:
 
 
 def restore_source(session: Session, record: SourceRecord) -> SourceRecord:
+    """Undelete and re-enable (an X source without a monthly cap stays disabled)."""
     record.removed_at = None
+    try:
+        build_source({**record.to_config().model_dump(mode="json"), "enabled": True})
+    except SourceError:
+        record.enabled = False
+    else:
+        _clear_disabled(session, record)
+        record.enabled = True
     session.commit()
     return record
 

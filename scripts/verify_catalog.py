@@ -1,6 +1,6 @@
 """Fetch every config/source_catalog.yaml URL and check it parses as a feed (network!).
 
-    python scripts/verify_catalog.py [--out catalog-check.md]
+python scripts/verify_catalog.py [--out catalog-check.md]
 """
 
 import argparse
@@ -14,8 +14,8 @@ import feedparser
 import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from app.ingest import USER_AGENT  # noqa: E402
-from app.source_admin import load_catalog  # noqa: E402
+from app.ingest import USER_AGENT
+from app.source_admin import load_catalog
 
 
 async def check(client: httpx.AsyncClient, entry) -> tuple:
