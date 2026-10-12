@@ -193,6 +193,27 @@ class SourceType(StrEnum):
     ATOM = "atom"
     WEB = "web"
     API = "api"
+    GUARDIAN = "guardian"
+    NEWSDATA = "newsdata"
+    X = "x"
+
+
+FEED_TYPES = frozenset({SourceType.RSS, SourceType.ATOM})
+API_TYPES = frozenset({SourceType.GUARDIAN, SourceType.NEWSDATA, SourceType.X})
+API_PARAMS: dict[SourceType, tuple[str, ...]] = {
+    SourceType.GUARDIAN: ("q", "section", "from_date", "page_size", "max_pages", "base_url"),
+    SourceType.NEWSDATA: ("q", "country", "language", "category", "max_pages", "base_url"),
+    SourceType.X: ("query", "users", "base_url"),
+}
+"""Allowed ``params`` keys per API source type (``base_url`` points at a fake/proxy API)."""
+
+
+API_HOMES = {
+    SourceType.GUARDIAN: "https://content.guardianapis.com/",
+    SourceType.NEWSDATA: "https://newsdata.io/",
+    SourceType.X: "https://api.x.com/",
+}
+_ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def slugify(value: str) -> str:
@@ -207,7 +228,9 @@ class Source(_Model):
     )
     name: str = Field(min_length=1)
     type: SourceType = SourceType.RSS
-    url: HttpUrl
+    url: HttpUrl | None = Field(
+        default=None, description="Feed URL (rss/atom); API sources default to the API home."
+    )
     enabled: bool = True
     refresh_minutes: int = Field(default=30, ge=1)
     tags: list[str] = Field(default_factory=list)
@@ -221,6 +244,27 @@ class Source(_Model):
         description="The publisher is usually the subject of its own news (company blog, "
         "press releases, SEC/Fed releases): briefs and reports attribute its claims to it.",
     )
+    params: dict[str, Any] = Field(
+        default_factory=dict,
+        description="API source query: guardian q/section/from_date/page_size/max_pages, "
+        "newsdata q/country/language/category/max_pages, x query/users.",
+    )
+    api_key: str | None = Field(
+        default=None,
+        description="Environment variable holding the API key or bearer token (YAML: "
+        "``api_key: ${GUARDIAN_API_KEY}``); the value itself is never stored.",
+    )
+    daily_request_budget: int | None = Field(
+        default=None, ge=1, description="Stop calling the API for the (UTC) day after this many."
+    )
+    max_posts_per_run: int | None = Field(default=None, ge=1, le=100)
+    monthly_budget_usd: float | None = Field(
+        default=None, gt=0, description="X: hard spend cap per (UTC) month; required to fetch."
+    )
+    cost_per_read_usd: float = Field(default=0.005, gt=0)
+    social: bool = Field(
+        default=False, description="Short social posts: no extraction, no reports (X)."
+    )
 
     @model_validator(mode="after")
     def _default_id(self) -> "Source":
@@ -228,7 +272,35 @@ class Source(_Model):
             self.id = slugify(self.name)
         if not self.id:
             raise ValueError(f"cannot derive an id from source name {self.name!r}; set `id`")
+        if self.api_key is not None and not _ENV_NAME.match(self.api_key):
+            raise ValueError(f"source {self.id!r} api_key must be an environment variable name")
+        if self.type in API_TYPES:
+            allowed = API_PARAMS[self.type]
+            unknown = sorted(set(self.params) - set(allowed))
+            if unknown:
+                raise ValueError(
+                    f"source {self.id!r}: unknown {self.type.value} params {unknown}; "
+                    f"allowed: {', '.join(allowed)}"
+                )
+            self.params = {k: v for k, v in self.params.items() if v not in (None, "", [])}
+            if self.type is SourceType.X:
+                self.social = True
+                if not (self.params.get("query") or self.params.get("users")):
+                    raise ValueError(f"source {self.id!r}: x needs params.query or params.users")
+                if self.enabled and self.monthly_budget_usd is None:
+                    raise ValueError(
+                        f"source {self.id!r}: x sources need monthly_budget_usd before they "
+                        "can be enabled"
+                    )
+            if self.url is None:
+                self.url = HttpUrl(API_HOMES[self.type])
+        elif self.url is None:
+            raise ValueError(f"source {self.id!r}: {self.type.value} sources need a url")
         return self
+
+    @property
+    def is_api(self) -> bool:
+        return self.type in API_TYPES
 
 
 class MatchMode(StrEnum):
@@ -531,6 +603,11 @@ def _protect_secret_refs(raw: Any) -> Any:
     if not isinstance(raw, dict):
         return raw
     for profile in raw.get("profiles") or []:
+        for source in profile.get("sources") or [] if isinstance(profile, dict) else []:
+            if isinstance(source, dict) and source.get("api_key") not in (None, ""):
+                source["api_key"] = _NoExpand(
+                    secret_ref_name(source["api_key"], f"source {source.get('name')!r} api_key")
+                )
         alerts = profile.get("alerts") if isinstance(profile, dict) else None
         for channel in (alerts or {}).get("channels") or [] if isinstance(alerts, dict) else []:
             if not isinstance(channel, dict):

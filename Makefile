@@ -20,7 +20,7 @@ format:
 	$(PYTHON) -m ruff format .
 
 run:
-	$(PYTHON) -m uvicorn app.main:app --reload --host $(HOST) --port $(PORT)
+	$(PYTHON) -m uvicorn app.main:app --reload --host $(HOST) --port $(PORT) --timeout-graceful-shutdown 5
 
 # Throwaway demo DB (.demo/) seeded from the example profiles + fixture feeds; no network.
 # Fake LLM by default; real endpoint: make demo DEMO_ARGS="--real-llm --model <name>"

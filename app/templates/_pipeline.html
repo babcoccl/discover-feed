@@ -1,3 +1,14 @@
+{% include "_secret_warnings.html" %}
+{% if x_spend %}
+<dl class="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3" data-x-spend>
+  {% for x in x_spend %}
+  <div class="rounded-xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-800 dark:bg-slate-900">
+    <dt class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">X spend · {{ x.name }}</dt>
+    <dd class="text-xl font-semibold">${{ "%.2f" | format(x.spent) }}{% if x.cap %} <span class="text-sm font-normal text-slate-500">of ${{ "%.2f" | format(x.cap) }} this month</span>{% else %} <span class="text-sm font-normal text-slate-500">no cap: not fetched</span>{% endif %}</dd>
+  </div>
+  {% endfor %}
+</dl>
+{% endif %}
 {%- macro run_cell(name) -%}
 {%- set run = runs.get(name) -%}
 {% if run and run.last_run_at %}<time datetime="{{ run.last_run_at.isoformat() }}" title="{{ run.last_run_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ run.last_run_at | reltime }}</time>{% else %}<span class="text-slate-400">not yet</span>{% endif %}

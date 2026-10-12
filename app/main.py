@@ -39,11 +39,14 @@ from app.scheduler import (
     create_scheduler,
     schedule_alerts,
     schedule_chat,
-    schedule_ingestion,
     schedule_pipeline,
     schedule_summaries,
+    sync_ingestion_jobs,
 )
+from app.secret_warnings import log_missing_secrets
 from app.settings import Settings, get_settings
+from app.sources_api import router as sources_router
+from app.sources_web import router as sources_web_router
 from app.web import router as web_router
 
 logger = logging.getLogger("discover_feed")
@@ -147,6 +150,7 @@ def create_app(
             app.state.session_factory,
             timeout=settings.fetch_timeout_seconds,
             user_agent=build_user_agent(settings.contact_email),
+            auto_disable_failures=settings.source_auto_disable_failures,
         )
         app.state.pipeline = Pipeline(
             app.state.session_factory,
@@ -188,9 +192,11 @@ def create_app(
         await app.state.chat.check_all()
         app.state.chat.cleanup_blocking()
         _warn_missing_contact(sources, settings)
+        with app.state.session_factory() as session:
+            log_missing_secrets(session)
         scheduler = create_scheduler()
         if settings.scheduler_enabled:
-            schedule_ingestion(
+            sync_ingestion_jobs(
                 scheduler,
                 sources,
                 app.state.ingestor,
@@ -228,11 +234,13 @@ def create_app(
     app.state.demo_sink = demo_sink
     app.include_router(v1_router)
     app.include_router(alerts_router)
+    app.include_router(sources_router)
     app.include_router(chat_router)
     app.include_router(api_router, dependencies=[Depends(legacy_api_guard)])
     app.include_router(login_router)
     app.include_router(web_router, dependencies=[Depends(web_guard)])
     app.include_router(alerts_web_router, dependencies=[Depends(web_guard)])
+    app.include_router(sources_web_router, dependencies=[Depends(web_guard)])
     for route in api_router.routes:
         if "GET" in getattr(route, "methods", ()) and "/admin/" not in route.path:
             route.deprecated = True
