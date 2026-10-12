@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Show HN: A local LLM that runs on a Raspberry Pi 5 | Hacker News: Front Page</title>
+  <meta name="description" content="A 3B-parameter model quantized to 4 bits answers questions offline at about 6 tokens per second.">
+</head>
+<body>
+  <header>
+    <a href="/">Hacker News: Front Page</a>
+    <nav><a href="/news">News</a> <a href="/latest">Latest</a> <a href="/newsletters">Newsletters</a> <a href="/about">About</a></nav>
+  </header>
+  <main>
+    <article>
+      <h1>Show HN: A local LLM that runs on a Raspberry Pi 5</h1>
+      <p class="byline">Published 2026-10-07 15:00 UTC</p>
+      <p>I wanted to see how far a small language model could go on a single-board computer, so I spent a few weekends getting a 3-billion-parameter model running on a Raspberry Pi 5 with 8GB of RAM. It answers questions completely offline at about six tokens per second, which is slow but usable for short answers.</p>
+      <p>The model is quantized to 4 bits, bringing its weights down to about 1.9GB. I use a popular open-source inference engine compiled with the Arm NEON optimizations enabled. Getting the build right mattered: a generic build ran at under three tokens per second, and enabling the right compiler flags roughly doubled throughput.</p>
+      <p>Thermals were the next problem. Under sustained load the Pi throttled after about two minutes, dropping speed by a third. An active cooler fixed that, and the board now holds its clock speed indefinitely. Power draw peaks around 9 watts, so the whole setup can run from a small battery pack for several hours.</p>
+      <p>I built a tiny web interface that runs on the Pi and can be opened from any phone on the same network. It keeps a short conversation history and trims older turns so the context stays under 2,048 tokens, which keeps prompt processing fast. Longer contexts work, but each new answer takes noticeably longer to start.</p>
+      <p>Quality is what you would expect from a small model. It handles simple factual questions, rewording text and basic coding help reasonably well, but it makes things up when asked about niche topics. I added a small local document store so it can answer questions about my own notes, which turned out to be the most useful feature.</p>
+      <p>The code and setup scripts are in the repository. I would love feedback on better quantization formats for Arm, and on whether anyone has tried running two Pis together to split a larger model across devices.</p>
+    </article>
+    <aside>
+      <h2>Most read</h2>
+      <ul><li><a href="/1">Sign up for our daily newsletter</a></li><li><a href="/2">Contact the newsroom</a></li></ul>
+    </aside>
+  </main>
+  <footer>&copy; 2026 Hacker News: Front Page. <a href="/terms">Terms of use</a> <a href="/privacy">Privacy policy</a></footer>
+</body>
+</html>

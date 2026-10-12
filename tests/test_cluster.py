@@ -9,6 +9,7 @@ from app.cluster.service import run_clustering
 from app.cluster.tokens import significant_tokens
 from app.db import make_engine, make_session_factory
 from app.demo import build_demo
+from app.demo_pages import fixture_id
 from app.models import Article, Story
 from tests.pipeline_helpers import T0, add_article
 
@@ -33,7 +34,7 @@ def groups(session_factory) -> dict[int, set[str]]:
     with session_factory() as session:
         out: dict[int, set[str]] = {}
         for a in session.scalars(select(Article).where(Article.story_id.is_not(None))):
-            out.setdefault(a.story_id, set()).add(a.url)
+            out.setdefault(a.story_id, set()).add(fixture_id(a.url))
         return out
 
 
@@ -46,7 +47,7 @@ def test_fixture_stories_cluster_exactly(demo) -> None:
             by_url[url] = story_id
     found = {frozenset(urls) for urls in groups(session_factory).values() if len(urls) > 1}
     stories = labels["stories"]
-    fomc = "https://www.federalreserve.gov/newsevents/pressreleases/monetary20261007a.htm"
+    fomc = "federal-reserve-press-releases-8"
     expected = {
         frozenset(stories["apple-m5-macbook-pro"]),
         frozenset(stories["aws-us-east-1-outage"]),

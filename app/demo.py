@@ -1,8 +1,9 @@
 """Throwaway demo DB seeded from the example profiles and fixture feeds (`make demo`, demo.cmd).
 
 No network is used: every source URL is served from ``tests/fixtures/demo/<id>.xml`` and
-article pages from ``tests/fixtures/demo/pages/`` (``index.json`` maps URL to file,
-``robots.json`` overrides robots.txt per host; other pages 404) through ``httpx.MockTransport``.
+article pages from ``tests/fixtures/demo/pages/<id>.html`` (items link to the local
+``/demo-article/<id>`` route; ``pages/robots.txt`` is served for every host) through
+``httpx.MockTransport``.
 After ingesting, the demo extracts text, clusters stories and summarizes them just like the
 scheduled pipeline. Summaries come from a deterministic in-process fake LLM
 (``app.summarize.fake``) unless ``--real-llm`` is given, which uses the first profile's
@@ -13,7 +14,6 @@ the Docker volume) is never touched.
 
 import argparse
 import asyncio
-import json
 import os
 import threading
 import webbrowser
@@ -26,6 +26,7 @@ from sqlalchemy import select
 from app.cluster.service import ClusterRunResult
 from app.config import Source, load_config
 from app.db import init_db, make_engine, make_session_factory
+from app.demo_pages import DEMO_PATH, FIXTURE_DIR, feed_xml, page_html, robots_txt
 from app.extract import ExtractRunResult
 from app.ingest import Ingestor, SourceRunResult
 from app.models import Story
@@ -42,48 +43,45 @@ from app.summarize.worker import SummarizeRunResult
 
 ROOT = Path(__file__).resolve().parent.parent
 DEMO_DB = ROOT / ".demo" / "demo.db"
-FIXTURE_DIR = ROOT / "tests" / "fixtures" / "demo"
+DEMO_BASE = "http://localhost:8000"
 EXAMPLE_CONFIG = ROOT / "config" / "profiles.example.yaml"
 
 
-def fixture_transport(sources: Sequence[Source], fixture_dir: Path) -> httpx.MockTransport:
-    files = {str(httpx.URL(str(s.url))): fixture_dir / f"{s.id}.xml" for s in sources}
+def fixture_transport(
+    sources: Sequence[Source], fixture_dir: Path, demo_base: str = DEMO_BASE
+) -> httpx.MockTransport:
+    files = {str(httpx.URL(str(s.url))): s.id for s in sources}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        path = files.get(str(request.url))
-        if path is None or not path.exists():
+        source_id = files.get(str(request.url))
+        body = feed_xml(fixture_dir, source_id, demo_base) if source_id else None
+        if body is None:
             return httpx.Response(404)
-        return httpx.Response(
-            200, content=path.read_bytes(), headers={"content-type": "application/rss+xml"}
-        )
+        return httpx.Response(200, content=body, headers={"content-type": "application/rss+xml"})
 
     return httpx.MockTransport(handler)
 
 
 def page_transport(fixture_dir: Path) -> httpx.MockTransport:
-    """Article pages (and robots.txt) for the extractor, from ``<fixture_dir>/pages``."""
-    pages_dir = fixture_dir / "pages"
-    index = _load_json(pages_dir / "index.json")
-    robots = _load_json(pages_dir / "robots.json")
+    """Article pages (``/demo-article/<id>``) and robots.txt for the extractor."""
+    robots = robots_txt(fixture_dir)
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/robots.txt":
-            body = robots.get(request.url.host, "User-agent: *\nAllow: /\n")
-            return httpx.Response(200, text=body, headers={"content-type": "text/plain"})
-        name = index.get(str(request.url))
-        if name is None:
+        path = request.url.path
+        if path == "/robots.txt":
+            return httpx.Response(200, text=robots, headers={"content-type": "text/plain"})
+        body = (
+            page_html(fixture_dir, path.removeprefix(DEMO_PATH))
+            if path.startswith(DEMO_PATH)
+            else None
+        )
+        if body is None:
             return httpx.Response(404, text="not found")
         return httpx.Response(
-            200,
-            content=(pages_dir / name).read_bytes(),
-            headers={"content-type": "text/html; charset=utf-8"},
+            200, content=body, headers={"content-type": "text/html; charset=utf-8"}
         )
 
     return httpx.MockTransport(handler)
-
-
-def _load_json(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 
 
 class DemoBuild:
@@ -117,6 +115,7 @@ def build_demo(
     summarize_limit: int | None = None,
     report_mode: str | None = None,
     fake_delay: float = 0,
+    demo_base: str = DEMO_BASE,
 ) -> DemoBuild:
     """``summarize_limit``: summarize only the newest N stories now (default: all); the rest
     stay queued for "Summarize now" in Settings > Pipeline. Reports are generated now for
@@ -146,7 +145,9 @@ def build_demo(
         with session_factory() as session:
             seed_from_config(session, load_config(config_path))
             sources = active_sources(session)
-        ingestor = Ingestor(session_factory, transport=fixture_transport(sources, fixture_dir))
+        ingestor = Ingestor(
+            session_factory, transport=fixture_transport(sources, fixture_dir, demo_base)
+        )
         results = asyncio.run(ingestor.run(sources, force=True))
         pipeline = Pipeline(
             session_factory,
@@ -233,6 +234,7 @@ def main() -> None:
         summarize_limit=args.summaries if args.real_llm else None,
         report_mode=args.report_mode,
         fake_delay=args.fake_llm_delay,
+        demo_base=f"http://localhost:{args.port}",
     )
     settings = build.settings
     for r in build.ingested:

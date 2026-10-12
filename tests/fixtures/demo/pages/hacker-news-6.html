@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Training a neural network to read train timetables | Hacker News: Front Page</title>
+  <meta name="description" content="Scanned 1970s rail timetables, a small vision model, and a lot of manual labeling.">
+</head>
+<body>
+  <header>
+    <a href="/">Hacker News: Front Page</a>
+    <nav><a href="/news">News</a> <a href="/latest">Latest</a> <a href="/newsletters">Newsletters</a> <a href="/about">About</a></nav>
+  </header>
+  <main>
+    <article>
+      <h1>Training a neural network to read train timetables</h1>
+      <p class="byline">Published 2026-10-06 06:30 UTC</p>
+      <p>Our local railway history society has boxes of printed timetables going back to the 1970s, and we wanted to turn them into a searchable dataset. Commercial OCR handled the running text well but fell apart on the dense timetable grids, so I trained a small vision model to read them.</p>
+      <p>The hard part is structure, not characters. A timetable is a grid where columns are trains and rows are stations, with symbols for footnotes, connections and days of operation. Generic OCR reads the characters but loses which time belongs to which cell, especially when the printer used dotted lines or columns that shifted across a page.</p>
+      <p>I scanned about 600 pages at 400 dots per inch and labeled 120 of them by hand, marking each cell's row and column along with its contents. Labeling took far longer than training: roughly 70 hours spread over several months, with help from three society members.</p>
+      <p>The model first detects the grid lines and cell boundaries, then reads each cell with a small character recognizer trained on the typefaces used in the timetables. A final step checks that times increase down each column, which catches most misreadings. Accuracy on held-out pages is around 98 percent at the cell level.</p>
+      <p>The remaining errors cluster around footnote symbols and handwritten corrections that railway staff added to some copies. We flag low-confidence cells for manual review rather than guessing, which keeps the dataset trustworthy.</p>
+      <p>The results are already useful. Members can now search for how long a journey took in a given year or when a station lost its last stopping service. We plan to publish the dataset and the model so other societies can process their own collections.</p>
+      <p>If you have similar material, the most valuable thing you can do is scan at high resolution and keep the original images. Models will improve, but a blurry scan cannot be fixed later.</p>
+    </article>
+    <aside>
+      <h2>Most read</h2>
+      <ul><li><a href="/1">Sign up for our daily newsletter</a></li><li><a href="/2">Contact the newsroom</a></li></ul>
+    </aside>
+  </main>
+  <footer>&copy; 2026 Hacker News: Front Page. <a href="/terms">Terms of use</a> <a href="/privacy">Privacy policy</a></footer>
+</body>
+</html>

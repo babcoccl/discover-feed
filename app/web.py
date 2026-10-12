@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app import profiles as repo
 from app.config import CardStyle
+from app.demo_pages import FIXTURE_DIR, page_html
 from app.models import ProfileRecord, Topic
 from app.runs import last_runs, text_status_counts
 from app.summarize.views import brief_views, report_views
@@ -420,3 +421,12 @@ def settings_delete_topic(request: Request, slug: str, topic_id: int) -> Respons
         repo.delete_topic(session, profile, topic)
         context = _settings_context(request, session, profile, message=f"Deleted “{name}”.")
     return _settings_response(request, context)
+
+
+@router.get("/demo-article/{article_id}", response_class=HTMLResponse)
+def demo_article(article_id: str) -> HTMLResponse:
+    """Local demo fixture page (the demo's feed items link here), marked "Demo article"."""
+    body = page_html(FIXTURE_DIR, article_id, banner=True)
+    if body is None:
+        raise HTTPException(404, "no such demo article")
+    return HTMLResponse(body)

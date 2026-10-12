@@ -7,7 +7,7 @@
     <lastBuildDate>Wed, 07 Oct 2026 19:30:00 +0000</lastBuildDate>
     <item>
       <title>US Federal Reserve lowers interest rates for third time this year</title>
-      <link>https://www.theguardian.com/business/2026/oct/07/us-federal-reserve-cuts-interest-rates</link>
+      <link>{{demo_base}}/demo-article/guardian-business-1</link>
       <guid isPermaLink="false">guardian-business-1</guid>
       <pubDate>Wed, 07 Oct 2026 18:40:00 +0000</pubDate>
       <description><![CDATA[<p>The Fed cut its benchmark interest rate by a quarter point to a range of 3.25% to 3.5%, citing a weakening jobs market, although two policymakers voted against.</p>]]></description>
@@ -15,7 +15,7 @@
     </item>
     <item>
       <title>Bank of England holds interest rates at 4% as inflation stays sticky</title>
-      <link>https://www.theguardian.com/business/2026/oct/07/bank-of-england-holds-interest-rates</link>
+      <link>{{demo_base}}/demo-article/guardian-business-2</link>
       <guid isPermaLink="false">guardian-business-2</guid>
       <pubDate>Wed, 07 Oct 2026 11:00:00 +0000</pubDate>
       <description><![CDATA[<p>The Bank of England kept interest rates on hold at 4%, with the Monetary Policy Committee split 6-3, as UK inflation remained stuck at 3.8%.</p>]]></description>
@@ -23,7 +23,7 @@
     </item>
     <item>
       <title>Crypto lender Nimbus accused by US regulator of misleading 90,000 savers</title>
-      <link>https://www.theguardian.com/technology/2026/oct/06/nimbus-crypto-lender-sec-lawsuit</link>
+      <link>{{demo_base}}/demo-article/guardian-business-3</link>
       <guid isPermaLink="false">guardian-business-3</guid>
       <pubDate>Tue, 06 Oct 2026 17:30:00 +0000</pubDate>
       <description><![CDATA[<p>The SEC alleges Nimbus Lending and its founder, Mark Ellery, ran a $1.2bn scheme that promised crypto investors returns of up to 14%.</p>]]></description>
@@ -31,7 +31,7 @@
     </item>
     <item>
       <title>Business live: FTSE 100 edges higher as pound steadies before Fed decision</title>
-      <link>https://www.theguardian.com/business/live/2026/oct/07/ftse-100-pound-markets-live</link>
+      <link>{{demo_base}}/demo-article/guardian-business-4</link>
       <guid isPermaLink="false">guardian-business-4</guid>
       <pubDate>Wed, 07 Oct 2026 07:30:00 +0000</pubDate>
       <description><![CDATA[<p>Rolling coverage of the latest economic and financial news, as markets await the Bank of England and US Federal Reserve.</p>]]></description>

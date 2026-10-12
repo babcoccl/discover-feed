@@ -21,6 +21,7 @@ from sqlalchemy.orm import sessionmaker
 from app.cluster.base import representative
 from app.cluster.service import ClusterRunResult, doc, run_clustering
 from app.cluster.tfidf import TfidfClusterer, cosine
+from app.demo_pages import fixture_id
 from app.models import Article
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -89,7 +90,7 @@ def evaluate(
     labels = labels or load_labels()
     with session_factory() as session:
         articles = list(session.scalars(select(Article)))
-    by_url = {a.url: a for a in articles}
+    by_url = {fixture_id(a.url): a for a in articles}
     joined_at = {j.article_id: j.score for j in result.joins}
 
     gold: set[frozenset[int]] = set()

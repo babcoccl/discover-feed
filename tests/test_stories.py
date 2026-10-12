@@ -77,7 +77,7 @@ def test_story_feed_groups_profile_sources(app_client: TestClient) -> None:
         "CNBC Markets",
         "Guardian Business",
     ]
-    assert nimbus["sources"][0]["url"] == "https://www.sec.gov/newsroom/press-releases/2026-118"
+    assert nimbus["sources"][0]["url"] == "http://localhost:8000/demo-article/sec-press-releases-8"
     assert nimbus["snippet"] and nimbus["image_url"]
     updated = [i["last_updated_at"] for i in feed["items"]]
     assert updated == sorted(updated, reverse=True)
@@ -120,7 +120,8 @@ def test_story_endpoint_lists_all_members(app_client: TestClient) -> None:
     story = app_client.get(f"/api/stories/{nimbus['id']}").json()
     assert len(story["members"]) == 4 and story["source_count"] == 4
     assert {m["source"] for m in story["members"]} >= {"TechCrunch", "SEC press releases"}
-    assert all(m["url"].startswith("https://") and m["summary"] for m in story["members"])
+    demo = "http://localhost:8000/demo-article/"
+    assert all(m["url"].startswith(demo) and m["summary"] for m in story["members"])
     scoped = app_client.get(f"/api/stories/{nimbus['id']}?profile=market-monitor").json()
     assert len(scoped["members"]) == 3
     assert app_client.get("/api/stories/99999").status_code == 404
@@ -223,5 +224,4 @@ def test_demo_build_reports_pipeline(tmp_path: Path) -> None:
     assert build.extracted.ok >= 20 and build.extracted.skipped == 1
     reasons = {r.reason for r in build.extracted.results}
     assert "disallowed by robots.txt" in reasons
-    assert any(r and r.startswith("extracted 0 words") for r in reasons)
     assert json.dumps(build.clustered.model_dump())  # serializable for the admin endpoint

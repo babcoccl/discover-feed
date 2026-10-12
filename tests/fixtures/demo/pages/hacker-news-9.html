@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>AWS Health Dashboard: Increased error rates and latencies in US-EAST-1 | Hacker News: Front Page</title>
+  <meta name="description" content="Amazon Web Services is investigating increased error rates and latencies for multiple AWS services in the US-EAST-1 Region, including DynamoDB, EC2 and Lambda. Slack, Venmo and Ring report outage impact.">
+</head>
+<body>
+  <header>
+    <a href="/">Hacker News: Front Page</a>
+    <nav><a href="/news">News</a> <a href="/latest">Latest</a> <a href="/newsletters">Newsletters</a> <a href="/about">About</a></nav>
+  </header>
+  <main>
+    <article>
+      <h1>AWS Health Dashboard: Increased error rates and latencies in US-EAST-1</h1>
+      <p class="byline">Published 2026-10-07 10:05 UTC</p>
+      <p>Current status: We are investigating increased error rates and latencies for multiple AWS services in the US-EAST-1 Region. Customers may experience errors when launching new instances, accessing databases, invoking functions, or using the AWS Management Console in this Region. Other Regions are not affected.</p>
+      <p>9:12 AM PDT: We can confirm increased API error rates for multiple services in the US-EAST-1 Region. Engineers are actively working to identify the root cause. Customers with workloads in other Regions are not affected at this time.</p>
+      <p>9:48 AM PDT: We have identified the trigger of the event as an issue with DNS resolution for internal endpoints used by a core database service. We are working on multiple parallel paths to accelerate recovery. Some services that depend on the affected endpoints, including compute instance launches and serverless invocations, continue to see elevated errors.</p>
+      <p>10:35 AM PDT: We have applied initial mitigations and are seeing early signs of recovery. Customers may continue to see throttling of new instance launches while we work through backlogs. We recommend that customers who are able to fail over to other Regions consider doing so until recovery is complete.</p>
+      <p>12:20 PM PDT: Most services have recovered. We continue to process a backlog of queued requests for messaging, event processing and batch services, which may result in delays. Customers should not need to take any action as these backlogs drain.</p>
+      <p>3:05 PM PDT: All AWS services in the US-EAST-1 Region are operating normally. The issue has been resolved. We will publish a post-event summary with additional details about the root cause and the steps we are taking to prevent recurrence. Affected customers can find details in their AWS Health Dashboard account events.</p>
+      <p>Affected AWS services in the US-EAST-1 Region included compute instances, databases, serverless functions, messaging queues and the AWS Management Console. Customer applications built on these services, such as messaging, payments and smart home apps, saw increased error rates and latencies during the outage.</p>
+      <p>Root cause summary: the AWS outage in US-EAST-1 was triggered by a DNS misconfiguration for internal endpoints. During the outage, customer services that depend on the Region, including Slack, Venmo, Ring and Fortnite, reported errors. Amazon Web Services engineers rolled back the DNS change, applied mitigations and worked through backlogs until all services recovered.</p>
+    </article>
+    <aside>
+      <h2>Most read</h2>
+      <ul><li><a href="/1">Sign up for our daily newsletter</a></li><li><a href="/2">Contact the newsroom</a></li></ul>
+    </aside>
+  </main>
+  <footer>&copy; 2026 Hacker News: Front Page. <a href="/terms">Terms of use</a> <a href="/privacy">Privacy policy</a></footer>
+</body>
+</html>
