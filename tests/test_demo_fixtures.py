@@ -11,7 +11,7 @@ from app.demo_pages import DEMO_PATH, FIXTURE_DIR, PLACEHOLDER, page_html
 from app.main import create_app
 from app.settings import Settings
 
-MIN_WORDS = 150
+MIN_WORDS = 300
 # Real, stable pages a fixture may link to instead of a local demo article (none today).
 REAL_PAGES: set[str] = set()
 
