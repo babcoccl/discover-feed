@@ -145,3 +145,25 @@
   </div>
   {% else %}<p class="text-sm text-slate-500 dark:text-slate-400">No attempts yet.</p>{% endif %}
 </section>
+{% if alert_stats %}
+<section class="mt-6" data-alert-stats>
+  <h3 class="mb-2 text-sm font-semibold">Alerts</h3>
+  <dl class="mb-3 grid grid-cols-2 gap-2 text-sm sm:grid-cols-5">
+    {% for label, value in [("Rules", alert_stats.rules), ("Fired (24 h)", alert_stats.fired_24h), ("Queued", alert_stats.queued), ("Held", alert_stats.held), ("Failed", alert_stats.failed)] %}
+    <div class="rounded-lg border border-slate-200 bg-white px-3 py-2 dark:border-slate-800 dark:bg-slate-900"><dt class="text-xs text-slate-500 dark:text-slate-400">{{ label }}</dt><dd class="font-semibold">{{ value }}</dd></div>
+    {% endfor %}
+  </dl>
+  {% if alert_stats.channels %}
+  <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+    <table class="min-w-full text-left text-sm">
+      <thead class="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500 dark:border-slate-800 dark:text-slate-400"><tr><th class="px-4 py-2 font-medium">Channel</th><th class="px-4 py-2 font-medium">Failed</th><th class="px-4 py-2 font-medium">Last error</th></tr></thead>
+      <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+      {% for c in alert_stats.channels %}
+        <tr><td class="px-4 py-2">{{ c.name }} <span class="text-xs text-slate-400">{{ c.type }}</span></td><td class="px-4 py-2 {% if c.failed %}font-semibold text-red-600 dark:text-red-400{% endif %}">{{ c.failed }}</td><td class="max-w-sm px-4 py-2 text-xs text-red-700 dark:text-red-400">{{ c.last_error or "—" }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</section>
+{% endif %}

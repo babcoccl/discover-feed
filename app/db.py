@@ -33,6 +33,7 @@ def init_db(engine: Engine) -> None:
     _add_story_lifecycle(engine)
     _add_attempt_quality_columns(engine)
     _add_source_flags(engine)
+    _add_alert_columns(engine)
 
 
 def _add_article_url(engine: Engine) -> None:
@@ -165,6 +166,15 @@ def _add_source_flags(engine: Engine) -> None:
                 conn.execute(
                     text(f"ALTER TABLE sources ADD COLUMN {name} BOOLEAN NOT NULL DEFAULT 0")
                 )
+
+
+def _add_alert_columns(engine: Engine) -> None:
+    """Pre-alerts DBs: event payloads and the once-only alert seeding marker."""
+    with engine.begin() as conn:
+        if "data" not in {c["name"] for c in inspect(conn).get_columns("story_events")}:
+            conn.execute(text("ALTER TABLE story_events ADD COLUMN data JSON"))
+        if "alerts_seeded_at" not in {c["name"] for c in inspect(conn).get_columns("profiles")}:
+            conn.execute(text("ALTER TABLE profiles ADD COLUMN alerts_seeded_at DATETIME"))
 
 
 def ping(engine: Engine) -> bool:

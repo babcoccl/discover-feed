@@ -1,6 +1,316 @@
 {
   "components": {
     "schemas": {
+      "AlertKeywordV1": {
+        "properties": {
+          "case_sensitive": {
+            "default": false,
+            "title": "Case Sensitive",
+            "type": "boolean"
+          },
+          "keyword": {
+            "description": "Whole word or phrase; `$AAPL` -> `AAPL`.",
+            "minLength": 1,
+            "title": "Keyword",
+            "type": "string"
+          }
+        },
+        "required": [
+          "keyword"
+        ],
+        "title": "AlertKeywordV1",
+        "type": "object"
+      },
+      "AlertRuleIn": {
+        "examples": [
+          {
+            "channels": [
+              "phone"
+            ],
+            "enabled": true,
+            "exclude": [],
+            "include": [
+              {
+                "case_sensitive": true,
+                "keyword": "AAPL"
+              }
+            ],
+            "match": "any",
+            "match_in": [
+              "title",
+              "summary"
+            ],
+            "max_per_hour": 10,
+            "name": "Big tech tickers",
+            "notify_on_update": false,
+            "priority": "high",
+            "quiet_hours": {
+              "end": "07:00",
+              "start": "22:00"
+            },
+            "source_ids": []
+          }
+        ],
+        "properties": {
+          "channels": {
+            "default": [],
+            "description": "Channel keys of the profile.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Channels",
+            "type": "array"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "exclude": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/AlertKeywordV1"
+            },
+            "title": "Exclude",
+            "type": "array"
+          },
+          "include": {
+            "items": {
+              "$ref": "#/components/schemas/AlertKeywordV1"
+            },
+            "minItems": 1,
+            "title": "Include",
+            "type": "array"
+          },
+          "match": {
+            "default": "any",
+            "enum": [
+              "any",
+              "all"
+            ],
+            "title": "Match",
+            "type": "string"
+          },
+          "match_in": {
+            "default": [
+              "title",
+              "summary"
+            ],
+            "items": {
+              "enum": [
+                "title",
+                "summary",
+                "text"
+              ],
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Match In",
+            "type": "array"
+          },
+          "max_per_hour": {
+            "default": 10,
+            "maximum": 1000.0,
+            "minimum": 1.0,
+            "title": "Max Per Hour",
+            "type": "integer"
+          },
+          "name": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "notify_on_update": {
+            "default": false,
+            "title": "Notify On Update",
+            "type": "boolean"
+          },
+          "priority": {
+            "default": "default",
+            "enum": [
+              "low",
+              "default",
+              "high"
+            ],
+            "title": "Priority",
+            "type": "string"
+          },
+          "quiet_hours": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QuietHoursV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source_ids": {
+            "default": [],
+            "description": "Empty: all the profile's sources.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Source Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "include"
+        ],
+        "title": "AlertRuleIn",
+        "type": "object"
+      },
+      "AlertRuleV1": {
+        "examples": [
+          {
+            "channels": [
+              "phone"
+            ],
+            "enabled": true,
+            "exclude": [],
+            "id": 3,
+            "include": [
+              {
+                "case_sensitive": true,
+                "keyword": "AAPL"
+              }
+            ],
+            "match": "any",
+            "match_in": [
+              "title",
+              "summary"
+            ],
+            "max_per_hour": 10,
+            "name": "Big tech tickers",
+            "notify_on_update": false,
+            "priority": "high",
+            "quiet_hours": {
+              "end": "07:00",
+              "start": "22:00"
+            },
+            "source_ids": []
+          }
+        ],
+        "properties": {
+          "channels": {
+            "default": [],
+            "description": "Channel keys of the profile.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Channels",
+            "type": "array"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "exclude": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/AlertKeywordV1"
+            },
+            "title": "Exclude",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "include": {
+            "items": {
+              "$ref": "#/components/schemas/AlertKeywordV1"
+            },
+            "minItems": 1,
+            "title": "Include",
+            "type": "array"
+          },
+          "match": {
+            "default": "any",
+            "enum": [
+              "any",
+              "all"
+            ],
+            "title": "Match",
+            "type": "string"
+          },
+          "match_in": {
+            "default": [
+              "title",
+              "summary"
+            ],
+            "items": {
+              "enum": [
+                "title",
+                "summary",
+                "text"
+              ],
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Match In",
+            "type": "array"
+          },
+          "max_per_hour": {
+            "default": 10,
+            "maximum": 1000.0,
+            "minimum": 1.0,
+            "title": "Max Per Hour",
+            "type": "integer"
+          },
+          "name": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "notify_on_update": {
+            "default": false,
+            "title": "Notify On Update",
+            "type": "boolean"
+          },
+          "priority": {
+            "default": "default",
+            "enum": [
+              "low",
+              "default",
+              "high"
+            ],
+            "title": "Priority",
+            "type": "string"
+          },
+          "quiet_hours": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QuietHoursV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source_ids": {
+            "default": [],
+            "description": "Empty: all the profile's sources.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Source Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "include",
+          "id"
+        ],
+        "title": "AlertRuleV1",
+        "type": "object"
+      },
       "AskV1": {
         "properties": {
           "conversation_id": {
@@ -729,6 +1039,302 @@
         "title": "MessageV1",
         "type": "object"
       },
+      "NotificationV1": {
+        "examples": [
+          {
+            "article_id": 5120,
+            "attempts": 1,
+            "channel": "phone",
+            "created_at": "2026-10-12T08:30:00Z",
+            "id": 41,
+            "kind": "alert",
+            "matched": [
+              "AAPL"
+            ],
+            "rule": "Big tech tickers",
+            "rule_id": 3,
+            "sent_at": "2026-10-12T08:30:00Z",
+            "status": "sent",
+            "story_id": 1201,
+            "title": "Apple shares jump after earnings beat",
+            "url": "https://www.cnbc.com/2026/10/12/apple-earnings.html"
+          }
+        ],
+        "properties": {
+          "article_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Article Id"
+          },
+          "attempts": {
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "channel": {
+            "title": "Channel",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "hold_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hold Reason"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "alert",
+              "update",
+              "digest",
+              "test"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "matched": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Matched",
+            "type": "array"
+          },
+          "rule": {
+            "title": "Rule",
+            "type": "string"
+          },
+          "rule_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rule Id"
+          },
+          "sent_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sent At"
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "sent",
+              "failed",
+              "held",
+              "digested"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "story_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The story lineage the alert belongs to.",
+            "title": "Story Id"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Story page if published, else the article.",
+            "title": "Url"
+          }
+        },
+        "required": [
+          "id",
+          "rule_id",
+          "rule",
+          "kind",
+          "status",
+          "channel",
+          "story_id",
+          "article_id",
+          "title",
+          "url",
+          "attempts",
+          "last_error",
+          "created_at",
+          "sent_at"
+        ],
+        "title": "NotificationV1",
+        "type": "object"
+      },
+      "PreviewMatchV1": {
+        "properties": {
+          "article_id": {
+            "title": "Article Id",
+            "type": "integer"
+          },
+          "fired": {
+            "description": "This article already fired the rule.",
+            "title": "Fired",
+            "type": "boolean"
+          },
+          "matched": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Matched",
+            "type": "array"
+          },
+          "published_at": {
+            "format": "date-time",
+            "title": "Published At",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "story_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Story Id"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "article_id",
+          "story_id",
+          "title",
+          "url",
+          "source",
+          "published_at",
+          "matched",
+          "fired"
+        ],
+        "title": "PreviewMatchV1",
+        "type": "object"
+      },
+      "PreviewV1": {
+        "examples": [
+          {
+            "days": 7,
+            "matches": [
+              {
+                "article_id": 5120,
+                "fired": false,
+                "matched": [
+                  "AAPL"
+                ],
+                "published_at": "2026-10-12T08:30:00Z",
+                "source": "CNBC Markets",
+                "story_id": 1201,
+                "title": "Apple shares jump after earnings beat",
+                "url": "https://www.cnbc.com/2026/10/12/apple-earnings.html"
+              }
+            ],
+            "rule_id": 3,
+            "sent": false
+          }
+        ],
+        "properties": {
+          "days": {
+            "title": "Days",
+            "type": "integer"
+          },
+          "matches": {
+            "items": {
+              "$ref": "#/components/schemas/PreviewMatchV1"
+            },
+            "title": "Matches",
+            "type": "array"
+          },
+          "rule_id": {
+            "title": "Rule Id",
+            "type": "integer"
+          },
+          "sent": {
+            "default": false,
+            "description": "Always false: previews never notify.",
+            "title": "Sent",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "rule_id",
+          "days",
+          "matches"
+        ],
+        "title": "PreviewV1",
+        "type": "object"
+      },
       "ProfileV1": {
         "examples": [
           {
@@ -783,6 +1389,32 @@
           "topics"
         ],
         "title": "ProfileV1",
+        "type": "object"
+      },
+      "QuietHoursV1": {
+        "properties": {
+          "end": {
+            "examples": [
+              "07:00"
+            ],
+            "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+            "title": "End",
+            "type": "string"
+          },
+          "start": {
+            "examples": [
+              "22:00"
+            ],
+            "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+            "title": "Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "title": "QuietHoursV1",
         "type": "object"
       },
       "ReportOut": {
@@ -1534,6 +2166,56 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/alert-rules/{rule_id}/preview": {
+      "post": {
+        "operationId": "preview_alert_rule_api_v1_alert_rules__rule_id__preview_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "rule_id",
+            "required": true,
+            "schema": {
+              "title": "Rule Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreviewV1"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Articles of the last 7 days a rule matches (sends nothing; admin)",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
     "/api/v1/chat": {
       "get": {
         "operationId": "chat_status_api_v1_chat_get",
@@ -1796,6 +2478,237 @@
         ]
       }
     },
+    "/api/v1/profiles/{slug}/alert-rules": {
+      "get": {
+        "operationId": "list_alert_rules_api_v1_profiles__slug__alert_rules_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AlertRuleV1"
+                  },
+                  "title": "Response List Alert Rules Api V1 Profiles  Slug  Alert Rules Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "A profile's alert rules",
+        "tags": [
+          "v1"
+        ]
+      },
+      "post": {
+        "operationId": "create_alert_rule_api_v1_profiles__slug__alert_rules_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AlertRuleIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertRuleV1"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Create an alert rule (admin)",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
+    "/api/v1/profiles/{slug}/alert-rules/{rule_id}": {
+      "delete": {
+        "operationId": "delete_alert_rule_api_v1_profiles__slug__alert_rules__rule_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "rule_id",
+            "required": true,
+            "schema": {
+              "title": "Rule Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Delete an alert rule (admin)",
+        "tags": [
+          "v1"
+        ]
+      },
+      "put": {
+        "operationId": "update_alert_rule_api_v1_profiles__slug__alert_rules__rule_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "rule_id",
+            "required": true,
+            "schema": {
+              "title": "Rule Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AlertRuleIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertRuleV1"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Replace an alert rule (admin)",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
     "/api/v1/profiles/{slug}/feed": {
       "get": {
         "operationId": "profile_feed_api_v1_profiles__slug__feed_get",
@@ -2020,6 +2933,115 @@
           }
         ],
         "summary": "Atom feed of published stories",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
+    "/api/v1/profiles/{slug}/notifications": {
+      "get": {
+        "operationId": "list_notifications_api_v1_profiles__slug__notifications_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only this rule.",
+            "in": "query",
+            "name": "rule_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only this rule.",
+              "title": "Rule Id"
+            }
+          },
+          {
+            "description": "Only this status.",
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "queued",
+                    "sent",
+                    "failed",
+                    "held",
+                    "digested"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only this status.",
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/NotificationV1"
+                  },
+                  "title": "Response List Notifications Api V1 Profiles  Slug  Notifications Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "The notification log, newest first",
         "tags": [
           "v1"
         ]
@@ -2301,7 +3323,7 @@
     },
     "/api/v1/stream": {
       "get": {
-        "description": "Events `story.published`, `story.updated`, `story.retracted` with\n`id: <n>` and `data: {\"id\", \"type\", \"story_id\", \"version\", \"profiles\"[, \"story\"]}`;\nfirst a `hello` event (`latest_id`), a `heartbeat` event every `heartbeat` seconds and a\n`retry:` hint. Reconnect with `Last-Event-ID` (or `since_id`) to get every event you\nmissed (kept `summaries.event_retention_days`). Listening never starts generation.",
+        "description": "Events `story.published`, `story.updated`, `story.retracted` with\n`id: <n>` and `data: {\"id\", \"type\", \"story_id\", \"version\", \"profiles\"[, \"story\"]}`, and\n`alert.fired` (`data` adds `\"rule\", \"article_id\", \"matched\"`; sent for unpublished\nstories too, never with story content; not filtered by `topic`);\nfirst a `hello` event (`latest_id`), a `heartbeat` event every `heartbeat` seconds and a\n`retry:` hint. Reconnect with `Last-Event-ID` (or `since_id`) to get every event you\nmissed (kept `summaries.event_retention_days`). Listening never starts generation.",
         "operationId": "stream_api_v1_stream_get",
         "parameters": [
           {

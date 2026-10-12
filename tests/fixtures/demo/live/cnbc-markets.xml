@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Markets</title>
+    <link>https://www.cnbc.com/markets/</link>
+    <description>Demo "live" items for cnbc-markets: published minutes before the demo starts, so the keyword alerts fire.</description>
+    <item>
+      <title>Fed delivers first rate cut of the year, lowering the federal funds rate by a quarter point</title>
+      <link>{{demo_base}}/demo-article/live-cnbc-1</link>
+      <guid isPermaLink="false">live-cnbc-1</guid>
+      <pubDate>{{ago:20}}</pubDate>
+      <description>The FOMC cut its benchmark federal funds rate by 25 basis points, citing a cooling labor market.</description>
+    </item>
+    <item>
+      <title>Apple (AAPL) shares jump 4% after record iPhone sales in China</title>
+      <link>{{demo_base}}/demo-article/live-cnbc-2</link>
+      <guid isPermaLink="false">live-cnbc-2</guid>
+      <pubDate>{{ago:15}}</pubDate>
+      <description>AAPL hit an all-time high as iPhone shipments in China rose 20% from a year earlier.</description>
+    </item>
+    <item>
+      <title>Nvidia ($NVDA) unveils new data center chip, shares climb</title>
+      <link>{{demo_base}}/demo-article/live-cnbc-3</link>
+      <guid isPermaLink="false">live-cnbc-3</guid>
+      <pubDate>{{ago:12}}</pubDate>
+      <description>NVDA rose 3% after the chipmaker announced its next-generation accelerator.</description>
+    </item>
+    <item>
+      <title>Why the aapl ticker trend on social media is not about Apple</title>
+      <link>{{demo_base}}/demo-article/live-cnbc-4</link>
+      <guid isPermaLink="false">live-cnbc-4</guid>
+      <pubDate>{{ago:9}}</pubDate>
+      <description>A lowercase meme is unrelated to the iPhone maker (a case-sensitive ticker rule does not match it).</description>
+    </item>
+  </channel>
+</rss>

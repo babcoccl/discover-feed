@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Federal Reserve press releases</title>
+    <link>https://www.federalreserve.gov/</link>
+    <description>Demo "live" items for federal-reserve-press-releases: published minutes before the demo starts, so the keyword alerts fire.</description>
+    <item>
+      <title>Federal Reserve issues FOMC statement; Committee lowers the federal funds rate by a quarter point</title>
+      <link>{{demo_base}}/demo-article/live-fed-1</link>
+      <guid isPermaLink="false">live-fed-1</guid>
+      <pubDate>{{ago:25}}</pubDate>
+      <description>The Federal Open Market Committee decided to lower the target range for the federal funds rate by 1/4 percentage point, its first rate cut this year.</description>
+    </item>
+  </channel>
+</rss>

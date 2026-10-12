@@ -45,7 +45,7 @@ profiles:
         tags: [tech]
     alert_rules:
       - name: Python releases
-        keywords: [python, release]
+        include: [python, release]
         match: all
         sources: [Hacker News]
     # LLM roles: `summarizer` writes story summaries, `chat` is for story Q&A (next phase).
@@ -108,15 +108,52 @@ profiles:
         type: rss
         url: https://feeds.bbci.co.uk/news/business/rss.xml
         tags: [markets]
+    # Keyword alerts: evaluated on title + feed summary the moment an article is ingested
+    # (before extraction, clustering or any LLM work), at most once per story per rule.
+    # `$AAPL` is a case-sensitive ticker that also matches "AAPL". See README "Alerts".
     alert_rules:
       - name: Rate decisions
-        keywords: [fomc, rate decision, federal funds rate]
-        match: any
-        min_score: 0.7
-        sources: [Federal Reserve press releases, CNBC Markets]
-      - name: Enforcement actions
-        keywords: [charges, settlement, enforcement]
-        sources: [SEC press releases]
+        include: [fomc, rate decision, federal funds rate, rate cut, rate hike]
+        sources: [Federal Reserve press releases, CNBC Markets, Guardian Business, BBC Business]
+        priority: high
+        channels: [phone]
+      - name: SEC enforcement
+        include: [SEC charges, settlement, enforcement action]
+        exclude: [proposed rule]
+        channels: [phone, webhook]
+        notify_on_update: true
+      - name: Big tech tickers
+        include: [$AAPL, $NVDA, $MSFT]
+        match_in: [title, summary, text]
+        channels: [email]
+        quiet_hours: {start: "22:00", end: "07:00"}
+        max_per_hour: 5
+    alerts:
+      timezone: ${DISCOVER_TIMEZONE:-UTC}
+      public_url: ${DISCOVER_PUBLIC_URL:-http://localhost:8000}
+      alert_max_age_hours: 6
+      notification_retention_days: 30
+      channels:
+        # ntfy: https://ntfy.sh (or self-hosted); token only for protected topics.
+        - id: phone
+          type: ntfy
+          server: ${NTFY_SERVER:-https://ntfy.sh}
+          topic: ${NTFY_TOPIC:-discover-feed-demo}
+          token: ${NTFY_TOKEN}
+        # JSON POST signed with HMAC-SHA256 (header X-Discover-Signature: sha256=<hex>).
+        - id: webhook
+          type: webhook
+          url: ${ALERT_WEBHOOK_URL:-http://localhost:8099/webhook}
+          secret: ${ALERT_WEBHOOK_SECRET}
+        - id: email
+          type: email
+          host: ${SMTP_HOST:-localhost}
+          port: 587
+          tls: starttls
+          username: ${SMTP_USER}
+          password: ${SMTP_PASSWORD}
+          sender: ${ALERT_EMAIL_FROM:-alerts@localhost}
+          to: ["${ALERT_EMAIL_TO:-me@localhost}"]
     llm:
       # A cloud OpenAI-style provider: same client as llama.cpp, different settings.
       summarizer:

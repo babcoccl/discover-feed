@@ -101,7 +101,8 @@ def test_settings_redirect_to_login_and_cookie_flow(build) -> None:
         assert pause.status_code == 200
         c.post(f"/p/{SLUG}/settings/pipeline/resume", headers={"HX-Request": "true"})
         assert c.get("/api/admin/articles/999999").status_code == 404  # cookie works for API
-        c.cookies.set(auth.COOKIE, c.cookies[auth.COOKIE][:-1] + "0")
+        value = c.cookies[auth.COOKIE]
+        c.cookies.set(auth.COOKIE, value[:-1] + ("1" if value.endswith("0") else "0"))
         assert c.get(f"/p/{SLUG}/settings", follow_redirects=False).status_code == 303
         evil = c.post(
             "/login", data={"key": ADMIN, "next": "//evil.example"}, follow_redirects=False

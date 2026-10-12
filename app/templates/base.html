@@ -23,7 +23,8 @@
       {% endif %}
       <nav class="ml-auto flex items-center gap-4 text-sm text-slate-600 dark:text-slate-400">
         {% if profile %}
-        <a href="/p/{{ profile.slug }}" class="{% if not on_settings %}font-semibold text-slate-900 dark:text-white{% else %}hover:text-slate-900 dark:hover:text-white{% endif %}">Feed</a>
+        <a href="/p/{{ profile.slug }}" class="{% if not on_settings and not on_alerts %}font-semibold text-slate-900 dark:text-white{% else %}hover:text-slate-900 dark:hover:text-white{% endif %}">Feed</a>
+        <a href="/p/{{ profile.slug }}/alerts" class="{% if on_alerts %}font-semibold text-slate-900 dark:text-white{% else %}hover:text-slate-900 dark:hover:text-white{% endif %}">Alerts</a>
         <a href="/p/{{ profile.slug }}/settings" class="{% if on_settings %}font-semibold text-slate-900 dark:text-white{% else %}hover:text-slate-900 dark:hover:text-white{% endif %}">Settings</a>
         {% endif %}
         <a href="/docs" class="hidden hover:text-slate-900 sm:inline dark:hover:text-white">API</a>

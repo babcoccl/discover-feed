@@ -537,7 +537,7 @@ async def profile_stream(
                         break
                     yield "event: heartbeat\ndata: {}\n\n"
                     continue
-                if source_ids & set(item.source_ids):
+                if item.type.startswith("story.") and source_ids & set(item.source_ids):
                     yield f"event: {item.type}\ndata: {json.dumps(item.payload())}\n\n"
         finally:
             bus.unsubscribe(queue)

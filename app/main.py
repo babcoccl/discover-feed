@@ -8,6 +8,11 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
 
+from app.alerts.api import router as alerts_router
+from app.alerts.engine import AlertEngine
+from app.alerts.repo import seed_alerts
+from app.alerts.sender import AlertSender
+from app.alerts.web import router as alerts_web_router
 from app.api import router as api_router
 from app.api_v1 import PREFIX as V1_PREFIX
 from app.api_v1 import router as v1_router
@@ -32,6 +37,7 @@ from app.profiles import active_sources, seed_from_config, sync_source_flags
 from app.publish import migrate
 from app.scheduler import (
     create_scheduler,
+    schedule_alerts,
     schedule_chat,
     schedule_ingestion,
     schedule_pipeline,
@@ -111,9 +117,13 @@ class DeprecatedAliases:
 
 
 def create_app(
-    settings: Settings | None = None, *, llm_transport: httpx.AsyncBaseTransport | None = None
+    settings: Settings | None = None,
+    *,
+    llm_transport: httpx.AsyncBaseTransport | None = None,
+    demo_sink=None,
 ) -> FastAPI:
-    """``llm_transport`` replaces the summarizer's network calls (the demo's fake LLM)."""
+    """``llm_transport`` replaces the summarizer's network calls (the demo's fake LLM);
+    ``demo_sink`` (an ``app.alerts.sink.FakeSink``) enables ``/demo/sink``."""
     settings = settings or get_settings()
 
     @asynccontextmanager
@@ -130,6 +140,8 @@ def create_app(
             if seed_from_config(session, app.state.config):
                 logger.info("Seeded profiles, sources and topics from %s", settings.config_path)
             sync_source_flags(session, app.state.config)
+            if seed_alerts(session, app.state.config):
+                logger.info("Seeded alert rules and channels from %s", settings.config_path)
             sources = active_sources(session)
         app.state.ingestor = Ingestor(
             app.state.session_factory,
@@ -149,6 +161,16 @@ def create_app(
             ),
         )
         app.state.summaries = app.state.pipeline.summaries
+        app.state.alert_sender = AlertSender(app.state.session_factory, app.state.config)
+        app.state.alerts = AlertEngine(
+            app.state.session_factory,
+            app.state.config,
+            clusterer=app.state.pipeline.clusterer,
+            on_queued=app.state.alert_sender.kick,
+        )
+        app.state.ingestor.on_new_articles = app.state.alerts.on_ingested
+        app.state.pipeline.alerts = app.state.alerts
+        app.state.alert_sender.kick()  # anything still queued from before a restart
         migrate(
             app.state.session_factory,
             summarizer=None,
@@ -186,6 +208,7 @@ def create_app(
                     interval_seconds=settings.summarize_interval_seconds,
                 )
             schedule_chat(scheduler, app.state.chat)
+            schedule_alerts(scheduler, app.state.alerts, app.state.alert_sender)
             scheduler.start()
         app.state.scheduler = scheduler
         try:
@@ -202,11 +225,14 @@ def create_app(
         lifespan=lifespan,
     )
     app.state.auth = AuthConfig.from_settings(settings)
+    app.state.demo_sink = demo_sink
     app.include_router(v1_router)
+    app.include_router(alerts_router)
     app.include_router(chat_router)
     app.include_router(api_router, dependencies=[Depends(legacy_api_guard)])
     app.include_router(login_router)
     app.include_router(web_router, dependencies=[Depends(web_guard)])
+    app.include_router(alerts_web_router, dependencies=[Depends(web_guard)])
     for route in api_router.routes:
         if "GET" in getattr(route, "methods", ()) and "/admin/" not in route.path:
             route.deprecated = True

@@ -1,0 +1,13 @@
+<div data-preview class="mt-3 rounded-lg border border-sky-200 bg-sky-50 p-3 text-sm dark:border-sky-900 dark:bg-sky-950/40">
+  <p class="mb-2 font-medium">Preview for “{{ rule.name }}”: {{ matches | length }} match{{ "" if matches | length == 1 else "es" }} in the last 7 days. Nothing was sent.</p>
+  {% if matches %}
+  <ul class="space-y-1.5">
+    {% for m in matches[:50] %}
+    <li class="flex flex-wrap items-baseline gap-x-2">
+      <a href="{{ m.url }}" rel="noopener noreferrer" target="_blank" class="font-medium hover:underline">{{ m.title }}</a>
+      <span class="text-xs text-slate-500 dark:text-slate-400">{{ m.source }} · {{ m.published_at.strftime('%Y-%m-%d %H:%M') }} UTC · {{ m.matched | join(", ") }}{% if m.fired %} · <span class="font-semibold text-amber-700 dark:text-amber-400">already alerted</span>{% endif %}</span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>

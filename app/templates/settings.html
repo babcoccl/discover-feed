@@ -2,7 +2,7 @@
 {% block title %}Settings · {{ profile.name }}{% endblock %}
 {% block content %}
 <h1 class="mb-1 text-2xl font-bold tracking-tight">Settings</h1>
-<p class="mb-6 text-sm text-slate-500 dark:text-slate-400">{{ profile.name }}</p>
+<p class="mb-6 text-sm text-slate-500 dark:text-slate-400">{{ profile.name }} · <a href="/p/{{ profile.slug }}/alerts" class="underline hover:text-slate-900 dark:hover:text-white">Keyword alerts</a></p>
 
 <section class="mb-10" aria-labelledby="topics-heading">
   <h2 id="topics-heading" class="mb-1 text-lg font-semibold">Topics</h2>

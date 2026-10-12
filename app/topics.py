@@ -31,18 +31,18 @@ def split_keywords(text: str) -> list[str]:
 
 
 @lru_cache(maxsize=4096)
-def keyword_pattern(keyword: str) -> re.Pattern[str] | None:
+def keyword_pattern(keyword: str, case_sensitive: bool = False) -> re.Pattern[str] | None:
     words = keyword.split()
     if not words:
         return None
     # Lookarounds instead of \b so keywords that start/end with symbols ("S&P 500", "C++")
     # still only match as whole words.
     body = r"\s+".join(re.escape(w) for w in words)
-    return re.compile(rf"(?<!\w){body}(?!\w)", re.IGNORECASE)
+    return re.compile(rf"(?<!\w){body}(?!\w)", 0 if case_sensitive else re.IGNORECASE)
 
 
-def contains_keyword(text: str, keyword: str) -> bool:
-    pattern = keyword_pattern(keyword)
+def contains_keyword(text: str, keyword: str, case_sensitive: bool = False) -> bool:
+    pattern = keyword_pattern(keyword, case_sensitive)
     return bool(pattern and text and pattern.search(text))
 
 

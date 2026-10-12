@@ -15,21 +15,29 @@ the Docker volume) is never touched.
 import argparse
 import asyncio
 import os
+import re
 import threading
 import webbrowser
 from collections.abc import Sequence
 from dataclasses import replace
-from datetime import timedelta
+from datetime import datetime, timedelta
+from email.utils import format_datetime
 from pathlib import Path
 
 import httpx
+from sqlalchemy import func, select
 
+from app.alerts.engine import AlertEngine
+from app.alerts.repo import seed_alerts
+from app.alerts.sender import AlertSender
+from app.alerts.sink import FakeSink
 from app.cluster.service import ClusterRunResult
 from app.config import Source, load_config
 from app.db import init_db, make_engine, make_session_factory
-from app.demo_pages import DEMO_PATH, FIXTURE_DIR, feed_xml, page_html, robots_txt
+from app.demo_pages import DEMO_PATH, FIXTURE_DIR, PLACEHOLDER, feed_xml, page_html, robots_txt
 from app.extract import ExtractRunResult
 from app.ingest import Ingestor, SourceRunResult
+from app.models import Notification, utcnow
 from app.pipeline import (
     Pipeline,
     clusterer_from_settings,
@@ -45,6 +53,10 @@ ROOT = Path(__file__).resolve().parent.parent
 DEMO_DB = ROOT / ".demo" / "demo.db"
 DEMO_BASE = "http://localhost:8000"
 EXAMPLE_CONFIG = ROOT / "config" / "profiles.example.yaml"
+LIVE_DIR = FIXTURE_DIR / "live"
+"""Feed items dated ``{{ago:<minutes>}}`` before the demo starts, so keyword alerts fire."""
+DEMO_PROFILE = "market-monitor"
+_AGO = re.compile(r"\{\{ago:(\d+)\}\}")
 
 
 def fixture_transport(
@@ -84,6 +96,74 @@ def page_transport(fixture_dir: Path) -> httpx.MockTransport:
     return httpx.MockTransport(handler)
 
 
+def live_transport(
+    sources: Sequence[Source], live_dir: Path, demo_base: str, now: datetime
+) -> httpx.MockTransport:
+    files = {str(httpx.URL(str(s.url))): s.id for s in sources}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        source_id = files.get(str(request.url))
+        path = live_dir / f"{source_id}.xml" if source_id else None
+        if path is None or not path.exists():
+            return httpx.Response(404)
+        text = path.read_text(encoding="utf-8").replace(PLACEHOLDER, demo_base.rstrip("/"))
+        text = _AGO.sub(lambda m: format_datetime(now - timedelta(minutes=int(m.group(1)))), text)
+        return httpx.Response(
+            200, content=text.encode(), headers={"content-type": "application/rss+xml"}
+        )
+
+    return httpx.MockTransport(handler)
+
+
+def wire_demo_alerts(session, config, sink: FakeSink, now: datetime) -> None:
+    """Point the demo profile's channels at the local sink and add a channel that always
+    fails plus a rule in quiet hours, so the log shows sent, failed and held entries."""
+    from zoneinfo import ZoneInfo
+
+    from app.alerts import repo
+    from app.alerts.api import AlertRuleIn
+    from app.config import AlertChannel
+    from app.profiles import get_profile
+
+    profile = get_profile(session, DEMO_PROFILE)
+    if profile is None:
+        return
+    for channel in repo.list_channels(session, profile):
+        if channel.type == "webhook":
+            channel.config = {**channel.config, "url": sink.webhook_url}
+        elif channel.type == "ntfy":
+            channel.config = {**channel.config, "server": sink.ntfy_server}
+            channel.secret_env = {}
+        elif channel.type == "email":
+            channel.config = {
+                **channel.config,
+                "host": sink.host,
+                "port": sink.smtp_port,
+                "tls": "none",
+            }
+            channel.secret_env = {}
+    pager = AlertChannel(
+        id="pager", type="webhook", name="Pager (demo: always fails)", url=f"{sink.http_url}/down"
+    )
+    session.add(repo.channel_record(profile.id, pager))
+    for rule in repo.list_rules(session, profile):
+        if rule.name == "SEC enforcement":
+            rule.channels = [*(rule.channels or []), "pager"]
+    cfg = config.get_profile(DEMO_PROFILE).alerts
+    local = now.astimezone(ZoneInfo(cfg.timezone))
+    quiet = AlertRuleIn(
+        name="Nvidia overnight (demo: quiet hours)",
+        include=[{"keyword": "NVDA", "case_sensitive": True}],
+        channels=["email"],
+        quiet_hours={
+            "start": (local - timedelta(hours=1)).strftime("%H:%M"),
+            "end": (local + timedelta(hours=2)).strftime("%H:%M"),
+        },
+    )
+    repo.save_rule(session, profile, quiet.model_dump())
+    session.commit()
+
+
 class DemoBuild:
     def __init__(
         self,
@@ -93,6 +173,8 @@ class DemoBuild:
         clustered: ClusterRunResult,
         summarized: SummarizeRunResult | None = None,
         llm_transport: httpx.AsyncBaseTransport | None = None,
+        sink: FakeSink | None = None,
+        alerts: dict | None = None,
     ) -> None:
         self.settings = settings
         self.ingested = ingested
@@ -101,6 +183,9 @@ class DemoBuild:
         self.summarized = summarized
         self.llm_transport = llm_transport
         """What the app should use for the LLM: the fake, or None for the real endpoint."""
+        self.sink = sink
+        self.alerts = alerts
+        """Notification counts by status after the build (with a sink)."""
 
     def __iter__(self):  # `settings, results = build_demo()` keeps working
         return iter((self.settings, self.ingested))
@@ -118,12 +203,15 @@ def build_demo(
     fake_chat_mode: str | None = None,
     fake_token_delay: float = 0.03,
     demo_base: str = DEMO_BASE,
+    sink: FakeSink | None = None,
 ) -> DemoBuild:
     """``summarize_limit``: summarize only the newest N stories now (default: all); the rest
     stay queued for "Summarize now" in Settings > Pipeline. Every story is generated and
     published now (the fixtures are older than the backfill window) unless ``report_mode``
     is ``off``. ``fake_delay``: seconds the fake LLM takes
-    per answer once the app runs (shows the "Generating detailed report" state)."""
+    per answer once the app runs (shows the "Generating detailed report" state).
+    ``sink``: a started ``FakeSink``; the demo profile's alert channels deliver to it and a
+    few "live" market items (``LIVE_DIR``) are ingested so the alerts fire."""
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     for suffix in ("", "-journal", "-wal", "-shm"):
@@ -144,13 +232,30 @@ def build_demo(
     try:
         init_db(engine)
         session_factory = make_session_factory(engine)
+        config = load_config(config_path)
         with session_factory() as session:
-            seed_from_config(session, load_config(config_path))
+            seed_from_config(session, config)
+            seed_alerts(session, config)
             sources = active_sources(session)
         ingestor = Ingestor(
             session_factory, transport=fixture_transport(sources, fixture_dir, demo_base)
         )
         results = asyncio.run(ingestor.run(sources, force=True))
+        clusterer = clusterer_from_settings(settings)
+        alerts, sender = None, None
+        if sink is not None:
+            now = utcnow()
+            with session_factory() as session:
+                wire_demo_alerts(session, config, sink, now)
+            sender = AlertSender(session_factory, config, backoff_seconds=0)
+            alerts = AlertEngine(session_factory, config, clusterer=clusterer)
+            live = [s for s in sources if (fixture_dir / "live" / f"{s.id}.xml").exists()]
+            ingestor = Ingestor(
+                session_factory,
+                transport=live_transport(live, fixture_dir / "live", demo_base, now),
+            )
+            ingestor.on_new_articles = alerts.on_ingested
+            results += asyncio.run(ingestor.run(live, force=True))
         pipeline = Pipeline(
             session_factory,
             # Local fixtures: no need for the per-domain politeness delay.
@@ -161,9 +266,21 @@ def build_demo(
                 domain_delay=0,
                 max_articles=10_000,
             ),
-            clusterer_from_settings(settings),
+            clusterer,
         )
+        pipeline.alerts = alerts
         extracted, clustered = asyncio.run(pipeline.run())
+        alert_counts = None
+        if sender is not None:
+            for _ in range(20):  # retries without backoff, so the failing channel gives up
+                if not any(sender.send_due().values()):
+                    break
+            with session_factory() as session:
+                alert_counts = dict(
+                    session.execute(
+                        select(Notification.status, func.count()).group_by(Notification.status)
+                    ).all()
+                )
         transport = None if real_llm else FakeLLM("demo").transport()
         worker = summary_worker_from_settings(
             session_factory, settings, load_config(config_path), transport=transport
@@ -179,7 +296,9 @@ def build_demo(
             ).transport()
     finally:
         engine.dispose()
-    return DemoBuild(settings, results, extracted, clustered, summarized, transport)
+    return DemoBuild(
+        settings, results, extracted, clustered, summarized, transport, sink, alert_counts
+    )
 
 
 def main() -> None:
@@ -246,7 +365,10 @@ def main() -> None:
     elif args.model:
         parser.error("--model only applies with --real-llm")
 
+    os.environ.setdefault("ALERT_WEBHOOK_SECRET", "demo-webhook-secret")
+    sink = FakeSink(webhook_secret=os.environ["ALERT_WEBHOOK_SECRET"]).start()
     build = build_demo(
+        sink=sink,
         real_llm=args.real_llm,
         summarize_limit=args.summaries if args.real_llm else None,
         report_mode=args.report_mode,
@@ -266,11 +388,14 @@ def main() -> None:
             f"  briefs + reports ({llm}): {sm.ok} ok, {sm.fallback} fallback, "
             f"{sm.failed} failed, {sm.rejected} rejected reports, {sm.queued} queued"
         )
+    if build.alerts is not None:
+        counts = ", ".join(f"{n} {status}" for status, n in sorted(build.alerts.items()))
+        print(f"  keyword alerts: {counts or 'none'} (see /demo/sink and Alerts)")
     url = f"http://localhost:{args.port}/"
     print(f"Demo DB: {DEMO_DB}\nOpen {url}  (Ctrl+C to stop)")
     if args.open:
         threading.Timer(1.5, webbrowser.open, args=(url,)).start()
-    app = create_app(settings, llm_transport=build.llm_transport)
+    app = create_app(settings, llm_transport=build.llm_transport, demo_sink=sink)
     uvicorn.run(app, host=args.host, port=args.port)
 
 
