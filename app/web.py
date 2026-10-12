@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app import profiles as repo
 from app import story_views as views
+from app.alerts import repo as alert_repo
 from app.config import CardStyle
 from app.demo_pages import FIXTURE_DIR, page_html
 from app.models import ProfileRecord, StorySummary, Topic
@@ -222,6 +223,9 @@ def _feed_context(
         names=repo.source_names(session),
         blockers=blockers(request),
         stream_url=f"/api/profiles/{profile.slug}/stream",
+        alert_badges=alert_repo.badges(
+            session, profile, [i.story_id for i in page.items if getattr(i, "story_id", None)]
+        ),
     )
     if not page.items and cursor is None:
         context["preparing"] = preparing(session)
@@ -404,6 +408,7 @@ def _pipeline_context(request: Request, session: Session) -> dict:
         "queue": pipeline_queue(session, _worker(request)),
         "attempts": recent_attempts(session),
         "quality": quality_metrics(session),
+        "alert_stats": alert_repo.stats(session),
     }
 
 

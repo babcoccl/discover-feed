@@ -111,11 +111,23 @@ class Pipeline:
         self.extractor = extractor
         self.clusterer = clusterer
         self.summaries = summaries
+        self.alerts = None
+        """An ``AlertEngine``: text rules after extraction, updates after clustering."""
+
+    def _alert(self, hook: str, ids: list[int]) -> None:
+        if self.alerts is None or not ids:
+            return
+        try:
+            getattr(self.alerts, hook)(ids)
+        except Exception:
+            logger.exception("alert evaluation (%s) failed", hook)
 
     async def extract(self, limit: int | None = None) -> ExtractRunResult:
         result = await self.extractor.run(limit)
         if result.status == "ok":
             self._record("extract", result.model_dump(exclude={"results"}))
+            ok = [r.article_id for r in result.results if r.status == "ok"]
+            self._alert("on_extracted", ok)
         return result
 
     @property
@@ -138,6 +150,7 @@ class Pipeline:
             return ClusterRunResult(status="error", rebuild=rebuild)
         if result.status == "ok":
             self._record("cluster", result.model_dump(exclude={"joins", "story_ids"}))
+            self._alert("on_clustered", list(result.story_ids))
             self._queue_summaries(result)
         return result
 

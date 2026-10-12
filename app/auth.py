@@ -144,7 +144,7 @@ def legacy_api_guard(request: Request) -> None:
         raise _unauthorized("missing or invalid API key")
 
 
-_SETTINGS = re.compile(r"^/p/[^/]+/settings")
+_SETTINGS = re.compile(r"^/(p/[^/]+/(settings|alerts)|demo/sink)")
 
 
 def web_guard(request: Request) -> None:

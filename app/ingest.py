@@ -86,6 +86,8 @@ class Ingestor:
         self.user_agent = user_agent
         self.transport = transport
         self.clock = clock
+        self.on_new_articles: Callable[[list[int]], object] | None = None
+        """Called with the ids of newly stored articles right after they commit (alerts)."""
         self._locks: dict[str, threading.Lock] = {}
         self._locks_guard = threading.Lock()
 
@@ -201,6 +203,7 @@ class Ingestor:
                 )
             )
             new = 0
+            stored: list[str] = []
             for item in items:
                 # Untitled items would all share one hash per domain, so only URL dedup applies.
                 has_title = bool(normalize_title(item.title))
@@ -213,11 +216,23 @@ class Ingestor:
                     .on_conflict_do_nothing(index_elements=["canonical_url"])
                 )
                 new += result.rowcount
+                if result.rowcount:
+                    stored.append(item.canonical_url)
                 seen_urls.add(item.canonical_url)
                 if has_title:
                     seen_hashes.add(item.content_hash)
             ensure_stories(session, utcnow())  # every article is a story from ingest on
             session.commit()
+            ids = (
+                list(session.scalars(select(Article.id).where(Article.canonical_url.in_(stored))))
+                if stored
+                else []
+            )
+        if ids and self.on_new_articles is not None:
+            try:
+                self.on_new_articles(ids)
+            except Exception:
+                logger.exception("alert evaluation failed for %d new articles", len(ids))
         return new
 
     def _record_success(self, source: Source, state: FetchState, at: datetime) -> None:

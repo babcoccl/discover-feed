@@ -145,8 +145,10 @@ def test_scheduler_registers_ingestion_jobs(tmp_path: Path) -> None:
             "summarize",
             "chat-health",
             "chat-retention",
+            "alerts-send",
+            "alerts-maintenance",
         }
-        assert len(ids) == 14
+        assert len(ids) == 16
 
 
 def test_warns_when_sec_source_has_no_contact_email(

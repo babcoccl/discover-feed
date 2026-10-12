@@ -112,3 +112,26 @@ def schedule_chat(scheduler: BackgroundScheduler, hub) -> None:
         max_instances=1,
         next_run_time=now + timedelta(minutes=5),
     )
+
+
+def schedule_alerts(scheduler: BackgroundScheduler, engine, sender) -> None:
+    """Retry due notifications every 15 s; digests and retention every minute (new alerts
+    are sent right away, not on this timer)."""
+    scheduler.add_job(
+        sender.send_due,
+        trigger=IntervalTrigger(seconds=15),
+        id="alerts-send",
+        name="Send queued notifications",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
+    scheduler.add_job(
+        engine.maintain,
+        trigger=IntervalTrigger(seconds=60),
+        id="alerts-maintenance",
+        name="Alert digests and retention",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )

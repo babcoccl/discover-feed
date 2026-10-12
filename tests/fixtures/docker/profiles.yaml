@@ -76,7 +76,7 @@ profiles:
     - tech
   alert_rules:
   - name: Python releases
-    keywords:
+    include:
     - python
     - release
     match: all
@@ -169,17 +169,16 @@ profiles:
     - markets
   alert_rules:
   - name: Rate decisions
-    keywords:
+    include:
     - fomc
     - rate decision
     - federal funds rate
     match: any
-    min_score: 0.7
     sources:
     - Federal Reserve press releases
     - CNBC Markets
   - name: Enforcement actions
-    keywords:
+    include:
     - charges
     - settlement
     - enforcement

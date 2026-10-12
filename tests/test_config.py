@@ -87,7 +87,7 @@ profiles:
     name: A
     {MINIMAL_LLM}
     sources: [{{name: feed, url: 'https://example.com/rss'}}]
-    alert_rules: [{{name: r, keywords: [x], sources: [nope]}}]
+    alert_rules: [{{name: r, include: [x], sources: [nope]}}]
 """
     with pytest.raises(ValidationError, match="unknown sources"):
         parse_config(text)
@@ -100,7 +100,7 @@ def test_unknown_fields_rejected() -> None:
 
 def test_alert_rule_requires_keywords() -> None:
     with pytest.raises(ValidationError):
-        AlertRule(name="r", keywords=[])
+        AlertRule(name="r", include=[])
 
 
 def test_source_id_defaults_to_slug_and_refresh_defaults_to_30() -> None:

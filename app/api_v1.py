@@ -581,6 +581,8 @@ def _event_data(session_factory: sessionmaker, f: StreamFilter, item: StoryEvent
         "version": item.version,
         "profiles": list(item.profiles),
     }
+    if item.type == "alert.fired":  # profile-scoped, no story content (may be unpublished)
+        return data | (item.data or {})
     needs_story = f.include != "id" or (f.rule is not None and item.type != "story.retracted")
     if not needs_story or item.type == "story.retracted":
         return data
@@ -687,7 +689,9 @@ async def stream(
     ] = None,
 ) -> StreamingResponse:
     """Events `story.published`, `story.updated`, `story.retracted` with
-    `id: <n>` and `data: {"id", "type", "story_id", "version", "profiles"[, "story"]}`;
+    `id: <n>` and `data: {"id", "type", "story_id", "version", "profiles"[, "story"]}`, and
+    `alert.fired` (`data` adds `"rule", "article_id", "matched"`; sent for unpublished
+    stories too, never with story content; not filtered by `topic`);
     first a `hello` event (`latest_id`), a `heartbeat` event every `heartbeat` seconds and a
     `retry:` hint. Reconnect with `Last-Event-ID` (or `since_id`) to get every event you
     missed (kept `summaries.event_retention_days`). Listening never starts generation."""

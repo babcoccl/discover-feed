@@ -167,3 +167,25 @@ update it when fixtures or defaults change. README "Tuning clustering" has the f
 - Real model: `python -m app.chat.smoke --story-id N --question "..."`,
   `python -m app.summarize.compare --chat --endpoints a=http://h:8080/v1:m --stories 5`.
 - llama-server: `-np` slots split `-c`; chat has priority over background generation with `-np 1`.
+
+## Keyword alerts
+
+- Code: `app/alerts/` (`match` rules, `engine` evaluation + exactly-once ledger
+  `alert_firings`, `sender` persistent queue, `channels` webhook/ntfy/SMTP, `sink` fake
+  receiver, `api` v1 routes, `web` Alerts page + `/demo/sink`). Hooks: `Ingestor.on_new_articles`
+  (title + summary at ingest), `Pipeline.alerts` (`on_extracted` for `match_in: text`,
+  `on_clustered` for `notify_on_update`). Scheduler jobs `alerts-send` (15 s) and
+  `alerts-maintenance` (digests after quiet hours / rate limit, retention).
+- YAML rules/channels are seeded into the DB once per profile (`profiles.alerts_seeded_at`);
+  afterwards the DB (UI/API) is the source of truth. Channel secrets must be `${ENV}` refs;
+  only the env var name is stored.
+- Tests: `tests/test_alerts.py` uses `FakeSink` (real local HTTP + SMTP on random ports,
+  `sink.fail = {"webhook": n}`, `sink.delay`) and fixes `app.state.alerts.clock` /
+  `alert_sender.clock`; never real ntfy/SMTP. Only articles newer than
+  `alert_max_age_hours` (6) fire, so use fresh timestamps.
+- Demo: `make demo` starts a `FakeSink`, repoints market-monitor channels to it and ingests
+  `tests/fixtures/demo/live/*.xml` (`{{ago:N}}` = N minutes before start). Check
+  `/demo/sink` and `/p/market-monitor/alerts` (expect sent, 1 held, 1 failed "pager").
+- Gotcha: suppression of a not-yet-clustered article uses the clusterer with a looser
+  threshold (`PREDICT_MARGIN`); similar titles in tests may be suppressed as "same story".
+

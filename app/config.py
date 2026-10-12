@@ -236,15 +236,161 @@ class MatchMode(StrEnum):
     ALL = "all"
 
 
+class AlertPriority(StrEnum):
+    LOW = "low"
+    DEFAULT = "default"
+    HIGH = "high"
+
+
+class MatchField(StrEnum):
+    TITLE = "title"
+    SUMMARY = "summary"
+    TEXT = "text"
+    """Extracted article text: evaluated again once extraction finishes."""
+
+
+class AlertKeyword(_Model):
+    """A whole-word keyword. A leading ``$`` (``$AAPL``) is a ticker: it is stored without
+    the ``$``, defaults to case-sensitive, and matches both ``AAPL`` and ``$AAPL``."""
+
+    keyword: str = Field(min_length=1)
+    case_sensitive: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def _from_string(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            value = {"keyword": value}
+        if isinstance(value, dict) and isinstance(value.get("keyword"), str):
+            keyword = " ".join(value["keyword"].split())
+            if keyword.startswith("$") and len(keyword) > 1:
+                value = {"case_sensitive": True, **value, "keyword": keyword[1:]}
+            else:
+                value = {**value, "keyword": keyword}
+        return value
+
+
+class QuietHours(_Model):
+    """Local-time window (``alerts.timezone``) in which alerts are held, then sent as a digest.
+    ``start`` after ``end`` wraps midnight (``22:00``-``07:00``)."""
+
+    start: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    end: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
 class AlertRule(_Model):
+    """Matches incoming articles by keyword and notifies ``channels`` once per story."""
+
     name: str = Field(min_length=1)
-    keywords: list[str] = Field(min_length=1)
+    enabled: bool = True
+    include: list[AlertKeyword] = Field(min_length=1)
+    exclude: list[AlertKeyword] = Field(default_factory=list)
+    """Any exclude keyword wins over the includes."""
     match: MatchMode = MatchMode.ANY
-    min_score: float = Field(default=0.0, ge=0, le=1)
+    """``any`` include keyword, or ``all`` of them."""
+    match_in: list[MatchField] = Field(
+        default_factory=lambda: [MatchField.TITLE, MatchField.SUMMARY], min_length=1
+    )
     sources: list[str] = Field(
         default_factory=list, description="Source names to restrict to; empty = all sources."
     )
+    priority: AlertPriority = AlertPriority.DEFAULT
+    channels: list[str] = Field(default_factory=list)
+    """Channel ids from ``alerts.channels``."""
+    quiet_hours: QuietHours | None = None
+    max_per_hour: int = Field(default=10, ge=1)
+    """Further matches within the hour are held and sent as one digest."""
+    notify_on_update: bool = False
+    """Also notify (at most hourly) when a new source joins an alerted story."""
+
+
+class ChannelType(StrEnum):
+    WEBHOOK = "webhook"
+    NTFY = "ntfy"
+    EMAIL = "email"
+
+
+class EmailTLS(StrEnum):
+    NONE = "none"
+    STARTTLS = "starttls"
+    SSL = "ssl"
+
+
+SECRET_FIELDS = ("secret", "token", "username", "password")
+"""Channel fields that must be ``${ENV_VAR}`` references; only the variable name is kept."""
+_ENV_NAME = r"^[A-Za-z_][A-Za-z0-9_]*$"
+
+
+class AlertChannel(_Model):
+    """A notification target. Secret fields hold environment variable *names* (written
+    ``${NTFY_TOKEN}`` in YAML); values are read from the environment when sending."""
+
+    id: str = Field(pattern=_SLUG)
+    type: ChannelType
+    name: str = ""
     enabled: bool = True
+    timeout_seconds: float = Field(default=10.0, gt=0, le=120)
+    # webhook
+    url: HttpUrl | None = None
+    secret: str | None = Field(default=None, pattern=_ENV_NAME)
+    """HMAC-SHA256 key for ``X-Discover-Signature``."""
+    # ntfy
+    server: HttpUrl = HttpUrl("https://ntfy.sh")
+    topic: str | None = None
+    token: str | None = Field(default=None, pattern=_ENV_NAME)
+    # email
+    host: str | None = None
+    port: int = Field(default=587, ge=1, le=65535)
+    tls: EmailTLS = EmailTLS.STARTTLS
+    username: str | None = Field(default=None, pattern=_ENV_NAME)
+    password: str | None = Field(default=None, pattern=_ENV_NAME)
+    sender: str | None = None
+    to: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _check_type_fields(self) -> "AlertChannel":
+        if not self.name:
+            self.name = self.id
+        missing = {
+            ChannelType.WEBHOOK: [] if self.url else ["url"],
+            ChannelType.NTFY: [] if self.topic else ["topic"],
+            ChannelType.EMAIL: [
+                f
+                for f, v in (("host", self.host), ("sender", self.sender), ("to", self.to))
+                if not v
+            ],
+        }[self.type]
+        if missing:
+            raise ValueError(f"{self.type} channel {self.id!r} needs: {', '.join(missing)}")
+        return self
+
+
+class AlertsConfig(_Model):
+    """Per-profile alert settings (read from YAML on every start) and channels (seeded once)."""
+
+    channels: list[AlertChannel] = Field(default_factory=list)
+    alert_max_age_hours: float = Field(default=6, gt=0)
+    """Only articles published this recently fire: a first start or backfill never floods."""
+    notification_retention_days: int = Field(default=30, ge=1)
+    max_attempts: int = Field(default=5, ge=1, le=20)
+    timezone: str = "UTC"
+    """IANA zone for quiet hours and notification times."""
+    public_url: str = "http://localhost:8000"
+    """Base URL for story links in notifications."""
+
+    @model_validator(mode="after")
+    def _check(self) -> "AlertsConfig":
+        from zoneinfo import ZoneInfo
+
+        try:
+            ZoneInfo(self.timezone)
+        except Exception as exc:
+            raise ValueError(f"unknown timezone {self.timezone!r}") from exc
+        ids = [c.id for c in self.channels]
+        if len(ids) != len(set(ids)):
+            raise ValueError("duplicate alert channel ids")
+        self.public_url = self.public_url.rstrip("/")
+        return self
 
 
 class TopicConfig(_Model):
@@ -269,6 +415,7 @@ class Profile(_Model):
     keywords: list[str] = Field(default_factory=list)
     sources: list[Source] = Field(default_factory=list)
     alert_rules: list[AlertRule] = Field(default_factory=list)
+    alerts: AlertsConfig = Field(default_factory=AlertsConfig)
     llm: LLMConfig
     summaries: SummariesConfig = Field(default_factory=SummariesConfig)
 
@@ -288,11 +435,20 @@ class Profile(_Model):
                 raise ValueError(
                     f"topic {topic.name!r} references unknown sources: {sorted(unknown)}"
                 )
+        rule_names = [r.name.casefold() for r in self.alert_rules]
+        if len(rule_names) != len(set(rule_names)):
+            raise ValueError("duplicate alert rule names")
+        channel_ids = {c.id for c in self.alerts.channels}
         for rule in self.alert_rules:
             unknown = set(rule.sources) - known
             if unknown:
                 raise ValueError(
                     f"alert rule {rule.name!r} references unknown sources: {sorted(unknown)}"
+                )
+            unknown = set(rule.channels) - channel_ids
+            if unknown:
+                raise ValueError(
+                    f"alert rule {rule.name!r} references unknown channels: {sorted(unknown)}"
                 )
         return self
 
@@ -334,6 +490,8 @@ class AppConfig(_Model):
 
 
 def _expand_env(value: Any) -> Any:
+    if isinstance(value, _NoExpand):
+        return str(value)
     if isinstance(value, str):
         return _ENV_VAR.sub(lambda m: os.environ.get(m.group(1)) or m.group(2) or "", value)
     if isinstance(value, list):
@@ -354,8 +512,43 @@ def _blank_to_none(data: Any) -> Any:
     return data
 
 
+_SECRET_REF = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$")
+
+
+def secret_ref_name(value: Any, where: str) -> Any:
+    """``${NTFY_TOKEN}`` -> ``NTFY_TOKEN``; literal secrets are rejected so they never reach
+    the DB."""
+    if value is None or value == "":
+        return None
+    match = _SECRET_REF.match(str(value).strip())
+    if not match:
+        raise ValueError(f"{where} must be an environment reference like ${{NTFY_TOKEN}}")
+    return match.group(1)
+
+
+def _protect_secret_refs(raw: Any) -> Any:
+    """Keep channel secrets as variable names instead of expanding them into the config."""
+    if not isinstance(raw, dict):
+        return raw
+    for profile in raw.get("profiles") or []:
+        alerts = profile.get("alerts") if isinstance(profile, dict) else None
+        for channel in (alerts or {}).get("channels") or [] if isinstance(alerts, dict) else []:
+            if not isinstance(channel, dict):
+                continue
+            for key in SECRET_FIELDS:
+                if key in channel:
+                    channel[key] = _NoExpand(
+                        secret_ref_name(channel[key], f"channel {channel.get('id')!r} {key}")
+                    )
+    return raw
+
+
+class _NoExpand(str):
+    """A string _expand_env leaves alone."""
+
+
 def parse_config(text: str) -> AppConfig:
-    raw = yaml.safe_load(text) or {}
+    raw = _protect_secret_refs(yaml.safe_load(text) or {})
     return AppConfig.model_validate(_blank_to_none(_expand_env(raw)))
 
 

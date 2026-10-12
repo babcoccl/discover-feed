@@ -231,6 +231,8 @@ class StoryEventRow(Base):
     version: Mapped[int | None] = mapped_column(Integer)
     profiles: Mapped[list[str]] = mapped_column(JSON, default=list)
     """Slugs of the profiles following one of the story's sources."""
+    data: Mapped[dict | None] = mapped_column(JSON)
+    """Extra payload (``alert.fired``: rule, article_id, matched)."""
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
 
 
@@ -310,6 +312,8 @@ class ProfileRecord(Base):
         cascade="all, delete-orphan",
         lazy="selectin",
     )
+    alerts_seeded_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    """Set once the YAML alert rules/channels were copied in (the DB owns them afterwards)."""
 
 
 class Topic(Base):
@@ -390,3 +394,123 @@ class SummaryJob(Base):
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     next_attempt_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     last_error: Mapped[str | None] = mapped_column(Text)
+
+
+# --- alerts (app/alerts) -----------------------------------------------------------------
+
+
+class AlertChannelRecord(Base):
+    """A notification target. ``secret_env`` maps secret fields to environment variable
+    *names*; secret values are never stored."""
+
+    __tablename__ = "alert_channels"
+    __table_args__ = (UniqueConstraint("profile_id", "key"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("profiles.id", ondelete="CASCADE"))
+    key: Mapped[str] = mapped_column(String(100))
+    name: Mapped[str] = mapped_column(String(200))
+    type: Mapped[str] = mapped_column(String(10))
+    """``webhook`` | ``ntfy`` | ``email``."""
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    config: Mapped[dict] = mapped_column(JSON, default=dict)
+    secret_env: Mapped[dict] = mapped_column(JSON, default=dict)
+    last_error: Mapped[str | None] = mapped_column(Text)
+    last_error_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    last_sent_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+
+
+class AlertRuleRecord(Base):
+    __tablename__ = "alert_rules"
+    __table_args__ = (UniqueConstraint("profile_id", "name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("profiles.id", ondelete="CASCADE"))
+    name: Mapped[str] = mapped_column(String(100))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    include: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    """``[{"keyword": "AAPL", "case_sensitive": true}, ...]``."""
+    exclude: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    match: Mapped[str] = mapped_column(String(5), default="any")
+    match_in: Mapped[list[str]] = mapped_column(JSON, default=lambda: ["title", "summary"])
+    source_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    priority: Mapped[str] = mapped_column(String(10), default="default")
+    channels: Mapped[list[str]] = mapped_column(JSON, default=list)
+    """Channel keys."""
+    quiet_start: Mapped[str | None] = mapped_column(String(5))
+    quiet_end: Mapped[str | None] = mapped_column(String(5))
+    max_per_hour: Mapped[int] = mapped_column(Integer, default=10)
+    notify_on_update: Mapped[bool] = mapped_column(Boolean, default=False)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
+
+
+class AlertFiring(Base):
+    """One decision to notify: the exactly-once ledger. ``lineage_id`` is the story the
+    article lived in when it fired; merges are handled by checking every member of the
+    article's current story. ``slot`` is 0 for alerts and the hour bucket for updates."""
+
+    __tablename__ = "alert_firings"
+    __table_args__ = (UniqueConstraint("rule_id", "lineage_id", "kind", "slot"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    rule_id: Mapped[int] = mapped_column(ForeignKey("alert_rules.id", ondelete="CASCADE"))
+    lineage_id: Mapped[int] = mapped_column(Integer, index=True)
+    kind: Mapped[str] = mapped_column(String(10))
+    """``alert`` | ``update``."""
+    slot: Mapped[int] = mapped_column(Integer, default=0)
+    article_id: Mapped[int] = mapped_column(Integer, index=True)
+    source_id: Mapped[str] = mapped_column(String(200))
+    matched: Mapped[list[str]] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
+
+
+class NotificationKind(StrEnum):
+    ALERT = "alert"
+    UPDATE = "update"
+    DIGEST = "digest"
+    TEST = "test"
+
+
+class NotificationStatus(StrEnum):
+    QUEUED = "queued"
+    SENT = "sent"
+    FAILED = "failed"
+    HELD = "held"
+    """Quiet hours or over ``max_per_hour``: waits for the next digest."""
+    DIGESTED = "digested"
+    """A held notification that went out inside a digest."""
+
+
+class Notification(Base):
+    """One message to one channel (the persistent send queue and the notification log).
+    ``payload`` is what gets rendered per channel; it never contains secrets."""
+
+    __tablename__ = "notifications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("profiles.id", ondelete="CASCADE"))
+    rule_id: Mapped[int | None] = mapped_column(
+        ForeignKey("alert_rules.id", ondelete="SET NULL"), index=True
+    )
+    rule_name: Mapped[str] = mapped_column(String(100), default="")
+    firing_id: Mapped[int | None] = mapped_column(Integer)
+    lineage_id: Mapped[int | None] = mapped_column(Integer)
+    article_id: Mapped[int | None] = mapped_column(Integer)
+    channel_id: Mapped[int | None] = mapped_column(
+        ForeignKey("alert_channels.id", ondelete="SET NULL"), index=True
+    )
+    channel_key: Mapped[str] = mapped_column(String(100), default="")
+    kind: Mapped[str] = mapped_column(String(10))
+    status: Mapped[str] = mapped_column(String(10), index=True)
+    hold_reason: Mapped[str | None] = mapped_column(String(20))
+    """``quiet_hours`` | ``rate_limit``."""
+    digest_id: Mapped[int | None] = mapped_column(Integer)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(UTCDateTime, index=True)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
+    sent_at: Mapped[datetime | None] = mapped_column(UTCDateTime)

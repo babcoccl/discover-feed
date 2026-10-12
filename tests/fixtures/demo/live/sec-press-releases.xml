@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>SEC press releases</title>
+    <link>https://www.sec.gov/</link>
+    <description>Demo "live" items for sec-press-releases: published minutes before the demo starts, so the keyword alerts fire.</description>
+    <item>
+      <title>SEC charges former hedge fund manager with insider trading ahead of merger announcements</title>
+      <link>{{demo_base}}/demo-article/live-sec-1</link>
+      <guid isPermaLink="false">live-sec-1</guid>
+      <pubDate>{{ago:10}}</pubDate>
+      <description>The Securities and Exchange Commission today filed charges alleging $4 million in illicit profits.</description>
+    </item>
+    <item>
+      <title>SEC publishes proposed rule on settlement disclosures for broker-dealers</title>
+      <link>{{demo_base}}/demo-article/live-sec-2</link>
+      <guid isPermaLink="false">live-sec-2</guid>
+      <pubDate>{{ago:8}}</pubDate>
+      <description>The proposed rule would require broker-dealers to disclose settlement failures (excluded by the SEC enforcement rule).</description>
+    </item>
+  </channel>
+</rss>

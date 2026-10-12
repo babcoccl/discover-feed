@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.models import ProfileRecord, SourceRecord, StoryEventRow, profile_sources, utcnow
 
-EVENT_TYPES = ("story.published", "story.updated", "story.retracted")
+EVENT_TYPES = ("story.published", "story.updated", "story.retracted", "alert.fired")
 DEFAULT_RETENTION = timedelta(days=7)
 
 
@@ -32,13 +32,17 @@ class StoryEvent:
     id: int = field(default=0, compare=False)
     """The ``story_events`` row id (0: not stored)."""
     profiles: tuple[str, ...] = field(default=(), compare=False)
+    data: dict | None = field(default=None, compare=False)
+    """``alert.fired``: ``{"rule", "article_id", "matched"}``."""
 
     def payload(self) -> dict:
-        return {"story_id": self.story_id, "version": self.version}
+        return {"story_id": self.story_id, "version": self.version, **(self.data or {})}
 
     @classmethod
     def from_row(cls, row: StoryEventRow) -> "StoryEvent":
-        return cls(row.type, row.story_id, row.version, (), row.id, tuple(row.profiles or ()))
+        return cls(
+            row.type, row.story_id, row.version, (), row.id, tuple(row.profiles or ()), row.data
+        )
 
 
 class Subscription(asyncio.Queue):
@@ -123,6 +127,31 @@ def record(
     session.flush()
     session.execute(delete(StoryEventRow).where(StoryEventRow.created_at < utcnow() - retention))
     item = StoryEvent(type_, story_id, version, tuple(source_ids), row.id, tuple(row.profiles))
+    defer(session, item)
+    return item
+
+
+def record_alert(
+    session: Session,
+    profile: str,
+    story_id: int,
+    data: dict,
+    *,
+    retention: timedelta = DEFAULT_RETENTION,
+) -> StoryEvent:
+    """An ``alert.fired`` event for one profile (also for stories that are not published)."""
+    row = StoryEventRow(
+        type="alert.fired",
+        story_id=story_id,
+        version=None,
+        profiles=[profile],
+        data=data,
+        created_at=utcnow(),
+    )
+    session.add(row)
+    session.flush()
+    session.execute(delete(StoryEventRow).where(StoryEventRow.created_at < utcnow() - retention))
+    item = StoryEvent("alert.fired", story_id, None, (), row.id, (profile,), data)
     defer(session, item)
     return item
 
