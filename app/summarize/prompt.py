@@ -13,19 +13,19 @@ PROMPT_VERSION = "summary-v1"
 TARGET_WORDS = 60
 
 BRIEF_PROMPT_VERSION = "brief-v1"
-REPORT_PROMPT_VERSION = "report-v1"
+REPORT_PROMPT_VERSION = "report-v2"
 PROMPT_VERSIONS = {"brief": BRIEF_PROMPT_VERSION, "report": REPORT_PROMPT_VERSION}
 
 LEAD_MAX_WORDS = 30
 BULLET_MAX_WORDS = 28
 BULLET_COUNT = 3
-REPORT_MIN_PARAGRAPHS = 3
-REPORT_MAX_PARAGRAPHS = 5
-REPORT_TARGET_WORDS = (250, 450)
-REPORT_WORD_RANGE = (225, 500)
+REPORT_MIN_PARAGRAPHS = 4
+REPORT_MAX_PARAGRAPHS = 6
+REPORT_TARGET_WORDS = (300, 550)
+REPORT_WORD_RANGE = (270, 605)
 """What the validator accepts: the prompt's target plus a 10% margin."""
-VERBATIM_RUN = 8
-"""Reports may not copy this many consecutive words from a source."""
+VERBATIM_SHINGLE = 8
+"""Phrase length of the report's copied-phrase ratio (``summaries.verbatim_max_ratio``)."""
 
 _CITED_POINT = {
     "type": "object",
@@ -93,7 +93,9 @@ prose covering: what happened; background and context; details and reactions fro
 sources; what to watch next.
 Rules:
 - Use only facts stated in the sources. No background knowledge, opinions or speculation.
-- Paraphrase in your own words; never copy a sentence or a long phrase from a source.
+- Restate everything in your own words and change the sentence structure; do not reuse \
+any phrase of five or more consecutive words from the sources except names, numbers and \
+technical terms.
 - Attribute claims that sources disagree on ("according to ..."). Say so when sources \
 conflict or when information is missing.
 - Copy every number, percentage and amount exactly as a source states it.
@@ -170,20 +172,29 @@ def build_messages(
     previous: str | None = None,
     error: str | None = None,
     kind: str = "summary",
+    phrases: Sequence[str] = (),
 ) -> list[dict[str, str]]:
-    """Messages for one attempt; a retry adds the rejected answer and the validation error."""
+    """Messages for one attempt; a retry adds the rejected answer, the validation error and
+    the exact ``phrases`` it copied from the sources."""
     system, _schema, ask = PROMPTS[kind]
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": f"Sources:\n\n{format_sources(sources)}\n\n{ask}"},
     ]
     if error is not None:
+        retry = f"That answer was rejected: {error}."
+        if phrases:
+            quoted = "\n".join(f'- "{p}"' for p in phrases)
+            retry += (
+                " These phrases were copied word for word from the sources:\n"
+                f"{quoted}\nRewrite every sentence that contains one of them in your own words "
+                "with a different sentence structure."
+            )
         messages += [
             {"role": "assistant", "content": previous or ""},
             {
                 "role": "user",
-                "content": f"That answer was rejected: {error}. Reply again with corrected JSON "
-                "only, following every rule.",
+                "content": f"{retry} Reply again with corrected JSON only, following every rule.",
             },
         ]
     return messages

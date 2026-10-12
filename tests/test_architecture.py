@@ -13,7 +13,17 @@ from app.demo import build_demo
 from app.main import create_app
 
 APP = Path(__file__).resolve().parent.parent / "app"
-READ_SIDE = ["web.py", "api.py", "story_views.py", "pipeline_panel.py", "events.py"]
+READ_SIDE = [
+    "web.py",
+    "api.py",
+    "api_v1.py",
+    "auth.py",
+    "login.py",
+    "story_views.py",
+    "pipeline_panel.py",
+    "events.py",
+    "quality.py",
+]
 FORBIDDEN = ("app.summarize", "app.llm", "app.publish")
 
 

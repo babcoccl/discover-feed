@@ -16,7 +16,7 @@ from app import story_views as views
 from app.config import CardStyle
 from app.demo_pages import FIXTURE_DIR, page_html
 from app.models import ProfileRecord, Topic
-from app.pipeline_panel import pipeline_queue, recent_attempts
+from app.pipeline_panel import pipeline_queue, quality_metrics, recent_attempts
 from app.runs import last_runs, text_status_counts
 from app.topics import TopicRule, split_keywords
 
@@ -375,6 +375,7 @@ def _pipeline_context(request: Request, session: Session) -> dict:
         "stages": preparing(session),
         "queue": pipeline_queue(session, _worker(request)),
         "attempts": recent_attempts(session),
+        "quality": quality_metrics(session),
     }
 
 

@@ -171,7 +171,7 @@ that link to each article's own permalink (`Article.url`):
   what happened) plus exactly three bullets (at most 28 words each: what happened, why it
   matters or context, what's next or a key detail). Cards show the image, title, lead, the
   three bullets, source chips and relative time; `card_style: lead_only` hides the bullets.
-- **Detailed report** (story page, below the brief): 3-5 paragraphs, about 250-450 words,
+- **Detailed report** (story page, below the brief): 4-6 paragraphs, about 300-550 words,
   paraphrasing the sources, then the numbered **Sources** list. Every card opens its story
   page (single-source cards also have a "Read on <source>" link to the article). `[n]` is the same article in
   the brief, the report and the Sources list. The page shows the model and when it was written.
@@ -215,8 +215,11 @@ published story views. Opening a page never triggers, queues or waits on the LLM
   rule, so the old version stays on screen while a replacement is generated. One document per
   story; the profile's sources are filtered when it is read. Existing databases are migrated
   in place on startup (idempotent; old `story_summaries` publish under these rules).
-- **Live arrivals.** `GET /api/profiles/{slug}/stream` (Server-Sent Events) sends
-  `story.published` / `story.updated` with `{story_id, version}` and a `heartbeat` event. The
+- **Live arrivals.** Every publish, update and retraction is stored in `story_events` (kept
+  `event_retention_days`, 7) and streamed by `GET /api/v1/stream` (see
+  [Public API](#public-api-v1)); the pages still use the id-only
+  `GET /api/profiles/{slug}/stream` (`story.published` / `story.updated` with
+  `{story_id, version}` and a `heartbeat` event). The
   feed shows "N new stories - click to load" without moving the grid; without SSE it polls
   `GET /api/profiles/{slug}/published?since=<iso>` every 30 s. An open story page offers a
   reload when a newer version is published.
@@ -226,7 +229,9 @@ published story views. Opening a page never triggers, queues or waits on the LLM
   the result of `GET {base_url}/models` (a 401 there is reported but tolerated).
 - **Pipeline panel** (Settings > Pipeline): every unpublished story with its state and reason
   and an ETA from the median brief/report time, **Prioritize** and **Retry** per story,
-  **Pause/Resume generation**, and the last 20 generation attempts.
+  **Pause/Resume generation**, the last 20 generation attempts, and **Generation quality**
+  over the last 500 attempts: first-attempt pass rate per kind, median attempts per success,
+  median end-to-end model seconds per story (brief + report) and the failure reasons.
 - **Generation attempts.** `generation_attempts` keeps the latest 500 LLM calls: story, kind,
   model, endpoint host (never the key), member text statuses and word counts, input words,
   estimated tokens, usage, finish reason, latency, content and reasoning length, the raw
@@ -237,15 +242,23 @@ published story views. Opening a page never triggers, queues or waits on the LLM
 - **Prompt size.** `llm.summarizer.context_tokens` (16384) is the model's context window;
   report inputs are trimmed so the answer (`report_max_tokens`) still fits. After the usual
   validation retry, a last attempt asks for `structured_output: json_object` and extracts the
-  JSON leniently; citation, number and verbatim-copy checks still apply.
+  JSON leniently; citation, number and verbatim-copy checks still apply. Retries quote the
+  exact phrases that were copied, ask for a different sentence structure and run
+  `retry_temperature_bump` (0.2) hotter. Raw newlines/tabs inside JSON strings become spaces
+  (no glued words); suspected glued words (`tasksAI`, `AIworkloads`) are logged as attempt
+  `warnings`, never rejected.
 - Input: briefs use up to `DISCOVER_SUMMARIZE_MAX_ARTICLES_PER_STORY` (5) members and the first
   `DISCOVER_SUMMARIZE_MAX_WORDS_PER_ARTICLE` (1200) words of each; reports use
-  `report_max_articles` (4) and `report_max_words_per_article` (600), keeping the brief's
-  numbering. Briefs are rejected for a wrong bullet count, a lead that is not one sentence,
+  up to `report_max_articles` (4) members, one per source first, sharing
+  `report_total_words` (2400) source words (a one-source story gets all of them; a short
+  article's unused share goes to the others), keeping the brief's numbering. Briefs are rejected for a wrong bullet count, a lead that is not one sentence,
   length violations, bad citations, numbers not in a cited source, or near-duplicate bullets
-  (`duplicate_threshold`, 0.6). Reports are rejected for fewer than 3 or more than 5 paragraphs,
-  fewer than 225 or more than 500 words, uncited paragraphs, bad citations, invented numbers,
-  duplicate paragraphs, or any run of 8+ words copied from a source. A brief that keeps failing
+  (`duplicate_threshold`, 0.6). Reports are rejected for fewer than 4 or more than 6 paragraphs,
+  fewer than 270 or more than 605 words (the 300-550 target plus 10%), uncited paragraphs, bad
+  citations, invented numbers, duplicate paragraphs, a run of `verbatim_max_run` (12) or more
+  words copied from a source (case, punctuation and hyphens ignored), or more than
+  `verbatim_max_ratio` (20%) of the report's 8-word phrases found in the sources. Copied runs
+  made only of story-title words, numbers or `verbatim_allow` terms don't count. A brief that keeps failing
   falls back to a 2-3 sentence summary, then to the feed snippet.
 - Every version is kept in `story_summaries`; `input_hash` covers member ids, source text
   hashes, prompt version, model and kind, so unchanged input means no LLM call.
@@ -273,13 +286,19 @@ summaries:
   summarize_backfill_hours: 24     # unpublished stories older than this are not generated
   summarize_backfill_max: 40       # at most this many unpublished stories are worked on
   report_max_articles: 4
-  report_max_words_per_article: 600
-  report_max_tokens: 1000          # max_tokens for report requests (briefs use llm.summarizer's)
+  report_total_words: 2400         # source words per report, shared by its articles
+  report_max_tokens: 1400          # max_tokens for report requests (briefs use llm.summarizer's)
   report_timeout_seconds: 300      # timeout for report requests
   duplicate_threshold: 0.6
+  verbatim_max_run: 12             # reject a report copying this many consecutive source words
+  verbatim_max_ratio: 0.20         # ... or with more than this share of copied 8-word phrases
+  verbatim_allow: []               # names/terms copied runs may consist of (title words always)
+  retry_temperature_bump: 0.2      # added to the temperature on validation retries
+  event_retention_days: 7          # story_events kept for stream resume (Last-Event-ID)
 ```
 
-`report_concurrency`, `max_reports_per_run` and `report_auto_max_age_hours` are still accepted
+`report_concurrency`, `max_reports_per_run`, `report_auto_max_age_hours` and
+`report_max_words_per_article` are still accepted
 but ignored (`max_inflight` and the backfill limits replace them). `report_mode: off` publishes
 stories with `skipped(reports_off)`. `DISCOVER_REPORT_MODE` overrides every profile's
 `report_mode`. **Regenerate** and **Retry** queue a new version; the current one stays visible
@@ -291,12 +310,17 @@ until it is replaced.
 python -m app.summarize.diagnose --auto --kind both            # newest story waiting
 python -m app.summarize.diagnose --story-id 42 --kind report --markdown
 python -m app.summarize.diagnose --auto --dry-run              # prompt only, no LLM call
+python -m app.summarize.diagnose --auto --kind report --full   # uncut prompts and answers
 ```
 
 (Windows: `.venv\Scripts\python -m app.summarize.diagnose --auto`.) It prints the members with
 text status and word counts, which are sent, the prompt size against `context_tokens`, then
-each attempt's raw response, finish reason, usage, tokens/second and validation result.
-Nothing is written to the database.
+each attempt's raw response, finish reason, usage, tokens/second, validation result and
+warnings, then the validated text exactly as it would be stored. Prompts and answers are cut
+to 1,500 characters unless `--full`. Nothing is written to the database.
+`python -m app.summarize.compare` reports the same quality metrics as the Pipeline panel
+(first-attempt pass rate, attempts per success, end-to-end seconds per story, failure
+reasons) per endpoint.
 
 ### Configuring the endpoint
 
@@ -379,6 +403,78 @@ sources and latest summary into a prompt-ready bundle with the summary's `[n]` n
 Planned: `POST /api/stories/{id}/ask` streaming over SSE with the `chat` role, answers grounded
 in the story's sources with the same citations.
 
+## Public API (v1)
+
+`/api/v1` is the stable read API for other applications. It serves published stories only
+and never the extracted article text. Contract: [`docs/openapi.v1.json`](docs/openapi.v1.json)
+(also `GET /api/v1/openapi.json`; browse everything at `/docs`).
+
+| Endpoint | |
+| --- | --- |
+| `GET /api/v1/profiles`, `/profiles/{slug}`, `/profiles/{slug}/topics` | profiles, sources, topics |
+| `GET /api/v1/profiles/{slug}/feed` | `topic`, `limit` (1-100), `cursor`, `since` (first published after), `updated_since` (current version published after), `include=card\|full` (`full` adds `report` and `sources`) |
+| `GET /api/v1/stories/{id}` | brief, report (or its `report_state`/`report_reason`), sources with raw URLs, model, versions; 301 for merged ids, 404 unless published |
+| `GET /api/v1/profiles/{slug}/feed.atom` | Atom: title = headline, content = lead + bullets, links to the story page and sources |
+| `GET /api/v1/stream` | SSE, see below |
+| `GET /api/v1/health`, `/api/v1/version` | |
+
+```bash
+curl -s 'localhost:8000/api/v1/profiles/personal-reader/feed?limit=5' | python -m json.tool
+curl -s 'localhost:8000/api/v1/profiles/personal-reader/feed?include=full&cursor=<next_cursor>'
+curl -s localhost:8000/api/v1/stories/42
+curl -N 'localhost:8000/api/v1/stream?profile=personal-reader&include=card'
+curl -N -H 'Last-Event-ID: 120' localhost:8000/api/v1/stream    # resume after event 120
+curl -H "Authorization: Bearer $DISCOVER_API_KEY" localhost:8000/api/v1/profiles
+```
+
+PowerShell:
+
+```powershell
+Invoke-RestMethod 'http://localhost:8000/api/v1/profiles/personal-reader/feed?limit=5'
+$h = @{ Authorization = "Bearer $env:DISCOVER_API_KEY" }
+(Invoke-RestMethod 'http://localhost:8000/api/v1/stories/42' -Headers $h).brief.lead
+curl.exe -N -H "X-API-Key: $env:DISCOVER_API_KEY" 'http://localhost:8000/api/v1/stream?since_id=0'
+```
+
+**Stream.** `GET /api/v1/stream?profile=&topic=&include=id|card|full&since_id=` sends a
+`retry: 5000` hint, a `hello` event (`{latest_id, resume_from}`), then events
+`story.published`, `story.updated` and `story.retracted`, each with `id: <n>` (increasing)
+and `data: {"id", "type", "story_id", "version", "profiles"[, "story"]}`, plus a `heartbeat`
+event every 15 s (`heartbeat=` to change). Reconnect with the `Last-Event-ID` header (what
+`EventSource` does by itself) or `since_id` to get every event you missed within
+`event_retention_days`; without either the stream starts with new events. A slow client never
+holds up the pipeline: its queue overflows and it catches up from the table.
+
+Examples: [`examples/client.py`](examples/client.py) (httpx: prints the feed, follows the
+stream and resumes after a disconnect; `python examples/client.py --base http://nas:8000`)
+and [`examples/stream.js`](examples/stream.js) (`EventSource`, browser or Node).
+
+**Versioning.** Within v1 changes are additive only: new endpoints, new optional parameters,
+new response fields (ignore unknown fields). Removing or renaming anything, or changing a
+type or meaning, ships as `/api/v2`. The unversioned `/api/...` read routes still work for one
+release as deprecated aliases (`Deprecation: true` and `Link: <...>; rel="successor-version"`
+headers); `/api/admin/*` and the topic write routes are not versioned. `make openapi`
+(`python -m app.openapi`) regenerates the snapshot; `tests/test_api_v1.py` fails while it is
+out of date, so API changes are always deliberate.
+
+### Authentication (NAS / exposed port)
+
+Off by default. Before exposing the port (e.g. on a NAS), set both in `.env`:
+
+```bash
+DISCOVER_API_KEYS=key-for-app-1,key-for-app-2   # /api/v1 and the legacy read API
+DISCOVER_ADMIN_KEY=a-long-random-admin-key       # /api/admin/*, topic changes, Settings
+```
+
+Generate keys with `python -c "import secrets; print(secrets.token_urlsafe(32))"` (PowerShell:
+the same with `.venv\Scripts\python`). Clients send `Authorization: Bearer <key>` or
+`X-API-Key: <key>`. With `DISCOVER_ADMIN_KEY` set, Settings (and every button that changes
+something) redirects to `/login`, which sets a signed, HttpOnly, SameSite=Strict cookie for 30
+days; the admin key also works as an API key. Feed and story pages stay readable, and the id-only
+`/api/profiles/{slug}/stream` and `/published` endpoints the pages use stay open. Keys are
+compared in constant time, never logged and never stored; startup logs only whether auth is
+enabled. Put a TLS reverse proxy in front if the port leaves your LAN.
+
 ## Development
 
 ```bash
@@ -391,7 +487,8 @@ make run
 
 Without make (e.g. Windows), run the same commands directly from the activated venv
 (`.venv\Scripts\activate`): `python -m pip install -e ".[dev]"`, `python -m ruff check .`,
-`python -m ruff format --check .`, `python -m pytest`, `python -m uvicorn app.main:app --reload`.
+`python -m ruff format --check .`, `python -m pytest`, `python -m uvicorn app.main:app --reload`,
+`python -m app.openapi` (= `make openapi`).
 
 ## Configuration
 
@@ -410,6 +507,8 @@ Without make (e.g. Windows), run the same commands directly from the activated v
 | `DISCOVER_LOG_LEVEL` | `info` |
 | `DISCOVER_FETCH_TIMEOUT_SECONDS` | `10` |
 | `DISCOVER_REFRESH_JITTER_SECONDS` | `60` |
+| `DISCOVER_API_KEYS` | unset (API open); comma-separated keys, see [Authentication](#authentication-nas--exposed-port) |
+| `DISCOVER_ADMIN_KEY` | unset (admin open); guards `/api/admin/*`, topic writes and Settings |
 | `DISCOVER_CONTACT_EMAIL` | unset; appended to the fetch User-Agent. Set it if you use SEC feeds (startup warns otherwise). |
 | `DISCOVER_EXTRACT_INTERVAL_MINUTES` | `15` (extract + cluster job) |
 | `DISCOVER_EXTRACT_MAX_ARTICLES` | `50` per run |

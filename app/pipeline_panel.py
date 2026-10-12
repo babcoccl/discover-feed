@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import GenerationAttempt, Story, StoryState
+from app.quality import Quality, quality
 
 QUEUE_STATES = (
     StoryState.INGESTED.value,
@@ -92,6 +93,18 @@ def pipeline_queue(session: Session, worker=None, limit: int = 50) -> list[Queue
     ]
     rows.sort(key=lambda r: (r.position is None, r.position or 0))
     return rows[:limit]
+
+
+QUALITY_WINDOW = 500
+
+
+def quality_metrics(session: Session, limit: int = QUALITY_WINDOW) -> Quality:
+    """:func:`app.quality.quality` over the newest ``limit`` stored attempts."""
+    rows = session.scalars(
+        select(GenerationAttempt).order_by(GenerationAttempt.id.desc()).limit(limit)
+    ).all()
+    columns = ("run_id", "kind", "prompt", "outcome", "reason", "latency_ms", "story_id")
+    return quality({c: getattr(r, c) for c in columns} for r in reversed(rows))
 
 
 def recent_attempts(session: Session, limit: int = 20) -> list[GenerationAttempt]:

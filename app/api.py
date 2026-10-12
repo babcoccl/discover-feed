@@ -162,7 +162,7 @@ class BriefOut(BaseModel):
 
 
 class ReportOut(BaseModel):
-    paragraphs: list[CitedTextOut] = Field(description="3-5 paragraphs; empty unless ready.")
+    paragraphs: list[CitedTextOut] = Field(description="4-6 paragraphs; empty unless ready.")
     state: Literal["ready", "pending", "skipped", "failed"] = Field(
         description="`pending`: published before its report (see `label`); `failed`: "
         "generation or validation failed; `skipped`: not enough source text (see `details`) "

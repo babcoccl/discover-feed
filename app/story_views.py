@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from sqlalchemy import and_, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
 from app.models import Story, StoryState, StoryView
@@ -286,9 +286,12 @@ def published_page(
     limit: int = 24,
     cursor: tuple[datetime, int] | None = None,
     since: datetime | None = None,
+    published_after: datetime | None = None,
+    updated_after: datetime | None = None,
 ) -> tuple[list[tuple[datetime, int, PublishedStory]], bool]:
     """Published stories with a member from ``source_ids``, newest ``last_updated_at`` first.
-    Returns ``(items, has_more)``; items are ``(sort_at, story_id, story)``."""
+    ``published_after``: first published after; ``updated_after``: the served version was
+    published after. Returns ``(items, has_more)``; items are ``(sort_at, story_id, story)``."""
     from app.models import Article
 
     rule = rule or TopicRule()
@@ -300,6 +303,13 @@ def published_page(
     base = _published(session).where(Story.published_version.is_not(None), member)
     if since is not None:
         base = base.where(Story.published_sort_at > since)
+    if published_after is not None:
+        first = func.coalesce(Story.published_at, Story.published_sort_at)
+        base = base.where(first > published_after)
+    if updated_after is not None:
+        base = base.where(
+            func.coalesce(StoryView.published_at, StoryView.updated_at) > updated_after
+        )
     base = base.order_by(Story.published_sort_at.desc(), Story.id.desc())
     found: list[tuple[datetime, int, PublishedStory]] = []
     position = cursor

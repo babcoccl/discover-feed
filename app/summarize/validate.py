@@ -10,7 +10,13 @@ MAX_WORDS = 70
 
 
 class SummaryInvalid(ValueError):
-    """The answer breaks a rule; the message is sent back to the model on retry."""
+    """The answer breaks a rule; the message is sent back to the model on retry.
+
+    ``phrases`` are the exact offending phrases (copied from a source) the retry quotes."""
+
+    def __init__(self, message: str, phrases: Sequence[str] = ()) -> None:
+        super().__init__(message)
+        self.phrases = tuple(phrases)
 
 
 @dataclass(frozen=True)
@@ -21,6 +27,16 @@ class ValidSummary:
 
 
 _FENCE = re.compile(r"```(?:json)?\s*(.*?)```", re.S | re.I)
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _loads(candidate: str) -> object:
+    """Strict JSON, else the same with raw control characters (a newline or tab inside a
+    string value) turned into spaces, so words on either side never get glued together."""
+    try:
+        return json.loads(candidate)
+    except ValueError:
+        return json.loads(_CONTROL.sub(" ", candidate))
 
 
 def parse_json(content: str) -> dict:
@@ -35,7 +51,7 @@ def parse_json(content: str) -> dict:
         candidates.append(text[start : end + 1])
     for candidate in candidates:
         try:
-            data = json.loads(candidate)
+            data = _loads(candidate)
         except ValueError:
             continue
         if isinstance(data, dict):
@@ -234,6 +250,139 @@ def copied_run(text: str, sources: Sequence[str], run: int) -> str | None:
     return None
 
 
+_HYPHENS = re.compile(r"[-\u2010-\u2015/]")
+
+
+def verbatim_tokens(text: str) -> list[str]:
+    """:func:`tokens` with hyphens and slashes as word breaks (``long-context`` ->
+    ``long context``), so case, punctuation and hyphenation never hide a copy."""
+    return tokens(_HYPHENS.sub(" ", text))
+
+
+@dataclass(frozen=True)
+class VerbatimGuard:
+    """How much a report may copy from its sources.
+
+    Rejects any run of ``max_run``+ consecutive words found in a source, and a report where
+    more than ``max_ratio`` of its ``shingle``-word phrases occur in the sources. Runs made
+    only of story-title words or ``allow`` terms (names, numbers, technical terms) are
+    ignored."""
+
+    max_run: int = 12
+    max_ratio: float = 0.20
+    shingle: int = 8
+    allow: tuple[str, ...] = ()
+
+    def exempt(self, title: str = "") -> set[str]:
+        words = set(verbatim_tokens(title))
+        for term in self.allow:
+            words.update(verbatim_tokens(term))
+        return words
+
+
+def _grams(sources: Sequence[str], n: int) -> set[tuple[str, ...]]:
+    grams: set[tuple[str, ...]] = set()
+    for source in sources:
+        words = verbatim_tokens(source)
+        grams.update(tuple(words[i : i + n]) for i in range(len(words) - n + 1))
+    return grams
+
+
+def _spans(hits: Sequence[int], n: int) -> list[tuple[int, int]]:
+    """Merge the starts of copied ``n``-word windows into ``(start, end)`` word spans."""
+    spans: list[tuple[int, int]] = []
+    for start in hits:
+        if spans and start <= spans[-1][1]:
+            spans[-1] = (spans[-1][0], start + n)
+        else:
+            spans.append((start, start + n))
+    return spans
+
+
+def check_verbatim(
+    points: Sequence[tuple[str, str]],
+    sources: Sequence[str],
+    guard: VerbatimGuard,
+    *,
+    title: str = "",
+) -> None:
+    """Raise :class:`SummaryInvalid` (with the offending phrases) if ``points`` (name, text)
+    copy too much from ``sources``; see :class:`VerbatimGuard`."""
+    exempt = guard.exempt(title)
+
+    def counts(window: Sequence[str]) -> bool:
+        return not all(w in exempt or any(c.isdigit() for c in w) for w in window)
+
+    run_grams = _grams(sources, guard.max_run)
+    long_runs: list[tuple[str, str]] = []
+    for name, text in points:
+        words = verbatim_tokens(text)
+        hits = [
+            i
+            for i in range(len(words) - guard.max_run + 1)
+            if tuple(words[i : i + guard.max_run]) in run_grams
+        ]
+        for a, b in _spans(hits, guard.max_run):
+            if counts(words[a:b]):
+                long_runs.append((name, " ".join(words[a:b])))
+    if long_runs:
+        name, phrase = long_runs[0]
+        raise SummaryInvalid(
+            f'{name} copies "{phrase}" ({len(phrase.split())} words) word for word from a '
+            "source; paraphrase instead",
+            phrases=[p for _, p in long_runs],
+        )
+    n = guard.shingle
+    shingle_grams = _grams(sources, n)
+    total = hit_count = 0
+    copied: list[str] = []
+    for _name, text in points:
+        words = verbatim_tokens(text)
+        windows = [tuple(words[i : i + n]) for i in range(len(words) - n + 1)]
+        hits = [i for i, w in enumerate(windows) if w in shingle_grams and counts(w)]
+        total += len(windows)
+        hit_count += len(hits)
+        copied += [" ".join(words[a:b]) for a, b in _spans(hits, n)]
+    if total and hit_count / total > guard.max_ratio:
+        raise SummaryInvalid(
+            f"{hit_count * 100 // total}% of the report's {n}-word phrases appear in the "
+            f"sources (the limit is {round(guard.max_ratio * 100)}%); restate it in your own "
+            "words",
+            phrases=sorted(copied, key=lambda p: -len(p.split()))[:6],
+        )
+
+
+_GLUED = re.compile(r"[A-Za-z]*(?:[a-z][A-Z]|[A-Z]{2,}[a-z]{3,})[A-Za-z]*")
+GLUED_ALLOW = frozenset(
+    w.lower()
+    for w in (  # noqa: SIM905
+        "iPhone iPad iPod iOS iPadOS macOS watchOS tvOS iCloud iMessage eBay eSports eSIM "
+        "YouTube OpenAI ChatGPT JavaScript TypeScript GitHub GitLab LinkedIn PayPal PowerShell "
+        "DeepMind DeepSeek WhatsApp TikTok PlayStation SoftBank BlackRock JPMorgan FedEx "
+        "WordPress SaaS PaaS IaaS OAuth IoT DevOps MongoDB PostgreSQL MySQL NoSQL GraphQL "
+        "FastAPI HuggingFace LlamaIndex LangChain AstraZeneca BioNTech GlaxoSmithKline SpaceX "
+        "StarLink HarperCollins MasterCard McAfee CrowdStrike AirPods MacBook ExxonMobil "
+        "ConocoPhillips HubSpot DoorDash CoreWeave SharePoint OneDrive VMware NetApp DuckDuckGo "
+        "ProPublica BuzzFeed CoStar"
+    ).split()
+)
+
+
+def glued_words(text: str, allow: Sequence[str] = ()) -> list[str]:
+    """Words that look like two words glued together (``tasksAI``, ``AIworkloads``): a
+    lowercase letter followed by an uppercase one inside a token, or capitals run into a
+    lowercase word. Warning only: known brand spellings (``iPhone``), ``Mc``/``Mac`` names
+    and ``allow`` terms are skipped."""
+    allowed = GLUED_ALLOW | {a.lower() for a in allow}
+    found = []
+    for m in _GLUED.finditer(text):
+        word = m.group(0)
+        if word.lower() in allowed or re.fullmatch(r"Ma?c[A-Z][a-z]+", word):
+            continue
+        found.append(word)
+    return list(dict.fromkeys(found))
+
+
 @dataclass(frozen=True)
 class CitedText:
     text: str
@@ -248,6 +397,8 @@ class ValidBrief:
     lead: str
     lead_citations: list[int]
     bullets: list[CitedText]
+    warnings: tuple[str, ...] = ()
+    """Non-fatal findings (suspected glued words) kept in the attempt log."""
 
     @property
     def text(self) -> str:
@@ -264,6 +415,7 @@ class ValidBrief:
 @dataclass(frozen=True)
 class ValidReport:
     paragraphs: list[CitedText]
+    warnings: tuple[str, ...] = ()
 
     @property
     def text(self) -> str:
@@ -319,8 +471,20 @@ def _check_duplicates(points: Sequence[tuple[str, CitedText]], threshold: float)
                 raise SummaryInvalid(f"{name_b} repeats {name_a}; make every point distinct")
 
 
+def _glue_warnings(points: Sequence[tuple[str, CitedText]], allow: Sequence[str]) -> tuple:
+    return tuple(
+        f"{name} has suspected glued words: {', '.join(found)}"
+        for name, point in points
+        if (found := glued_words(point.text, allow))
+    )
+
+
 def validate_brief(
-    content: str, sources: Sequence[str], *, duplicate_threshold: float = 0.6
+    content: str,
+    sources: Sequence[str],
+    *,
+    duplicate_threshold: float = 0.6,
+    allow: Sequence[str] = (),
 ) -> ValidBrief:
     """Check a brief ``{"lead", "lead_citations", "bullets": [{"text", "citations"}] x3}``.
 
@@ -352,7 +516,9 @@ def validate_brief(
             raise SummaryInvalid(f"{name} has {words} words; the limit is {limit}")
         _check_numbers(point, name, sources)
     _check_duplicates(points, duplicate_threshold)
-    return ValidBrief(lead.text, lead.citations, [p for _, p in points[1:]])
+    return ValidBrief(
+        lead.text, lead.citations, [p for _, p in points[1:]], _glue_warnings(points, allow)
+    )
 
 
 def validate_report(
@@ -361,18 +527,22 @@ def validate_report(
     *,
     duplicate_threshold: float = 0.6,
     word_range: tuple[int, int] | None = None,
+    guard: VerbatimGuard | None = None,
+    title: str = "",
 ) -> ValidReport:
     """Check a report ``{"paragraphs": [{"text", "citations"}]}``.
 
-    Rules: 3-5 paragraphs; total words in ``word_range``; every paragraph cites at least one
+    Rules: 4-6 paragraphs; total words in ``word_range``; every paragraph cites at least one
     source in 1..k; numbers appear in the cited sources; no two paragraphs overlap by
-    ``duplicate_threshold`` or more; no run of 8+ words copied verbatim from any source."""
+    ``duplicate_threshold`` or more; not too much copied from the sources (``guard``, see
+    :class:`VerbatimGuard`; ``title`` words are exempt). Suspected glued words are warnings."""
     from app.summarize.prompt import (
         REPORT_MAX_PARAGRAPHS,
         REPORT_MIN_PARAGRAPHS,
         REPORT_WORD_RANGE,
-        VERBATIM_RUN,
     )
+
+    guard = guard or VerbatimGuard()
 
     low, high = word_range or REPORT_WORD_RANGE
     data = parse_json(content)
@@ -388,7 +558,7 @@ def validate_report(
     points = [
         (f"paragraph {n}", _point(p, f"paragraph {n}", k)) for n, p in enumerate(paragraphs, 1)
     ]
-    report = ValidReport([p for _, p in points])
+    report = ValidReport([p for _, p in points], _glue_warnings(points, guard.allow))
     if not low <= report.word_count <= high:
         raise SummaryInvalid(
             f"the report has {report.word_count} words; write {low}-{high} words in total"
@@ -396,10 +566,5 @@ def validate_report(
     for name, point in points:
         _check_numbers(point, name, sources)
     _check_duplicates(points, duplicate_threshold)
-    for name, point in points:
-        copied = copied_run(point.text, sources, VERBATIM_RUN)
-        if copied:
-            raise SummaryInvalid(
-                f'{name} copies "{copied}" word for word from a source; paraphrase instead'
-            )
+    check_verbatim([(name, p.text) for name, p in points], sources, guard, title=title)
     return report

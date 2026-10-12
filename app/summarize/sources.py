@@ -49,15 +49,41 @@ def _priority(members: Sequence[Article]) -> list[Article]:
     return picked + [a for a in ordered if a not in picked]
 
 
+def share_budget(sizes: Sequence[int], total: int) -> list[int]:
+    """Split ``total`` words over articles of ``sizes`` words: equal shares, and what a short
+    article leaves unused goes to the others."""
+    budgets = [0] * len(sizes)
+    left, remaining = list(range(len(sizes))), total
+    while left:
+        share = remaining // len(left)
+        small = [i for i in left if sizes[i] <= share]
+        if not small:
+            for i in left:
+                budgets[i] = share
+            break
+        for i in small:
+            budgets[i] = sizes[i]
+            remaining -= sizes[i]
+        left = [i for i in left if i not in small]
+    return budgets
+
+
+def _available_words(article: Article) -> int:
+    full = article.text_status == TextStatus.OK and bool(article.text)
+    return len(((article.text if full else article.summary_raw) or "").split())
+
+
 def select_sources(
     members: Sequence[Article],
     names: dict[str, str],
     *,
     max_articles: int,
-    max_words: int,
+    max_words: int | None = None,
     numbered_first: int = 0,
+    total_words: int | None = None,
 ) -> list[SourceDoc]:
-    """Up to ``max_articles`` members by priority, numbered [1]..[k] in publication order.
+    """Up to ``max_articles`` members by priority, numbered [1]..[k] in publication order,
+    each cut to ``max_words`` or to its share of ``total_words`` (:func:`share_budget`).
 
     With ``numbered_first`` (the brief's article budget), the first that many picks keep the
     numbers they have in the brief and extra picks are appended after them, so a report's
@@ -65,7 +91,14 @@ def select_sources(
     picked = _priority(members)[:max_articles]
     split = min(numbered_first, len(picked)) if numbered_first else len(picked)
     chosen = _by_published(picked[:split]) + _by_published(picked[split:])
-    return [source_doc(i, a, names, max_words) for i, a in enumerate(chosen, 1)]
+    if total_words is not None:
+        limits = share_budget([_available_words(a) for a in chosen], total_words)
+    else:
+        limits = [max_words or 0] * len(chosen)
+    return [
+        source_doc(i, a, names, limit)
+        for i, (a, limit) in enumerate(zip(chosen, limits, strict=True), 1)
+    ]
 
 
 def basis(sources: Sequence[SourceDoc]) -> str:

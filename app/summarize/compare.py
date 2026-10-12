@@ -17,6 +17,7 @@ import sys
 
 from pydantic import SecretStr
 
+from app.quality import percent, quality
 from app.summarize._cli import (
     brief_lines,
     cited,
@@ -85,15 +86,26 @@ async def run(env, endpoints, n_stories: int, kind: str = "both") -> int:
             for s in stories:
                 sources = summ.sources_for(s.item, s.names, "report")
                 skip = summ.insufficient_text(s.item, sources)
-                gens.append(None if skip else await summ.generate_report(sources))
+                gens.append(None if skip else await summ.generate_report(sources, s.title))
             results[name, "report"] = gens
 
     print(f"# Brief and report comparison ({len(stories)} stories)\n")
     print(
-        "| Endpoint | Model | Kind | Pass rate | Fallback | Failed | Skipped | Median latency "
-        "| Tokens/sec | Avg lead words | Avg bullet words | Avg report words |"
+        "| Endpoint | Model | Kind | Pass rate | First-attempt pass | Attempts/success "
+        "| Fallback | Failed | Skipped | Median latency | Tokens/sec | Avg lead words "
+        "| Avg bullet words | Avg report words | Failure reasons |"
     )
-    print("|---" * 12 + "|")
+    print("|---" * 15 + "|")
+    metrics = {}
+    for name, _url, _model in endpoints:
+        log = [
+            {**a, "story_id": s.story_id}
+            for k in kinds
+            for s, g in zip(stories, results[name, k], strict=True)
+            if g is not None
+            for a in g.attempt_log
+        ]
+        metrics[name] = quality(log)
     for name, _url, model in endpoints:
         for k in kinds:
             all_gens = results[name, k]
@@ -109,14 +121,25 @@ async def run(env, endpoints, n_stories: int, kind: str = "both") -> int:
                 else "-"
             )
             latency = f"{statistics.median(g.latency_ms for g in gens):.0f} ms" if gens else "-"
+            q = metrics[name].kinds[k]
+            reasons = ", ".join(f"{r} x{n}" for r, n in q.top_failures(4)) or "-"
             print(
-                f"| {name} | {_cell(model)} | {k} | {rate} | "
+                f"| {name} | {_cell(model)} | {k} | {rate} | {percent(q.first_pass_rate)} | "
+                f"{q.median_attempts if q.median_attempts is not None else '-'} | "
                 f"{sum(g.status == 'fallback' for g in gens)} | "
                 f"{sum(g.status == 'failed' for g in gens)} | {len(all_gens) - len(gens)} | "
                 f"{latency} | {_median(g.tokens_per_second for g in gens)} | "
                 f"{lead} | {bullet} | "
-                f"{_mean(r.word_count for r in reports) if k == 'report' else '-'} |"
+                f"{_mean(r.word_count for r in reports) if k == 'report' else '-'} | "
+                f"{_cell(reasons)} |"
             )
+    print()
+    for name, _url, _model in endpoints:
+        seconds = metrics[name].story_seconds
+        print(
+            f"- {name}: median end-to-end {seconds if seconds is not None else '-'} s per story "
+            "(brief + report, all attempts)"
+        )
     names = [e[0] for e in endpoints]
     for k in kinds:
         print(f"\n## {k.capitalize()}s\n")

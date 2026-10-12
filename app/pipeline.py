@@ -17,7 +17,7 @@ from app.llm.client import set_max_inflight
 from app.publish import Policy
 from app.runs import record_run
 from app.settings import Settings
-from app.summarize.service import Summarizer
+from app.summarize.service import Summarizer, summarizer_options
 from app.summarize.worker import SummaryWorker
 
 logger = logging.getLogger(__name__)
@@ -82,11 +82,7 @@ def summary_worker_from_settings(
             LLMClient(profile.llm.summarizer, transport=transport),
             max_articles=settings.summarize_max_articles_per_story,
             max_words=settings.summarize_max_words_per_article,
-            report_max_articles=options.report_max_articles,
-            report_max_words=options.report_max_words_per_article,
-            report_max_tokens=options.report_max_tokens,
-            report_timeout_seconds=options.report_timeout_seconds,
-            duplicate_threshold=options.duplicate_threshold,
+            **summarizer_options(options),
         )
     if summarizer is not None:
         set_max_inflight(options.max_inflight)

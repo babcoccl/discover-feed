@@ -97,6 +97,28 @@
   </div>
   {% else %}<p class="text-sm text-slate-500 dark:text-slate-400">Every story is published.</p>{% endif %}
 </section>
+{% if quality and not quality.empty %}
+<section class="mt-6" data-quality>
+  <h3 class="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Generation quality <span class="ml-2 font-normal normal-case">last 500 attempts{% if quality.story_seconds is not none %} · median {{ quality.story_seconds }}s per story (brief + report, {{ quality.stories }} stories){% endif %}</span></h3>
+  <div class="grid gap-3 sm:grid-cols-2">
+    {% for kind, q in quality.kinds.items() %}
+    <div class="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm dark:border-slate-800 dark:bg-slate-900" data-quality-kind="{{ kind }}">
+      <p class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">{{ kind | capitalize }}s</p>
+      <dl class="mt-1 grid grid-cols-2 gap-x-4 gap-y-1">
+        <dt class="text-slate-500 dark:text-slate-400">First-attempt pass</dt><dd class="font-semibold" data-first-pass>{% if q.first_pass_rate is not none %}{{ "%.0f" | format(q.first_pass_rate * 100) }}% <span class="font-normal text-slate-400">({{ q.first_pass }}/{{ q.runs }})</span>{% else %}–{% endif %}</dd>
+        <dt class="text-slate-500 dark:text-slate-400">Attempts per success</dt><dd class="font-semibold" data-attempts-per-success>{{ "%.1f" | format(q.median_attempts) if q.median_attempts is not none else "–" }}</dd>
+      </dl>
+      {% if q.failures %}
+      <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">Failure reasons</p>
+      <ul class="text-xs" data-failure-reasons>
+        {% for reason, n in q.top_failures(6) %}<li><code>{{ reason }}</code> × {{ n }}</li>{% endfor %}
+      </ul>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
 <section class="mt-6" data-attempts>
   <h3 class="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Last {{ attempts | length }} generation attempts</h3>
   {% if attempts %}

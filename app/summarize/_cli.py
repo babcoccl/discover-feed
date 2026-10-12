@@ -115,18 +115,14 @@ def marked(summary, sources: list[SourceDoc]) -> str:
 
 def summarizer(env: Env, client=None):
     """A Summarizer with the profile's ``summaries`` limits."""
-    from app.summarize.service import Summarizer
+    from app.summarize.service import Summarizer, summarizer_options
 
     o, st = env.options, env.settings
     return Summarizer(
         client or env.client(),
         max_articles=st.summarize_max_articles_per_story,
         max_words=st.summarize_max_words_per_article,
-        report_max_articles=o.report_max_articles,
-        report_max_words=o.report_max_words_per_article,
-        report_max_tokens=o.report_max_tokens,
-        report_timeout_seconds=o.report_timeout_seconds,
-        duplicate_threshold=o.duplicate_threshold,
+        **summarizer_options(o),
     )
 
 

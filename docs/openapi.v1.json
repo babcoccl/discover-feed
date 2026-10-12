@@ -1,0 +1,1734 @@
+{
+  "components": {
+    "schemas": {
+      "BriefOut": {
+        "properties": {
+          "basis": {
+            "enum": [
+              "full_text",
+              "feed_summary",
+              "mixed"
+            ],
+            "title": "Basis",
+            "type": "string"
+          },
+          "bullets": {
+            "description": "Three supporting points (empty for a fallback brief).",
+            "items": {
+              "$ref": "#/components/schemas/CitedTextOut"
+            },
+            "title": "Bullets",
+            "type": "array"
+          },
+          "generated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generated At"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`Summary unavailable: <reason>` on a snippet fallback.",
+            "title": "Label"
+          },
+          "lead": {
+            "description": "One sentence: what happened.",
+            "title": "Lead",
+            "type": "string"
+          },
+          "lead_citations": {
+            "items": {
+              "$ref": "#/components/schemas/CitationOut"
+            },
+            "title": "Lead Citations",
+            "type": "array"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "sources": {
+            "description": "Numbered sources, [1] first.",
+            "items": {
+              "$ref": "#/components/schemas/CitationOut"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "status": {
+            "description": "`fallback`: the brief failed validation; `lead` is a Phase 4 style summary (`style: summary`) or the feed snippet (`style: snippet`).",
+            "enum": [
+              "ok",
+              "fallback"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "style": {
+            "enum": [
+              "brief",
+              "summary",
+              "snippet"
+            ],
+            "title": "Style",
+            "type": "string"
+          }
+        },
+        "required": [
+          "lead",
+          "lead_citations",
+          "bullets",
+          "status",
+          "style",
+          "basis",
+          "model",
+          "generated_at",
+          "sources"
+        ],
+        "title": "BriefOut",
+        "type": "object"
+      },
+      "CitationOut": {
+        "properties": {
+          "headline": {
+            "title": "Headline",
+            "type": "string"
+          },
+          "index": {
+            "description": "The [n] marker used in the brief/report.",
+            "title": "Index",
+            "type": "integer"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "url": {
+            "description": "The cited article's own permalink (never the canonical URL).",
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "index",
+          "source",
+          "headline",
+          "url"
+        ],
+        "title": "CitationOut",
+        "type": "object"
+      },
+      "CitedTextOut": {
+        "properties": {
+          "citations": {
+            "description": "The sources this text cites.",
+            "items": {
+              "$ref": "#/components/schemas/CitationOut"
+            },
+            "title": "Citations",
+            "type": "array"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "citations"
+        ],
+        "title": "CitedTextOut",
+        "type": "object"
+      },
+      "FeedV1": {
+        "examples": [
+          {
+            "include": "card",
+            "items": [
+              {
+                "brief": {
+                  "basis": "full_text",
+                  "bullets": [
+                    {
+                      "citations": [],
+                      "text": "It ships next year."
+                    }
+                  ],
+                  "generated_at": "2026-10-12T08:30:00Z",
+                  "lead": "A chipmaker unveiled an accelerator aimed at AI agents.",
+                  "lead_citations": [
+                    {
+                      "headline": "...",
+                      "index": 1,
+                      "source": "The Verge",
+                      "url": "..."
+                    }
+                  ],
+                  "model": "qwen3.5-9b",
+                  "sources": [],
+                  "status": "ok",
+                  "style": "brief"
+                },
+                "first_seen_at": "2026-10-12T08:30:00Z",
+                "id": 42,
+                "last_updated_at": "2026-10-12T08:30:00Z",
+                "published_at": "2026-10-12T08:30:00Z",
+                "snippet": "The company said...",
+                "source_count": 2,
+                "source_names": [
+                  "The Verge",
+                  "Ars Technica"
+                ],
+                "title": "Chipmaker unveils agent-ready accelerator",
+                "updated_at": "2026-10-12T08:30:00Z",
+                "url": "https://news.example/story/42",
+                "version": 3
+              }
+            ],
+            "next_cursor": "MjAyNi0xMC0xMlQwODozMDowMCswMDowMHw0Mg",
+            "profile": "personal-reader"
+          }
+        ],
+        "properties": {
+          "include": {
+            "enum": [
+              "card",
+              "full"
+            ],
+            "title": "Include",
+            "type": "string"
+          },
+          "items": {
+            "description": "Published stories, newest update first.",
+            "items": {
+              "$ref": "#/components/schemas/StoryCardV1"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Pass as `cursor` for the next page.",
+            "title": "Next Cursor"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "topic": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TopicV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "profile",
+          "topic",
+          "include",
+          "items",
+          "next_cursor"
+        ],
+        "title": "FeedV1",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HealthV1": {
+        "examples": [
+          {
+            "database": "ok",
+            "status": "ok",
+            "version": "0.1.0"
+          }
+        ],
+        "properties": {
+          "database": {
+            "enum": [
+              "ok",
+              "error"
+            ],
+            "title": "Database",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "degraded"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "database",
+          "version"
+        ],
+        "title": "HealthV1",
+        "type": "object"
+      },
+      "ProfileV1": {
+        "examples": [
+          {
+            "description": "Tech and science news",
+            "name": "Personal reader",
+            "slug": "personal-reader",
+            "sources": [
+              {
+                "enabled": true,
+                "id": "the-verge",
+                "name": "The Verge",
+                "type": "rss",
+                "url": "https://www.theverge.com/rss/index.xml"
+              }
+            ],
+            "topics": []
+          }
+        ],
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/SourceV1"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "topics": {
+            "items": {
+              "$ref": "#/components/schemas/TopicV1"
+            },
+            "title": "Topics",
+            "type": "array"
+          }
+        },
+        "required": [
+          "slug",
+          "name",
+          "description",
+          "sources",
+          "topics"
+        ],
+        "title": "ProfileV1",
+        "type": "object"
+      },
+      "ReportOut": {
+        "properties": {
+          "details": {
+            "default": [],
+            "description": "Per-member text status and words.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Details",
+            "type": "array"
+          },
+          "generated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generated At"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "paragraphs": {
+            "description": "4-6 paragraphs; empty unless ready.",
+            "items": {
+              "$ref": "#/components/schemas/CitedTextOut"
+            },
+            "title": "Paragraphs",
+            "type": "array"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "sources": {
+            "description": "Numbered sources, [1] first; [1]..[n] match the brief's.",
+            "items": {
+              "$ref": "#/components/schemas/CitationOut"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "state": {
+            "description": "`pending`: published before its report (see `label`); `failed`: generation or validation failed; `skipped`: not enough source text (see `details`) the brief failed for good (`brief_failed`) or reports are off.",
+            "enum": [
+              "ready",
+              "pending",
+              "skipped",
+              "failed"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "status": {
+            "description": "Deprecated name of `state` (`ok` = `ready`).",
+            "enum": [
+              "ok",
+              "pending",
+              "failed",
+              "skipped"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "paragraphs",
+          "state",
+          "status",
+          "model",
+          "generated_at",
+          "sources"
+        ],
+        "title": "ReportOut",
+        "type": "object"
+      },
+      "SourceV1": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          },
+          "url": {
+            "description": "The feed or page this app reads.",
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "type",
+          "url",
+          "enabled"
+        ],
+        "title": "SourceV1",
+        "type": "object"
+      },
+      "StoryCardV1": {
+        "examples": [
+          {
+            "brief": {
+              "basis": "full_text",
+              "bullets": [
+                {
+                  "citations": [],
+                  "text": "It ships next year."
+                }
+              ],
+              "generated_at": "2026-10-12T08:30:00Z",
+              "lead": "A chipmaker unveiled an accelerator aimed at AI agents.",
+              "lead_citations": [
+                {
+                  "headline": "...",
+                  "index": 1,
+                  "source": "The Verge",
+                  "url": "..."
+                }
+              ],
+              "model": "qwen3.5-9b",
+              "sources": [],
+              "status": "ok",
+              "style": "brief"
+            },
+            "first_seen_at": "2026-10-12T08:30:00Z",
+            "id": 42,
+            "last_updated_at": "2026-10-12T08:30:00Z",
+            "published_at": "2026-10-12T08:30:00Z",
+            "snippet": "The company said...",
+            "source_count": 2,
+            "source_names": [
+              "The Verge",
+              "Ars Technica"
+            ],
+            "title": "Chipmaker unveils agent-ready accelerator",
+            "updated_at": "2026-10-12T08:30:00Z",
+            "url": "https://news.example/story/42",
+            "version": 3
+          }
+        ],
+        "properties": {
+          "brief": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BriefOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "first_seen_at": {
+            "format": "date-time",
+            "title": "First Seen At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "image_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Url"
+          },
+          "last_updated_at": {
+            "description": "Newest member article.",
+            "format": "date-time",
+            "title": "Last Updated At",
+            "type": "string"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the story was first published.",
+            "title": "Published At"
+          },
+          "report": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReportOut"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only with `include=full`."
+          },
+          "snippet": {
+            "description": "The feed's own summary (when `brief` is null).",
+            "title": "Snippet",
+            "type": "string"
+          },
+          "source_count": {
+            "title": "Source Count",
+            "type": "integer"
+          },
+          "source_names": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Source Names",
+            "type": "array"
+          },
+          "sources": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/StorySourceV1"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only with `include=full`: one article per source.",
+            "title": "Sources"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When this version was published.",
+            "title": "Updated At"
+          },
+          "url": {
+            "description": "The story page in this app.",
+            "title": "Url",
+            "type": "string"
+          },
+          "version": {
+            "description": "The published version; bumps on every update.",
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "version",
+          "title",
+          "url",
+          "published_at",
+          "updated_at",
+          "first_seen_at",
+          "last_updated_at",
+          "image_url",
+          "snippet",
+          "brief",
+          "source_count",
+          "source_names"
+        ],
+        "title": "StoryCardV1",
+        "type": "object"
+      },
+      "StorySourceV1": {
+        "properties": {
+          "name": {
+            "description": "The source (outlet) name.",
+            "title": "Name",
+            "type": "string"
+          },
+          "published_at": {
+            "format": "date-time",
+            "title": "Published At",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "url": {
+            "description": "The publisher's own permalink (the raw feed URL).",
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "title",
+          "url",
+          "published_at"
+        ],
+        "title": "StorySourceV1",
+        "type": "object"
+      },
+      "StoryV1": {
+        "examples": [
+          {
+            "brief": {
+              "basis": "full_text",
+              "bullets": [
+                {
+                  "citations": [],
+                  "text": "It ships next year."
+                }
+              ],
+              "generated_at": "2026-10-12T08:30:00Z",
+              "lead": "A chipmaker unveiled an accelerator aimed at AI agents.",
+              "lead_citations": [
+                {
+                  "headline": "...",
+                  "index": 1,
+                  "source": "The Verge",
+                  "url": "..."
+                }
+              ],
+              "model": "qwen3.5-9b",
+              "sources": [],
+              "status": "ok",
+              "style": "brief"
+            },
+            "first_seen_at": "2026-10-12T08:30:00Z",
+            "id": 42,
+            "last_updated_at": "2026-10-12T08:30:00Z",
+            "model": "qwen3.5-9b",
+            "published_at": "2026-10-12T08:30:00Z",
+            "report_reason": "published before its report",
+            "report_state": "pending",
+            "snippet": "The company said...",
+            "sources": [
+              {
+                "name": "The Verge",
+                "published_at": "2026-10-12T08:30:00Z",
+                "title": "Chipmaker unveils agent-ready accelerator",
+                "url": "https://www.theverge.com/2026/10/12/chip-launch"
+              }
+            ],
+            "title": "Chipmaker unveils agent-ready accelerator",
+            "updated_at": "2026-10-12T08:30:00Z",
+            "url": "https://news.example/story/42",
+            "version": 3,
+            "versions": {
+              "schema_version": 1,
+              "story": 3
+            }
+          }
+        ],
+        "properties": {
+          "brief": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BriefOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "first_seen_at": {
+            "format": "date-time",
+            "title": "First Seen At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "image_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Url"
+          },
+          "last_updated_at": {
+            "format": "date-time",
+            "title": "Last Updated At",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published At"
+          },
+          "report": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReportOut"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Paragraphs only when `report_state=ready`."
+          },
+          "report_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Reason"
+          },
+          "report_state": {
+            "anyOf": [
+              {
+                "enum": [
+                  "ready",
+                  "pending",
+                  "skipped",
+                  "failed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "null with reports off.",
+            "title": "Report State"
+          },
+          "snippet": {
+            "title": "Snippet",
+            "type": "string"
+          },
+          "sources": {
+            "description": "Every member article, oldest first.",
+            "items": {
+              "$ref": "#/components/schemas/StorySourceV1"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          },
+          "versions": {
+            "$ref": "#/components/schemas/VersionsV1"
+          }
+        },
+        "required": [
+          "id",
+          "version",
+          "title",
+          "url",
+          "published_at",
+          "updated_at",
+          "first_seen_at",
+          "last_updated_at",
+          "image_url",
+          "snippet",
+          "brief",
+          "report",
+          "report_state",
+          "report_reason",
+          "model",
+          "versions",
+          "sources"
+        ],
+        "title": "StoryV1",
+        "type": "object"
+      },
+      "TopicV1": {
+        "examples": [
+          {
+            "enabled": true,
+            "exclude_keywords": [],
+            "id": 3,
+            "include_keywords": [
+              "ai",
+              "llm"
+            ],
+            "name": "AI",
+            "position": 0,
+            "source_ids": []
+          }
+        ],
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "exclude_keywords": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Exclude Keywords",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "include_keywords": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Include Keywords",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "position": {
+            "title": "Position",
+            "type": "integer"
+          },
+          "source_ids": {
+            "description": "Only these sources; empty = all of the profile's.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Source Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "include_keywords",
+          "exclude_keywords",
+          "source_ids",
+          "position",
+          "enabled"
+        ],
+        "title": "TopicV1",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      },
+      "VersionV1": {
+        "examples": [
+          {
+            "api_version": "1",
+            "app_version": "0.1.0",
+            "schema_version": 1
+          }
+        ],
+        "properties": {
+          "api_version": {
+            "title": "Api Version",
+            "type": "string"
+          },
+          "app_version": {
+            "title": "App Version",
+            "type": "string"
+          },
+          "schema_version": {
+            "description": "Version of the stored story documents.",
+            "title": "Schema Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "api_version",
+          "app_version",
+          "schema_version"
+        ],
+        "title": "VersionV1",
+        "type": "object"
+      },
+      "VersionsV1": {
+        "properties": {
+          "schema_version": {
+            "description": "Version of the stored story document.",
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "story": {
+            "description": "The published story version (as in events).",
+            "title": "Story",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "story",
+          "schema_version"
+        ],
+        "title": "VersionsV1",
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "APIKeyHeader": {
+        "description": "The API key.",
+        "in": "header",
+        "name": "X-API-Key",
+        "type": "apiKey"
+      },
+      "HTTPBearer": {
+        "description": "`Authorization: Bearer <key>`",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "Published stories and resumable story events. Within v1 changes are additive only; breaking changes go to /api/v2.",
+    "title": "Discover Feed public API",
+    "version": "1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/health": {
+      "get": {
+        "operationId": "health_api_v1_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthV1"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Liveness and database check",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
+    "/api/v1/profiles": {
+      "get": {
+        "operationId": "list_profiles_api_v1_profiles_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProfileV1"
+                  },
+                  "title": "Response List Profiles Api V1 Profiles Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "All profiles",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
+    "/api/v1/profiles/{slug}": {
+      "get": {
+        "operationId": "get_profile_api_v1_profiles__slug__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileV1"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "One profile",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
+    "/api/v1/profiles/{slug}/feed": {
+      "get": {
+        "operationId": "profile_feed_api_v1_profiles__slug__feed_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Topic id; omit for the whole profile.",
+            "in": "query",
+            "name": "topic",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Topic id; omit for the whole profile.",
+              "title": "Topic"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 24,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "`next_cursor` of the previous page.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "`next_cursor` of the previous page.",
+              "title": "Cursor"
+            }
+          },
+          {
+            "description": "Only stories first published after this time.",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only stories first published after this time.",
+              "title": "Since"
+            }
+          },
+          {
+            "description": "Only stories whose current version was published after this time.",
+            "in": "query",
+            "name": "updated_since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only stories whose current version was published after this time.",
+              "title": "Updated Since"
+            }
+          },
+          {
+            "description": "`full` adds `report` and `sources`.",
+            "in": "query",
+            "name": "include",
+            "required": false,
+            "schema": {
+              "default": "card",
+              "description": "`full` adds `report` and `sources`.",
+              "enum": [
+                "card",
+                "full"
+              ],
+              "title": "Include",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedV1"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Published stories, newest update first",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
+    "/api/v1/profiles/{slug}/feed.atom": {
+      "get": {
+        "description": "Title = headline; content = the brief's lead and bullets; links to the story page\n(`alternate`) and to each source (`related`).",
+        "operationId": "profile_atom_api_v1_profiles__slug__feed_atom_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Topic id; omit for the whole profile.",
+            "in": "query",
+            "name": "topic",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Topic id; omit for the whole profile.",
+              "title": "Topic"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/atom+xml": {}
+            },
+            "description": "Atom 1.0"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Atom feed of published stories",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
+    "/api/v1/profiles/{slug}/topics": {
+      "get": {
+        "operationId": "list_topics_api_v1_profiles__slug__topics_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TopicV1"
+                  },
+                  "title": "Response List Topics Api V1 Profiles  Slug  Topics Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "A profile's topics",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
+    "/api/v1/stories/{story_id}": {
+      "get": {
+        "operationId": "get_story_api_v1_stories__story_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "story_id",
+            "required": true,
+            "schema": {
+              "title": "Story Id",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Only members from this profile's sources.",
+            "in": "query",
+            "name": "profile",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only members from this profile's sources.",
+              "title": "Profile"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoryV1"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "301": {
+            "description": "Merged into another story (follow `Location`)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "One published story",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
+    "/api/v1/stream": {
+      "get": {
+        "description": "Events `story.published`, `story.updated`, `story.retracted` with\n`id: <n>` and `data: {\"id\", \"type\", \"story_id\", \"version\", \"profiles\"[, \"story\"]}`;\nfirst a `hello` event (`latest_id`), a `heartbeat` event every `heartbeat` seconds and a\n`retry:` hint. Reconnect with `Last-Event-ID` (or `since_id`) to get every event you\nmissed (kept `summaries.event_retention_days`). Listening never starts generation.",
+        "operationId": "stream_api_v1_stream_get",
+        "parameters": [
+          {
+            "description": "Only this profile's stories.",
+            "in": "query",
+            "name": "profile",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only this profile's stories.",
+              "title": "Profile"
+            }
+          },
+          {
+            "description": "Only this topic (needs `profile`).",
+            "in": "query",
+            "name": "topic",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only this topic (needs `profile`).",
+              "title": "Topic"
+            }
+          },
+          {
+            "description": "`card`/`full` add the story (as in the feed) to each event.",
+            "in": "query",
+            "name": "include",
+            "required": false,
+            "schema": {
+              "default": "id",
+              "description": "`card`/`full` add the story (as in the feed) to each event.",
+              "enum": [
+                "id",
+                "card",
+                "full"
+              ],
+              "title": "Include",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Replay stored events after this id.",
+            "in": "query",
+            "name": "since_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Replay stored events after this id.",
+              "title": "Since Id"
+            }
+          },
+          {
+            "description": "Seconds between pings.",
+            "in": "query",
+            "name": "heartbeat",
+            "required": false,
+            "schema": {
+              "default": 15,
+              "description": "Seconds between pings.",
+              "exclusiveMinimum": 0,
+              "maximum": 300,
+              "title": "Heartbeat",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Sent by EventSource on reconnect; wins over since_id.",
+            "in": "header",
+            "name": "last-event-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Sent by EventSource on reconnect; wins over since_id.",
+              "title": "Last-Event-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {}
+            },
+            "description": "SSE"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Story events (Server-Sent Events), resumable",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
+    "/api/v1/version": {
+      "get": {
+        "operationId": "get_version_api_v1_version_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionV1"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "API and app versions",
+        "tags": [
+          "v1"
+        ]
+      }
+    }
+  }
+}

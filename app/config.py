@@ -116,9 +116,16 @@ class SummariesConfig(_Model):
     report_concurrency: int | None = Field(default=None, deprecated=True)
     """Deprecated, ignored (use ``max_inflight``)."""
     report_max_articles: int = Field(default=4, ge=1)
-    report_max_words_per_article: int = Field(default=600, ge=50)
+    report_max_words_per_article: int | None = Field(default=None, deprecated=True)
+    """Deprecated, ignored (use ``report_total_words``)."""
+    report_total_words: int = Field(
+        default=2400,
+        ge=100,
+        description="Source words sent for a report, shared by its articles (one per source "
+        "first); a one-source story may use all of it.",
+    )
     report_max_tokens: int = Field(
-        default=1000, ge=100, description="max_tokens for report requests (briefs use the role's)."
+        default=1400, ge=100, description="max_tokens for report requests (briefs use the role's)."
     )
     report_timeout_seconds: float = Field(
         default=300, gt=0, description="Timeout for report requests (briefs use the role's)."
@@ -128,6 +135,29 @@ class SummariesConfig(_Model):
         gt=0,
         le=1,
         description="Token overlap (Jaccard) at which two bullets/paragraphs count as duplicates.",
+    )
+    verbatim_max_run: int = Field(
+        default=12,
+        ge=4,
+        description="Reject a report that copies this many consecutive words from a source.",
+    )
+    verbatim_max_ratio: float = Field(
+        default=0.20,
+        gt=0,
+        le=1,
+        description="Reject a report when more than this share of its 8-word phrases occur in "
+        "the sources.",
+    )
+    verbatim_allow: list[str] = Field(
+        default_factory=list,
+        description="Names, numbers and technical terms that copied runs may consist of (story "
+        "title words are always allowed); also skipped by the glued-word warning.",
+    )
+    retry_temperature_bump: float = Field(
+        default=0.2, ge=0, le=1, description="Added to the temperature on validation retries."
+    )
+    event_retention_days: float = Field(
+        default=7, gt=0, description="Story events kept for stream replay (Last-Event-ID)."
     )
 
 

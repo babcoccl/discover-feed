@@ -58,7 +58,19 @@ Notes:
   until you drop the DB: `docker compose down -v` or delete `data/discover.db`).
 - UI: `/` → `/p/{slug}` (topic tabs + story cards, `?view=articles` for single articles, HTMX),
   `/story/{id}`, `/p/{slug}/settings` (topic CRUD, source status, Pipeline panel).
-- Endpoints: `/health`, `/docs`, `/openapi.json`,
+- Public API `/api/v1` (contract `docs/openapi.v1.json`; `make openapi` / `python -m app.openapi`
+  regenerates it and `tests/test_api_v1.py` fails while it is stale; additive changes only in v1):
+  `GET /api/v1/profiles[/{slug}[/topics]]`, `/profiles/{slug}/feed?topic=&limit=&cursor=&since=&updated_since=&include=card|full`,
+  `/profiles/{slug}/feed.atom`, `/stories/{id}`, `/health`, `/version`,
+  `/stream?profile=&topic=&include=id|card|full&since_id=` (+ `Last-Event-ID`; events stored in
+  `story_events`, `app/events.py::record`; `app/api_v1.py::stream_events` is unit-testable without
+  HTTP). Examples: `examples/client.py`, `examples/stream.js`. The legacy GET `/api/...` routes
+  below are deprecated aliases (`Deprecation` header) for one release.
+- Auth (`app/auth.py`, off by default): `DISCOVER_API_KEYS` (comma-separated; Bearer or
+  `X-API-Key`) guards `/api/v1` + legacy reads (not the pages' `/stream` and `/published`);
+  `DISCOVER_ADMIN_KEY` guards `/api/admin/*`, topic writes, Settings and web POSTs (`/login`
+  sets a signed HttpOnly cookie). Set both before exposing the port on the NAS.
+- Legacy endpoints: `/health`, `/docs`, `/openapi.json`,
   `GET /api/profiles`, `GET /api/profiles/{slug}`,
   `GET /api/profiles/{slug}/feed?group=stories|articles&topic=&limit=&cursor=&time_field=`,
   `GET /api/stories/{id}[?profile=]`, `POST /api/admin/extract`, `POST /api/admin/cluster[?rebuild=true]`,
@@ -92,20 +104,26 @@ update it when fixtures or defaults change. README "Tuning clustering" has the f
   report_final -> published` (`merged` redirects to the kept id). The worker does one story at
   a time, newest first: brief, report (if 150+ extracted words in some member, else
   `skipped(insufficient_text)`), publish decision. Everything unpublished is only visible in
-  Settings > Pipeline (queue, ETA, Prioritize/Retry, Pause/Resume, last 20 attempts).
+  Settings > Pipeline (queue, ETA, Prioritize/Retry, Pause/Resume, last 20 attempts, and
+  Generation quality from `app/quality.py`: first-attempt pass rate, attempts per success,
+  end-to-end seconds per story, failure reasons; `compare` prints the same).
 - Per-profile `summaries:` keys: `card_style`, `report_mode` (auto|off; on_demand = auto),
   `publish_requires_report` (true), `publish_max_wait_minutes` (30), `brief_fallback_hours` (6),
   `extraction_wait_seconds` (120), `max_inflight` (1, all LLM calls), `summarize_backfill_hours`
-  (24), `summarize_backfill_max` (40), `report_max_articles`, `report_max_words_per_article`,
-  `report_max_tokens`, `report_timeout_seconds`, `duplicate_threshold`; `llm.summarizer.context_tokens`
-  (16384). `DISCOVER_REPORT_MODE` overrides report_mode.
+  (24), `summarize_backfill_max` (40), `report_max_articles` (4), `report_total_words` (2400,
+  shared by the report's articles, one per source first), `report_max_tokens` (1400),
+  `report_timeout_seconds`, `duplicate_threshold`, `verbatim_max_run` (12), `verbatim_max_ratio`
+  (0.20 of 8-word phrases), `verbatim_allow` (terms; title words always allowed),
+  `retry_temperature_bump` (0.2), `event_retention_days` (7); `report_max_words_per_article` is
+  deprecated/ignored; `llm.summarizer.context_tokens` (16384). Reports: 4-6 paragraphs, 300-550
+  words (validator 270-605). `DISCOVER_REPORT_MODE` overrides report_mode.
   `POST /api/admin/summarize?story_id=&kind=brief|report|both&force=true`.
 - Fixture/old articles are outside the 24 h backfill: the demo build and
   `tests/fixtures/docker/profiles.yaml` widen it, otherwise nothing gets generated.
 - SSE: `GET /api/profiles/{slug}/stream` (`story.published`/`story.updated`, `heartbeat`);
   polling fallback `GET /api/profiles/{slug}/published?since=`.
 - Diagnose one story against the configured endpoint (read-only):
-  `python -m app.summarize.diagnose --auto|--story-id N [--kind brief|report|both] [--dry-run] [--markdown]`
+  `python -m app.summarize.diagnose --auto|--story-id N [--kind brief|report|both] [--dry-run] [--markdown] [--full]`
   (Windows: `.venv\Scripts\python -m app.summarize.diagnose ...`). `generation_attempts` keeps the
   last 500 calls with reasons (`empty_content truncated reasoning_consumed_budget timeout
   http_<status> invalid_json validation:<rule> insufficient_text`).

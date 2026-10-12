@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app import profiles as repo
 from app.config import ReportMode, SummariesConfig
-from app.events import StoryEvent, defer
+from app.events import record
 from app.lifecycle import PRE_CLUSTER, ensure_stories
 from app.models import (
     Story,
@@ -52,6 +52,7 @@ class Policy:
     brief_fallback: timedelta = timedelta(hours=6)
     report_mode: ReportMode = ReportMode.AUTO
     extraction_wait: timedelta = timedelta(seconds=120)
+    event_retention: timedelta = timedelta(days=7)
 
     @classmethod
     def from_config(cls, options: SummariesConfig, report_mode: str | None = None) -> "Policy":
@@ -61,6 +62,7 @@ class Policy:
             brief_fallback=timedelta(hours=options.brief_fallback_hours),
             report_mode=ReportMode(report_mode or options.report_mode),
             extraction_wait=timedelta(seconds=options.extraction_wait_seconds),
+            event_retention=timedelta(days=options.event_retention_days),
         )
 
     def __post_init__(self) -> None:
@@ -316,14 +318,13 @@ def sync_story(
         story.published_at = story.published_at or now
         story.published_sort_at = item.last_updated_at
         latest.published_at = now
-        defer(
+        record(
             session,
-            StoryEvent(
-                "story.published" if first else "story.updated",
-                story_id,
-                latest.version,
-                tuple(item.source_ids),
-            ),
+            "story.published" if first else "story.updated",
+            story_id,
+            latest.version,
+            tuple(item.source_ids),
+            retention=policy.event_retention,
         )
     if story.published_version == latest.version:
         story.state = StoryState.PUBLISHED.value

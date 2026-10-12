@@ -156,7 +156,7 @@ def test_report_validator_accepts_fake_report() -> None:
     prompt = _report_prompt(report_sources())
     assert len(parse_sources(prompt)) == 2
     valid = validate_report(json.dumps(fake_report(prompt)), report_sources())
-    assert 3 <= len(valid.paragraphs) <= 5 and 225 <= valid.word_count <= 500
+    assert 4 <= len(valid.paragraphs) <= 6 and 270 <= valid.word_count <= 605
 
 
 def _paragraphs(n: int, words: int = 80, cite=(1,)) -> str:
@@ -177,10 +177,10 @@ def _paragraphs(n: int, words: int = 80, cite=(1,)) -> str:
     ("content", "error"),
     [
         ("{}", '"paragraphs" must be a list'),
-        (_paragraphs(2, 150), "3-5 paragraphs"),
-        (_paragraphs(6, 60), "3-5 paragraphs"),
-        (_paragraphs(3, 30), "write 225-500 words"),
-        (_paragraphs(5, 120), "write 225-500 words"),
+        (_paragraphs(3, 150), "4-6 paragraphs"),
+        (_paragraphs(7, 60), "4-6 paragraphs"),
+        (_paragraphs(4, 30), "write 270-605 words"),
+        (_paragraphs(5, 130), "write 270-605 words"),
         (_paragraphs(4, 80, cite=()), "paragraph 1 has no citation"),
         (_paragraphs(4, 80, cite=(3,)), "valid source indexes are 1..2"),
     ],
@@ -197,11 +197,11 @@ def _with_paragraph(text_: str, n: int = 1) -> str:
 
 
 def test_report_verbatim_overlap_guard() -> None:
-    copied = "planted trees along the canal path on a cold morning and organisers"
+    copied = "planted trees along the canal path on a cold morning and organisers said the rowing"
     with pytest.raises(SummaryInvalid, match="word for word"):
         validate_report(_with_paragraph(copied), report_sources())
-    seven = " ".join(copied.split()[:7]) + " ... later"
-    assert validate_report(_with_paragraph(seven), report_sources())
+    eleven = " ".join(copied.split()[:11]) + " ... later"
+    assert validate_report(_with_paragraph(eleven), report_sources())
 
 
 def test_report_rejects_invented_number_and_duplicates() -> None:
@@ -278,7 +278,7 @@ def test_brief_falls_back_to_summary(session_factory, story) -> None:
     ("bad", "error"),
     [
         ("copied_report", "word for word"),
-        ("short_report", "write 225-500 words"),
+        ("short_report", "write 270-605 words"),
         ("invented_number", "987654"),
     ],
 )

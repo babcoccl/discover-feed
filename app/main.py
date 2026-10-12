@@ -4,15 +4,19 @@ from contextlib import asynccontextmanager
 from importlib.metadata import PackageNotFoundError, version
 
 import httpx
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
 
 from app.api import router as api_router
+from app.api_v1 import PREFIX as V1_PREFIX
+from app.api_v1 import router as v1_router
+from app.auth import AuthConfig, legacy_api_guard, web_guard
 from app.config import AppConfig, Source, load_config
 from app.db import init_db, make_engine, make_session_factory, ping
 from app.ingest import Ingestor, build_user_agent, sources_requiring_contact
 from app.llm.health import check_endpoint
+from app.login import router as login_router
 from app.models import ProfileRecord
 from app.pipeline import (
     Pipeline,
@@ -62,6 +66,46 @@ def _warn_missing_contact(sources: list[Source], settings: Settings) -> None:
         )
 
 
+_SUCCESSOR = {
+    "/api/profiles": "/api/v1/profiles",
+    "/api/stories": "/api/v1/stories",
+}
+
+
+class DeprecatedAliases:
+    """``Deprecation`` / ``Link: rel=successor-version`` headers on the unversioned read API
+    (kept for one release; ``/api/admin`` is not versioned and not deprecated)."""
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        path = scope.get("path", "") if scope["type"] == "http" else ""
+        legacy = (
+            scope.get("method") == "GET"
+            and path.startswith("/api/")
+            and not path.startswith((V1_PREFIX + "/", "/api/admin/"))
+        )
+        if not legacy:
+            return await self.app(scope, receive, send)
+        successor = next(
+            (new + path[len(old) :] for old, new in _SUCCESSOR.items() if path.startswith(old)),
+            V1_PREFIX + "/profiles",
+        )
+
+        async def with_headers(message):
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers", []))
+                headers += [
+                    (b"deprecation", b"true"),
+                    (b"link", f'<{successor}>; rel="successor-version"'.encode()),
+                ]
+                message = {**message, "headers": headers}
+            await send(message)
+
+        return await self.app(scope, receive, with_headers)
+
+
 def create_app(
     settings: Settings | None = None, *, llm_transport: httpx.AsyncBaseTransport | None = None
 ) -> FastAPI:
@@ -71,6 +115,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logging.basicConfig(level=settings.log_level.upper())
+        logger.info("%s", app.state.auth.describe())
         engine = make_engine(settings.database_url)
         init_db(engine)
         app.state.settings = settings
@@ -142,8 +187,21 @@ def create_app(
         description="Personal Discover-style news-feed monitor.",
         lifespan=lifespan,
     )
-    app.include_router(api_router)
-    app.include_router(web_router)
+    app.state.auth = AuthConfig.from_settings(settings)
+    app.include_router(v1_router)
+    app.include_router(api_router, dependencies=[Depends(legacy_api_guard)])
+    app.include_router(login_router)
+    app.include_router(web_router, dependencies=[Depends(web_guard)])
+    for route in api_router.routes:
+        if "GET" in getattr(route, "methods", ()) and "/admin/" not in route.path:
+            route.deprecated = True
+    app.add_middleware(DeprecatedAliases)
+
+    @app.get(V1_PREFIX + "/openapi.json", include_in_schema=False)
+    def openapi_v1(request: Request) -> JSONResponse:
+        from app.openapi import v1_schema
+
+        return JSONResponse(v1_schema(request.app))
 
     @app.get("/health", tags=["meta"])
     def health(request: Request) -> JSONResponse:
