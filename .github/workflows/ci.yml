@@ -59,3 +59,16 @@ jobs:
         run: docker compose logs
       - run: docker compose down -v
         if: always()
+
+  docker-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Fresh stack with the fake LLM and fixture feeds; wait for published stories
+        run: python scripts/docker_e2e.py --timeout 900 --out timeline.txt
+      - name: Timeline
+        if: always()
+        run: cat timeline.txt || true

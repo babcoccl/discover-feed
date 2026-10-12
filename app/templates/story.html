@@ -1,5 +1,17 @@
 {% extends "base.html" %}
-{% block title %}{{ story.title }} · Discover Feed{% endblock %}
+{% block title %}{{ story.title }} · Discover Feed{% if profile %}<script>
+(function () {
+  if (!window.EventSource) return;
+  var es = new EventSource("/api/profiles/{{ profile.slug }}/stream");
+  es.addEventListener("story.updated", function (e) {
+    var d = JSON.parse(e.data);
+    if (d.story_id === {{ story.story_id }} && d.version > {{ story.version }}) {
+      document.getElementById("story-updated").hidden = false;
+    }
+  });
+})();
+</script>{% endif %}
+{% endblock %}
 {% from "_summary.html" import lead_text, point_text, summary_byline, snippet_label %}
 {% block content %}
 {%- set numbered = report.citations if report and report.citations else (brief.citations if brief else []) -%}
@@ -16,6 +28,7 @@
 <section class="mb-6 max-w-3xl rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900" aria-labelledby="brief-heading" data-summary data-brief="{{ brief.style }}">
   <h2 id="brief-heading" class="sr-only">Brief</h2>
   {% if brief.style == "snippet" %}
+  {% if brief.label %}<p class="mb-1 text-sm font-medium text-amber-700 dark:text-amber-400" data-summary-unavailable>{{ brief.label }}</p>{% endif %}
   <p class="leading-relaxed text-slate-700 dark:text-slate-300">{{ snippet_label() }}{{ brief.lead_text }}</p>
   {% else %}
   <p class="text-lg font-medium leading-snug text-slate-900 dark:text-slate-100" data-brief-lead>{{ lead_text(brief) }}</p>
@@ -28,6 +41,7 @@
   {% endif %}
 </section>
 {% endif %}
+<p id="story-updated" hidden class="mb-4 max-w-3xl rounded-lg bg-sky-50 px-3 py-2 text-sm text-sky-900 dark:bg-sky-950 dark:text-sky-200" role="status">A newer version of this story is ready. <a href="" class="font-semibold underline">Reload</a></p>
 {% include "_report.html" %}
 {% if numbered %}
 <section class="mb-6 max-w-3xl" aria-labelledby="sources-heading">
@@ -58,4 +72,16 @@
   {% endfor %}
 </ol>
 {% endif %}
+{% if profile %}<script>
+(function () {
+  if (!window.EventSource) return;
+  var es = new EventSource("/api/profiles/{{ profile.slug }}/stream");
+  es.addEventListener("story.updated", function (e) {
+    var d = JSON.parse(e.data);
+    if (d.story_id === {{ story.story_id }} && d.version > {{ story.version }}) {
+      document.getElementById("story-updated").hidden = false;
+    }
+  });
+})();
+</script>{% endif %}
 {% endblock %}

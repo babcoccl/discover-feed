@@ -16,6 +16,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import sessionmaker
 
 from app.config import Source
+from app.lifecycle import ensure_stories
 from app.models import Article, SourceStatus, utcnow
 from app.normalize import NormalizedArticle, normalize, normalize_title
 from app.runs import record_run
@@ -215,6 +216,7 @@ class Ingestor:
                 seen_urls.add(item.canonical_url)
                 if has_title:
                     seen_hashes.add(item.content_hash)
+            ensure_stories(session, utcnow())  # every article is a story from ingest on
             session.commit()
         return new
 

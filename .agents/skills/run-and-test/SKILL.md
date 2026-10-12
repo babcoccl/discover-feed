@@ -86,22 +86,38 @@ update it when fixtures or defaults change. README "Tuning clustering" has the f
 
 ## Summaries and the LLM
 
-- Two artifacts per story: `brief` (lead + 3 cited bullets, cards) and `report` (3-5 cited
-  paragraphs, story page); `story_summaries.kind`, one `summary_jobs` row per (story, kind),
-  briefs run first. Per-profile `summaries:` YAML block (read on every start): `card_style`
-  (lead_bullets|lead_only), `report_mode` (auto|on_demand|off), `report_auto_max_age_hours`,
-  `max_reports_per_run`, `report_concurrency`, `report_max_articles`,
-  `report_max_words_per_article`, `report_max_tokens`, `report_timeout_seconds`,
-  `duplicate_threshold`;
-  `DISCOVER_REPORT_MODE` overrides report_mode. `POST /api/admin/summarize?story_id=&kind=brief|report|both&force=true`.
-- Every clustered card links to `/story/{id}` (on-demand reports are requested there). Only brief
-  endpoint failures pause the worker; report failures back off per job and the story page
-  shows `data-report="retrying"`. Settings > Pipeline shows median brief/report seconds.
-- Demo options: `--report-mode on_demand|off`, `--fake-llm-delay <s>` (see "Generating detailed
-  report"), `?cards=lead_only` on a feed URL. The fake fails one story's report (Retry works).
+- Publish gate: pages and read APIs only show published `story_views`; no GET route may queue,
+  wait for or call generation (`tests/test_architecture.py` enforces imports and behaviour).
+  Story states `ingested -> text_pending -> text_final -> clustered -> brief_ready ->
+  report_final -> published` (`merged` redirects to the kept id). The worker does one story at
+  a time, newest first: brief, report (if 150+ extracted words in some member, else
+  `skipped(insufficient_text)`), publish decision. Everything unpublished is only visible in
+  Settings > Pipeline (queue, ETA, Prioritize/Retry, Pause/Resume, last 20 attempts).
+- Per-profile `summaries:` keys: `card_style`, `report_mode` (auto|off; on_demand = auto),
+  `publish_requires_report` (true), `publish_max_wait_minutes` (30), `brief_fallback_hours` (6),
+  `extraction_wait_seconds` (120), `max_inflight` (1, all LLM calls), `summarize_backfill_hours`
+  (24), `summarize_backfill_max` (40), `report_max_articles`, `report_max_words_per_article`,
+  `report_max_tokens`, `report_timeout_seconds`, `duplicate_threshold`; `llm.summarizer.context_tokens`
+  (16384). `DISCOVER_REPORT_MODE` overrides report_mode.
+  `POST /api/admin/summarize?story_id=&kind=brief|report|both&force=true`.
+- Fixture/old articles are outside the 24 h backfill: the demo build and
+  `tests/fixtures/docker/profiles.yaml` widen it, otherwise nothing gets generated.
+- SSE: `GET /api/profiles/{slug}/stream` (`story.published`/`story.updated`, `heartbeat`);
+  polling fallback `GET /api/profiles/{slug}/published?since=`.
+- Diagnose one story against the configured endpoint (read-only):
+  `python -m app.summarize.diagnose --auto|--story-id N [--kind brief|report|both] [--dry-run] [--markdown]`
+  (Windows: `.venv\Scripts\python -m app.summarize.diagnose ...`). `generation_attempts` keeps the
+  last 500 calls with reasons (`empty_content truncated reasoning_consumed_budget timeout
+  http_<status> invalid_json validation:<rule> insufficient_text`).
+- Docker E2E (fresh volume, fixture feed server, fake LLM; stdlib only, works on Windows):
+  `python scripts/docker_e2e.py [--timeout 900] [--keep] [--out timeline.txt]` uses
+  `docker-compose.yml` + `docker-compose.fake-llm.yml`, waits for published stories, asserts no
+  unpublished story reaches the feed, prints a timeline, tears down. CI job `docker-e2e`.
+- Demo options: `--report-mode off`, `--fake-llm-delay <s>`, `?cards=lead_only` on a feed URL.
 - Tests and the demo never call a real LLM: `app/summarize/fake.py` (`FakeLLM(mode)`, modes
   `ok prose malformed out_of_range invented_number empty http_500 timeout wrong_bullet_count
-  duplicate_bullets copied_report short_report demo`; kind detected from the system prompt) is an
+  duplicate_bullets copied_report short_report truncated reasoning_only http_401 demo`; HTTP
+  server form for Docker: `python -m app.summarize.fake_server --port 8090 --mode demo --delay 2`; kind detected from the system prompt) is an
   `httpx.MockTransport`; pass it as `LLMClient(role, transport=...)` or
   `create_app(settings, llm_transport=...)`. `tests/conftest.py` makes any LLMClient without a
   transport fail the test.
@@ -114,6 +130,6 @@ update it when fixtures or defaults change. README "Tuning clustering" has the f
   `python -m app.summarize.capture --kind brief --out tests/fixtures/llm/real_response.json --db .demo/demo.db`.
 - llama-server: `--host 0.0.0.0 --port 8080 --api-key <key> -c <ctx> -np <slots>`; `-c` is split
   across slots, so give each slot ~16k for 5 articles x 1200 words; match `-np` to
-  `DISCOVER_SUMMARIZE_CONCURRENCY`.
+  `summaries.max_inflight`.
 - Bump `BRIEF_PROMPT_VERSION` / `REPORT_PROMPT_VERSION` in `app/summarize/prompt.py` whenever
   that prompt changes (regenerates that kind for every story).

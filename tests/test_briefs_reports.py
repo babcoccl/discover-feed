@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,7 +10,7 @@ from sqlalchemy import select, text
 from app.db import init_db, make_engine, make_session_factory
 from app.demo import build_demo
 from app.main import create_app
-from app.models import StorySummary, SummaryJob
+from app.models import Story, StorySummary, SummaryJob
 from app.summarize.fake import FakeLLM, fake_report
 from app.summarize.prompt import PROMPT_VERSIONS, SourceDoc, build_messages
 from app.summarize.service import Summarizer
@@ -267,9 +266,9 @@ def test_brief_retry_then_ok(session_factory, story, bad: str, error: str) -> No
 
 
 def test_brief_falls_back_to_summary(session_factory, story) -> None:
-    fake = FakeLLM(["duplicate_bullets", "duplicate_bullets", "ok"])
+    fake = FakeLLM(["duplicate_bullets", "duplicate_bullets", "duplicate_bullets", "ok"])
     outcome = run(session_factory, story, fake)
-    assert outcome.status == "fallback" and fake.calls == 3
+    assert outcome.status == "fallback" and fake.calls == 4
     [row] = rows(session_factory, story, "brief")
     assert row.status == "fallback" and "repeats" in row.reason
     assert row.content_json == {"style": "summary"} and row.text
@@ -290,7 +289,7 @@ def test_report_retry_then_failed_without_substitute(session_factory, story, bad
 
     fake = FakeLLM(bad)
     outcome = run(session_factory, story, fake, kind="report", force=True)
-    assert outcome.status == "rejected" and fake.calls == 2
+    assert outcome.status == "rejected" and fake.calls == 3  # + the last json_object try
     row = rows(session_factory, story, "report")[-1]
     assert row.status == "failed" and error in row.reason and row.text == ""
     assert row.content_json is None or not row.content_json.get("paragraphs")
@@ -345,18 +344,6 @@ def test_briefs_run_before_reports(session_factory, story) -> None:
     assert result.ok == 2 and result.queued == 0
 
 
-def test_debounce_is_per_kind(session_factory, story) -> None:
-    w = worker(session_factory, FakeLLM())
-    w.enqueue([story], kind="brief")
-    asyncio.run(w.run(manual=True))
-    w.enqueue([story], kind="brief")
-    w.enqueue([story], kind="report")
-    with session_factory() as session:
-        jobs = {j.kind: j for j in session.scalars(select(SummaryJob))}
-    assert jobs["brief"].next_attempt_at is not None  # waits for the debounce
-    assert jobs["report"].next_attempt_at is None
-
-
 # --- migration --------------------------------------------------------------------------
 
 
@@ -406,8 +393,8 @@ def demo(tmp_path_factory):
         yield c
 
 
-def _feed(client) -> list[dict]:
-    return client.get("/api/profiles/personal-reader/feed?limit=100").json()["items"]
+def _feed(client, profile: str = "personal-reader") -> list[dict]:
+    return client.get(f"/api/profiles/{profile}/feed?limit=100").json()["items"]
 
 
 def test_api_brief_report_and_deprecated_summary(demo) -> None:
@@ -430,9 +417,21 @@ def test_api_brief_report_and_deprecated_summary(demo) -> None:
         "model",
         "generated_at",
         "sources",
+        "label",
     }
     assert len(brief_["bullets"]) == 3 and brief_["model"] == "fake-llm"
-    assert set(report) == {"paragraphs", "status", "model", "generated_at", "sources"}
+    assert set(report) == {
+        "paragraphs",
+        "state",
+        "status",
+        "reason",
+        "label",
+        "details",
+        "model",
+        "generated_at",
+        "sources",
+    }
+    assert report["state"] == "ready"
     assert 3 <= len(report["paragraphs"]) <= 5
     story = demo.get(f"/api/stories/{item['id']}").json()
     assert story["brief"] == brief_ and story["report"] == report
@@ -453,33 +452,25 @@ def test_api_brief_report_and_deprecated_summary(demo) -> None:
 
 def test_story_page_states(demo) -> None:
     feed = _feed(demo)
-    ok = next(i for i in feed if i["report"] and i["report"]["status"] == "ok")
+    ok = next(i for i in feed if i["report"] and i["report"]["state"] == "ready")
     page = demo.get(f"/story/{ok['id']}?p=personal-reader").text
-    assert 'data-report="ok"' in page and "data-report-paragraph" in page
+    assert 'data-report="ready"' in page and "data-report-paragraph" in page
     assert "data-regenerate" in page and 'id="source-1"' in page and "Written by fake-llm" in page
     assert page.index("data-brief-lead") < page.index('id="report"') < page.index("source-1")
 
-    failed = next(i for i in feed if i["report"] and i["report"]["status"] == "failed")
-    page = demo.get(f"/story/{failed['id']}").text
-    assert 'data-report="failed"' in page and "data-retry" in page
-    assert "data-report-paragraph" not in page  # no lesser substitute
-    partial = demo.post(f"/story/{failed['id']}/regenerate?kind=report").text
-    assert "Generating detailed report" in partial and "every" not in partial
-    _wait_for_report(demo, failed["id"], "ok")
+    skipped = next(
+        i
+        for p in ("personal-reader", "market-monitor")
+        for i in _feed(demo, p)
+        if i["report"]["state"] == "skipped" and i["report"]["reason"] == "insufficient_text"
+    )
+    page = demo.get(f"/story/{skipped['id']}").text
+    assert 'data-report="skipped"' in page and "not enough source text" in page
+    assert "data-report-details" in page and "words" in page
 
-    single = next(i for i in feed if i["source_count"] == 1 and i["report"] is None)
-    demo.post(f"/api/admin/summarize?story_id={single['id']}&kind=report")
-    page = demo.get(f"/story/{single['id']}").text
-    assert "Report unavailable (not enough source text)" in page
-
-
-def _wait_for_report(client, story_id: int, status: str) -> dict:
-    for _ in range(100):
-        report = client.get(f"/api/stories/{story_id}").json()["report"]
-        if report and report["status"] == status:
-            return report
-        time.sleep(0.05)
-    raise AssertionError(f"report of story {story_id} never became {status}")
+    partial = demo.post(f"/story/{ok['id']}/regenerate?kind=report").text
+    assert "data-report-queued" in partial
+    assert demo.get(f"/story/{ok['id']}").status_code == 200  # old version still served
 
 
 def test_card_styles(demo) -> None:
@@ -490,29 +481,13 @@ def test_card_styles(demo) -> None:
     assert "data-brief-lead" in lead_only and "data-brief-bullets" not in lead_only
 
 
-def test_on_demand_report_from_story_page(tmp_path) -> None:
-    build = build_demo(tmp_path / "demo.db", report_mode="on_demand", fake_delay=0.3)
-    with TestClient(create_app(build.settings, llm_transport=build.llm_transport)) as c:
-        item = next(i for i in _feed(c) if i["source_count"] >= 2)
-        assert item["report"] is None and item["brief"]
-        page = c.get(f"/story/{item['id']}").text
-        assert "data-report-pending" in page and "Generating detailed report" in page
-        assert 'hx-trigger="load delay:3s"' in page
-        poll = c.get(f"/story/{item['id']}/report?polls=1")
-        assert poll.status_code == 200 and "data-report-pending" in poll.text
-        timeout = c.get(f"/story/{item['id']}/report?polls=999")
-        assert "data-report-timeout" in timeout.text or timeout.headers.get("HX-Refresh")
-        _wait_for_report(c, item["id"], "ok")
-        done = c.get(f"/story/{item['id']}/report?polls=2")
-        assert done.headers.get("HX-Refresh") == "true"
-
-
 def test_report_mode_off(tmp_path) -> None:
     build = build_demo(tmp_path / "demo.db", report_mode="off")
     with TestClient(create_app(build.settings, llm_transport=build.llm_transport)) as c:
         item = next(i for i in _feed(c) if i["source_count"] >= 2)
+        assert item["report"]["state"] == "skipped" and item["report"]["reason"] == "reports_off"
         page = c.get(f"/story/{item['id']}").text
-        assert 'id="report"' not in page and item["report"] is None
+        assert "Reports are turned off" in page and "data-report-paragraph" not in page
 
 
 # --- regressions: unreachable reports, slow reports pausing briefs ---------------------
@@ -526,18 +501,17 @@ def test_single_source_cards_open_the_story_page(demo) -> None:
 
 
 def test_report_endpoint_failures_do_not_pause_briefs(session_factory, story) -> None:
-    w = worker(session_factory, FakeLLM("timeout"), failure_limit=2)
-    w.enqueue([story], kind="report")
-    for _ in range(3):
-        asyncio.run(w.run(story_id=story, kinds=["report"]))
+    w = worker(session_factory, FakeLLM(["ok", "timeout"]), failure_limit=2)
+    for _ in range(3):  # brief ok, then the report times out three times
+        asyncio.run(w.run(story_id=story, manual=True))
     assert w.state.paused_until is None and w.state.last_error.startswith("report: timeout")
     with session_factory() as session:
-        job = session.get(SummaryJob, (story, "report"))
-        assert job.attempts == 3 and job.next_attempt_at is not None
-    w.enqueue([story], kind="brief")
+        assert session.get(SummaryJob, (story, "report")) is None  # final: failed
+        assert session.get(Story, story).state == "published"
+    w.retry(story, "brief")
     for _ in range(2):
-        asyncio.run(w.run(story_id=story, kinds=["brief"]))
-    assert w.state.paused_until is not None  # an unreachable endpoint still pauses
+        asyncio.run(w.run(story_id=story, manual=True, kinds=["brief"]))
+    assert w.state.paused_until is not None  # an unreachable endpoint still pauses briefs
 
 
 def test_report_requests_get_their_own_timeout() -> None:
@@ -546,33 +520,3 @@ def test_report_requests_get_their_own_timeout() -> None:
     s = Summarizer(LLMClient(ROLE), report_max_tokens=900, report_timeout_seconds=300)
     assert s.report_client.role.timeout_seconds == 300 and s.report_client.role.max_tokens == 900
     assert s.client.role.timeout_seconds == ROLE.timeout_seconds
-
-
-def test_story_page_shows_a_retrying_report(demo) -> None:
-    from datetime import timedelta
-
-    from app.models import utcnow
-
-    single = next(i for i in _feed(demo) if i["source_count"] == 1 and i["report"] is None)
-    factory = demo.app.state.session_factory
-    with factory() as session:
-        session.merge(
-            SummaryJob(
-                story_id=single["id"],
-                kind="report",
-                attempts=1,
-                last_error="timeout: timed out after 300s",
-                next_attempt_at=utcnow() + timedelta(hours=1),
-            )
-        )
-        session.commit()
-    try:
-        page = demo.get(f"/story/{single['id']}").text
-        assert 'data-report="retrying"' in page and "timed out after 300s" in page
-        assert "Retry now" in page and "data-report-retrying" in page
-        poll = demo.get(f"/story/{single['id']}/report?polls=1")
-        assert "data-report-retrying" in poll.text
-    finally:
-        with factory() as session:
-            session.delete(session.get(SummaryJob, (single["id"], "report")))
-            session.commit()

@@ -16,6 +16,7 @@ from app.models import (
     ProfileRecord,
     SourceRecord,
     SourceStatus,
+    Story,
     Topic,
     profile_sources,
 )
@@ -250,6 +251,7 @@ def feed_page(
     limit: int = 24,
     cursor: str | None = None,
     time_field: TimeField = "published",
+    published_only: bool = False,
 ) -> FeedPage:
     """Newest-first articles from the profile's sources, filtered by ``topic`` (None = all).
 
@@ -267,6 +269,10 @@ def feed_page(
         return FeedPage(items=[], next_cursor=None)
 
     base = select(Article).where(Article.source_id.in_(source_ids))
+    if published_only:  # the UI's article view: only articles of published stories
+        base = base.where(
+            Article.story_id.in_(select(Story.id).where(Story.published_version.is_not(None)))
+        )
     # SQLite's LIKE only folds ASCII case, so the pre-filter is skipped for non-ASCII keywords.
     if rule.include and all(keyword.isascii() for keyword in rule.include):
         base = base.where(or_(*(_like(keyword) for keyword in rule.include)))

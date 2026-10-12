@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from datetime import timedelta
 
 import httpx
 from sqlalchemy.orm import sessionmaker
@@ -12,6 +13,8 @@ from app.config import AppConfig, LLMRole, Profile, SummariesConfig
 from app.extract import Extractor, ExtractRunResult
 from app.ingest import USER_AGENT
 from app.llm import LLMClient
+from app.llm.client import set_max_inflight
+from app.publish import Policy
 from app.runs import record_run
 from app.settings import Settings
 from app.summarize.service import Summarizer
@@ -85,18 +88,17 @@ def summary_worker_from_settings(
             report_timeout_seconds=options.report_timeout_seconds,
             duplicate_threshold=options.duplicate_threshold,
         )
+    if summarizer is not None:
+        set_max_inflight(options.max_inflight)
     return SummaryWorker(
         session_factory,
         summarizer,
-        concurrency=settings.summarize_concurrency,
         max_per_run=settings.summarize_max_per_run,
-        debounce_minutes=settings.summarize_resummarize_min_minutes,
         failure_limit=settings.summarize_failure_limit,
         pause_minutes=settings.summarize_pause_minutes,
-        report_mode=settings.report_mode or options.report_mode,
-        report_auto_max_age_hours=options.report_auto_max_age_hours,
-        max_reports_per_run=options.max_reports_per_run,
-        report_concurrency=options.report_concurrency,
+        policy=Policy.from_config(options, settings.report_mode),
+        backfill_hours=options.summarize_backfill_hours,
+        backfill_max=options.summarize_backfill_max,
     )
 
 
@@ -119,9 +121,21 @@ class Pipeline:
             self._record("extract", result.model_dump(exclude={"results"}))
         return result
 
+    @property
+    def extraction_wait(self) -> timedelta:
+        policy = self.summaries.policy if self.summaries is not None else Policy()
+        return policy.extraction_wait
+
     def cluster(self, *, rebuild: bool = False) -> ClusterRunResult:
+        """Stories whose text is final (extracted, failed, or ``extraction_wait_seconds``
+        passed) join an existing story or start their own."""
         try:
-            result = run_clustering(self.session_factory, self.clusterer, rebuild=rebuild)
+            result = run_clustering(
+                self.session_factory,
+                self.clusterer,
+                rebuild=rebuild,
+                extraction_wait=self.extraction_wait,
+            )
         except Exception:
             logger.exception("clustering failed")
             return ClusterRunResult(status="error", rebuild=rebuild)
@@ -131,16 +145,16 @@ class Pipeline:
         return result
 
     def _queue_summaries(self, result: ClusterRunResult) -> None:
+        """Kick the generation worker (it derives what to do from story states)."""
         if self.summaries is None or not self.summaries.enabled:
             return
         try:
-            if result.rebuild:
+            if result.rebuild:  # new story ids: regenerate all (cached input -> no LLM call)
                 self.summaries.enqueue_all()
-            else:
-                self.summaries.enqueue(result.story_ids)
-                self.summaries.enqueue_auto_reports(result.story_ids)
+            if result.story_ids or result.rebuild:
+                self.summaries.start()
         except Exception:
-            logger.exception("could not queue stories for summaries")
+            logger.exception("could not start the summary worker")
 
     async def run(self) -> tuple[ExtractRunResult, ClusterRunResult]:
         extracted = await self.extract()

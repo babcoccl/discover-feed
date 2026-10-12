@@ -1,5 +1,6 @@
 import json
 import re
+import time
 from pathlib import Path
 
 import pytest
@@ -77,7 +78,7 @@ def test_story_feed_groups_profile_sources(app_client: TestClient) -> None:
         "CNBC Markets",
         "Guardian Business",
     ]
-    assert nimbus["sources"][0]["url"] == "https://www.sec.gov/newsroom/press-releases/2026-118"
+    assert nimbus["sources"][0]["url"] == "http://localhost:8000/demo-article/sec-press-releases-8"
     assert nimbus["snippet"] and nimbus["image_url"]
     updated = [i["last_updated_at"] for i in feed["items"]]
     assert updated == sorted(updated, reverse=True)
@@ -120,7 +121,8 @@ def test_story_endpoint_lists_all_members(app_client: TestClient) -> None:
     story = app_client.get(f"/api/stories/{nimbus['id']}").json()
     assert len(story["members"]) == 4 and story["source_count"] == 4
     assert {m["source"] for m in story["members"]} >= {"TechCrunch", "SEC press releases"}
-    assert all(m["url"].startswith("https://") and m["summary"] for m in story["members"])
+    demo = "http://localhost:8000/demo-article/"
+    assert all(m["url"].startswith(demo) and m["summary"] for m in story["members"])
     scoped = app_client.get(f"/api/stories/{nimbus['id']}?profile=market-monitor").json()
     assert len(scoped["members"]) == 3
     assert app_client.get("/api/stories/99999").status_code == 404
@@ -156,8 +158,18 @@ def test_admin_extract_and_cluster_endpoints(app_client: TestClient) -> None:
     assert extract.status_code == 200 and extract.json()["processed"] == 0
     cluster = app_client.post("/api/admin/cluster").json()
     assert cluster["processed"] == 0 and cluster["multi_source_stories"] == 4
+    feed_url = "/api/profiles/personal-reader/feed?limit=100"
+    before = len(app_client.get(feed_url).json()["items"])
     rebuilt = app_client.post("/api/admin/cluster?rebuild=true").json()
     assert rebuilt["rebuild"] and rebuilt["multi_source_stories"] == 4
+    # New story ids are unpublished until regenerated (cached summaries: no LLM call).
+    for _ in range(200):
+        items = app_client.get(feed_url).json()["items"]
+        if any(i["source_count"] == 4 for i in items) and len(items) == before:
+            break
+        time.sleep(0.05)
+    else:
+        raise AssertionError("stories were not republished after a rebuild")
 
 
 def test_story_cards_badges_and_story_page(app_client: TestClient) -> None:
@@ -172,7 +184,8 @@ def test_story_cards_badges_and_story_page(app_client: TestClient) -> None:
     ai = next(t for t in topics if t["name"] == "AI")
     page = app_client.get(f"/story/{story_id}?p=personal-reader&topic={ai['id']}").text
     assert f'href="/p/personal-reader?topic={ai["id"]}"' in page and "Back to feed" in page
-    assert page.count('<li class="p-4">') == 4
+    # Every member is listed once: as a numbered source, or under "More coverage".
+    assert page.count('<li class="p-4">') + page.count('<li id="source-') == 4
     assert 'target="_blank" rel="noopener noreferrer"' in page
     story = app_client.get(f"/api/stories/{story_id}").json()
     for member in story["members"]:
@@ -223,5 +236,4 @@ def test_demo_build_reports_pipeline(tmp_path: Path) -> None:
     assert build.extracted.ok >= 20 and build.extracted.skipped == 1
     reasons = {r.reason for r in build.extracted.results}
     assert "disallowed by robots.txt" in reasons
-    assert any(r and r.startswith("extracted 0 words") for r in reasons)
     assert json.dumps(build.clustered.model_dump())  # serializable for the admin endpoint

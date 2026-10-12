@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SQLite is not a toy database | Hacker News: Front Page</title>
+  <meta name="description" content="Why the embedded database powers more production workloads than people think.">
+</head>
+<body>
+  <header>
+    <a href="/">Hacker News: Front Page</a>
+    <nav><a href="/news">News</a> <a href="/latest">Latest</a> <a href="/newsletters">Newsletters</a> <a href="/about">About</a></nav>
+  </header>
+  <main>
+    <article>
+      <h1>SQLite is not a toy database</h1>
+      <p class="byline">Published 2026-10-06 13:00 UTC</p>
+      <p>SQLite is often described as a database for testing or for small hobby projects. In reality, it is one of the most widely deployed pieces of software in the world, running inside phones, web browsers, operating systems, cars and aircraft. Many production web applications also use it as their primary data store.</p>
+      <p>The key difference from client-server databases is that SQLite runs inside your application process and stores data in a single file. There is no separate server to configure, secure or monitor. Reads are extremely fast because they avoid network round trips, and a well-tuned SQLite database can serve thousands of queries per second on modest hardware.</p>
+      <p>The main limitation is write concurrency. SQLite allows only one writer at a time, though write-ahead logging mode lets readers continue while a write is in progress. For many web applications, writes are short and infrequent enough that this is not a problem. Batching writes in transactions makes a large difference to throughput.</p>
+      <p>Durability and reliability are strong points. SQLite is tested with an extensive suite that includes simulated power failures and disk errors, and the file format is stable and documented, so data written today will be readable decades from now. That makes it a good choice for application file formats as well as databases.</p>
+      <p>Operational tooling has improved too. Several open-source projects replicate SQLite databases to object storage continuously, giving point-in-time recovery without a database server. Others replicate reads across multiple machines for global applications.</p>
+      <p>SQLite is not the right fit for every workload. Applications with heavy concurrent writes from many processes, or teams that need fine-grained access control inside the database, may be better served by a client-server system. But for a large share of applications, it is simpler, faster and more reliable than people expect.</p>
+    </article>
+    <aside>
+      <h2>Most read</h2>
+      <ul><li><a href="/1">Sign up for our daily newsletter</a></li><li><a href="/2">Contact the newsroom</a></li></ul>
+    </aside>
+  </main>
+  <footer>&copy; 2026 Hacker News: Front Page. <a href="/terms">Terms of use</a> <a href="/privacy">Privacy policy</a></footer>
+</body>
+</html>

@@ -14,7 +14,22 @@ docker compose up --build
 curl localhost:8000/health
 ```
 
-Then open http://localhost:8000 (placeholder page) or http://localhost:8000/docs.
+Then open http://localhost:8000 or http://localhost:8000/docs.
+
+First run in Docker (same commands in PowerShell on Windows with Docker Desktop):
+
+1. Copy `config/profiles.example.yaml` to `config/profiles.yaml` and set each profile's
+   `llm.summarizer` (or `LOCAL_LLM_BASE_URL` / `LOCAL_LLM_API_KEY` in `.env`).
+2. `docker compose up --build -d`. The log shows the LLM health check (`GET {base_url}/models`).
+3. Open http://localhost:8000. Until the first story is fully generated the feed says
+   "Preparing your first stories..." with live counts and any blocker (endpoint not set,
+   unreachable, HTTP 401, paused). Settings > Pipeline shows every story still in progress.
+4. Stories appear one at a time as they publish ("N new stories - click to load").
+   `docker compose down -v` starts over with an empty database.
+
+No LLM at hand? `python scripts/docker_e2e.py --keep` starts the stack with a fake LLM and
+local fixture feeds (`docker-compose.fake-llm.yml`); open http://localhost:8000, then
+`docker compose -p discover-e2e down -v`.
 
 ## Ingestion
 
@@ -165,86 +180,123 @@ Written by an OpenAI-compatible chat completions endpoint (llama.cpp `llama-serv
 Ollama, OpenAI...). Only the numbered sources' text goes into the prompt; extracted article
 text is never returned by the public API or rendered in a page.
 
-How it works (`app/summarize/`):
+How it works: the publish gate (`app/lifecycle.py`, `app/summarize/worker.py`, `app/publish.py`):
 
-- After clustering, new stories and stories that gained members are queued (`summary_jobs`,
-  one row per story and kind). A background worker (`DISCOVER_SUMMARIZE_INTERVAL_MINUTES`,
-  default 5, plus right after each pipeline run) does briefs before reports, newest stories
-  first: briefs `DISCOVER_SUMMARIZE_CONCURRENCY` (1) at a time and at most
-  `DISCOVER_SUMMARIZE_MAX_PER_RUN` (25) per run, reports `report_concurrency` (1) at a time and
-  at most `max_reports_per_run` (3). Briefs and reports debounce independently
-  (`DISCOVER_SUMMARIZE_RESUMMARIZE_MIN_MINUTES`, 30). The worker has its own thread, so
-  ingestion, extraction and clustering never wait for the LLM.
+The app is "always on": generation runs in the background and pages only read finished,
+published story views. Opening a page never triggers, queues or waits on the LLM.
+
+- **Story states.** Every article gets a story at ingest, which moves
+  `ingested -> text_pending -> text_final -> clustered -> brief_ready -> report_final ->
+  published`. `text_final` means extracted text is available or unavailable: decided after
+  extraction, or after `extraction_wait_seconds` (120). When clustering merges stories the
+  oldest id is kept; the others become `merged` and `/story/{old}` and `/api/stories/{old}`
+  redirect (301) to it.
+- **One story at a time, newest first.** The worker takes the highest-priority, most recently
+  updated story and runs its brief, then its report (if eligible), then the publish decision,
+  before it starts the next story. `max_inflight` (1) caps all LLM requests process-wide.
+  Unpublished stories older than `summarize_backfill_hours` (24) are skipped and at most
+  `summarize_backfill_max` (40) unpublished stories are worked on; published stories that
+  gained members are always refreshed.
+- **Report eligibility** is decided without the LLM: at least one included member with
+  `text_status=ok` and 150+ extracted words. Otherwise the report is final as
+  `skipped(insufficient_text)` with each member's status and word count. Report failures back
+  off their own job and never pause briefs; brief endpoint failures
+  (`DISCOVER_SUMMARIZE_FAILURE_LIMIT`, 3 in a row) pause the worker for
+  `DISCOVER_SUMMARIZE_PAUSE_MINUTES` (10).
+- **Publish rule.** A story publishes once its brief is valid and its report is final
+  (`ready`, `skipped(reason)` or `failed(reason)`). With `publish_requires_report: false` it
+  publishes as soon as the brief is valid. After `publish_max_wait_minutes` (30) it publishes
+  with the report pending ("Detailed report still generating"). If the brief fails for good,
+  the story publishes after `brief_fallback_hours` (6) with the feed snippet, labelled
+  `Summary unavailable: <reason>`.
+- **Story views.** Every change writes a new version to `story_views (story_id, version,
+  schema_version, state, published_at, doc JSON, updated_at)` in the same transaction as the
+  summary row. `stories.published_version` moves only when the new version meets the publish
+  rule, so the old version stays on screen while a replacement is generated. One document per
+  story; the profile's sources are filtered when it is read. Existing databases are migrated
+  in place on startup (idempotent; old `story_summaries` publish under these rules).
+- **Live arrivals.** `GET /api/profiles/{slug}/stream` (Server-Sent Events) sends
+  `story.published` / `story.updated` with `{story_id, version}` and a `heartbeat` event. The
+  feed shows "N new stories - click to load" without moving the grid; without SSE it polls
+  `GET /api/profiles/{slug}/published?since=<iso>` every 30 s. An open story page offers a
+  reload when a newer version is published.
+- **Before the first story.** The feed says "Preparing your first stories..." with live counts
+  (ingested, extracting, clustering, summarizing N of M) and names what blocks generation: no
+  endpoint set, endpoint unreachable, HTTP 401 or the worker paused. On startup the app logs
+  the result of `GET {base_url}/models` (a 401 there is reported but tolerated).
+- **Pipeline panel** (Settings > Pipeline): every unpublished story with its state and reason
+  and an ETA from the median brief/report time, **Prioritize** and **Retry** per story,
+  **Pause/Resume generation**, and the last 20 generation attempts.
+- **Generation attempts.** `generation_attempts` keeps the latest 500 LLM calls: story, kind,
+  model, endpoint host (never the key), member text statuses and word counts, input words,
+  estimated tokens, usage, finish reason, latency, content and reasoning length, the raw
+  content (truncated), validation errors, outcome and reason (`empty_content`, `truncated`,
+  `reasoning_consumed_budget`, `timeout`, `http_<status>`, `invalid_json`,
+  `validation:<rule>`, `insufficient_text`). A warning is logged when thinking is disabled but
+  the model still returns reasoning.
+- **Prompt size.** `llm.summarizer.context_tokens` (16384) is the model's context window;
+  report inputs are trimmed so the answer (`report_max_tokens`) still fits. After the usual
+  validation retry, a last attempt asks for `structured_output: json_object` and extracts the
+  JSON leniently; citation, number and verbatim-copy checks still apply.
 - Input: briefs use up to `DISCOVER_SUMMARIZE_MAX_ARTICLES_PER_STORY` (5) members and the first
   `DISCOVER_SUMMARIZE_MAX_WORDS_PER_ARTICLE` (1200) words of each; reports use
   `report_max_articles` (4) and `report_max_words_per_article` (600), keeping the brief's
-  numbering and appending any extra sources. Members are numbered one per source first; the
-  feed summary stands in when extraction failed.
-- The answer must be JSON (`response_format` JSON schema; code fences/prose around it are
-  tolerated). Briefs are rejected for a wrong bullet count, a lead that is not one sentence,
-  length violations, missing or out-of-range citations, numbers (digits, %, amounts) not in a
-  cited source, or near-duplicate bullets / a bullet repeating the lead (token overlap at or
-  above `duplicate_threshold`, 0.6). Reports are rejected for fewer than 3 or more than 5
-  paragraphs, fewer than 225 or more than 500 words (the 250-450 target plus 10%), uncited
-  paragraphs, bad citations, invented numbers, duplicate paragraphs, or any run of 8+ words
-  copied from a source.
-- A rejected answer is retried once with the error. A brief that fails twice falls back to a
-  Phase 4 style 2-3 sentence summary, then to the feed snippet (labelled **Feed snippet**),
-  `status=fallback` with the reason. A report that fails twice is stored `failed` with the
-  reason and nothing is shown in its place; the story page offers **Retry**.
-- Stories whose only text is feed summaries (every member failed extraction, or a single member
-  under 150 words) get a brief but no report: `status=skipped`, `reason=insufficient_text`,
-  shown as "Report unavailable (not enough source text)".
-- Endpoint errors (HTTP 5xx, timeouts) are `failed`, retried later with backoff, and after
-  `DISCOVER_SUMMARIZE_FAILURE_LIMIT` (3) brief failures in a row the worker pauses for
-  `DISCOVER_SUMMARIZE_PAUSE_MINUTES` (10). Report failures only back off their own job (a
-  slow report timing out never stops briefs); meanwhile the story page says the endpoint
-  failed and offers **Retry now**. Report requests use `report_timeout_seconds` (300).
-- Every version is kept in `story_summaries` (`kind` brief|report, text, structured
-  `content_json`, citations, the article id behind each `[n]`, basis, model, prompt version,
-  tokens, latency). `input_hash` covers member ids, source text hashes, the kind's prompt
-  version (`BRIEF_PROMPT_VERSION`, `REPORT_PROMPT_VERSION`), model and kind: unchanged input
-  means no LLM call (a report that failed validation is not retried until its input changes or
-  you force it). Pre-report databases are migrated in place (old rows become briefs and stay
-  readable).
-- Settings > Pipeline shows the queue, brief and report counts, running state, last error and
-  tokens/sec, with a **Summarize now** button. API: `POST /api/admin/summarize` (all queued
-  jobs in the background; `?story_id=` one story, awaited; `?kind=brief|report|both`, default
-  both; `?force=true` ignores the cache; `?wait=true`).
-- Story feed items and `GET /api/stories/{id}` have `brief` (`{lead, lead_citations, bullets:
-  [{text, citations}], status: ok|fallback, style: brief|summary|snippet, basis, model,
-  generated_at, sources}`), `report` (`{paragraphs: [{text, citations}], status:
-  ok|failed|skipped, model, generated_at, sources}` or `null` when none was requested) and
-  the deprecated `summary` (the brief's lead and bullets joined; removed next release). Each
-  citation is `{index, source, headline, url}` with the raw `Article.url`.
+  numbering. Briefs are rejected for a wrong bullet count, a lead that is not one sentence,
+  length violations, bad citations, numbers not in a cited source, or near-duplicate bullets
+  (`duplicate_threshold`, 0.6). Reports are rejected for fewer than 3 or more than 5 paragraphs,
+  fewer than 225 or more than 500 words, uncited paragraphs, bad citations, invented numbers,
+  duplicate paragraphs, or any run of 8+ words copied from a source. A brief that keeps failing
+  falls back to a 2-3 sentence summary, then to the feed snippet.
+- Every version is kept in `story_summaries`; `input_hash` covers member ids, source text
+  hashes, prompt version, model and kind, so unchanged input means no LLM call.
+- API: story feed items and `GET /api/stories/{id}` (published stories only; 404 otherwise)
+  have `version`, `published_at`, `brief` (`{lead, lead_citations, bullets, status, style,
+  basis, model, generated_at, sources, label}`), `report` (`{paragraphs, state:
+  ready|pending|skipped|failed, status (deprecated: ok|pending|skipped|failed), reason, label,
+  details, model, generated_at, sources}`) and the deprecated `summary` (kept for one more
+  release). `POST /api/admin/summarize` (`?story_id=`, `?kind=brief|report|both`,
+  `?force=true`, `?wait=true`) queues generation.
 
-### Report modes and the profile `summaries` block
+### The profile `summaries` block
 
 Each profile can set (defaults shown; read from the YAML on every start, not stored in the DB):
 
 ```yaml
 summaries:
-  card_style: lead_bullets       # or lead_only (cards show the lead without bullets)
-  report_mode: auto              # auto | on_demand | off
-  report_auto_max_age_hours: 48  # auto: pre-generate reports for multi-source stories this recent
-  max_reports_per_run: 3
-  report_concurrency: 1
+  card_style: lead_bullets         # or lead_only (cards show the lead without bullets)
+  report_mode: auto                # auto | off (on_demand is read as auto)
+  publish_requires_report: true    # wait for the report (or its final skipped/failed state)
+  publish_max_wait_minutes: 30     # then publish with "Detailed report still generating"
+  brief_fallback_hours: 6          # a failed brief publishes with the feed snippet after this
+  extraction_wait_seconds: 120     # stop waiting for article text after this
+  max_inflight: 1                  # concurrent LLM requests, all kinds, whole process
+  summarize_backfill_hours: 24     # unpublished stories older than this are not generated
+  summarize_backfill_max: 40       # at most this many unpublished stories are worked on
   report_max_articles: 4
   report_max_words_per_article: 600
-  report_max_tokens: 1000        # max_tokens for report requests (briefs use llm.summarizer's)
-  report_timeout_seconds: 300    # timeout for report requests (briefs use llm.summarizer's)
-  duplicate_threshold: 0.6       # token overlap at which two bullets/paragraphs are duplicates
+  report_max_tokens: 1000          # max_tokens for report requests (briefs use llm.summarizer's)
+  report_timeout_seconds: 300      # timeout for report requests
+  duplicate_threshold: 0.6
 ```
 
-- `auto`: reports are generated in the background for multi-source stories updated within the
-  window; any other story (single source, older) gets its report when its page is opened.
-- `on_demand`: opening a story page queues its report.
-- `off`: no reports.
+`report_concurrency`, `max_reports_per_run` and `report_auto_max_age_hours` are still accepted
+but ignored (`max_inflight` and the backfill limits replace them). `report_mode: off` publishes
+stories with `skipped(reports_off)`. `DISCOVER_REPORT_MODE` overrides every profile's
+`report_mode`. **Regenerate** and **Retry** queue a new version; the current one stays visible
+until it is replaced.
 
-While a report is queued or running the story page shows "Generating detailed report..." and
-polls every 3 seconds (HTMX) for up to 2 minutes, then says it is still queued. **Regenerate**
-(and **Retry** after a failure) forces a new brief/report. `DISCOVER_REPORT_MODE` overrides
-every profile's `report_mode` (the demo's `--report-mode`).
+### Diagnosing a slow or empty report
+
+```bash
+python -m app.summarize.diagnose --auto --kind both            # newest story waiting
+python -m app.summarize.diagnose --story-id 42 --kind report --markdown
+python -m app.summarize.diagnose --auto --dry-run              # prompt only, no LLM call
+```
+
+(Windows: `.venv\Scripts\python -m app.summarize.diagnose --auto`.) It prints the members with
+text status and word counts, which are sent, the prompt size against `context_tokens`, then
+each attempt's raw response, finish reason, usage, tokens/second and validation result.
+Nothing is written to the database.
 
 ### Configuring the endpoint
 
@@ -269,7 +321,7 @@ llm:
 Cloud providers use the same code with different settings (see `market-monitor` in
 `config/profiles.example.yaml`; set `disable_thinking: false` where unknown parameters are
 rejected). Start llama.cpp so other machines can reach it, with a key, enough context for a
-report's 4 articles x 600 words, and parallel slots matching `DISCOVER_SUMMARIZE_CONCURRENCY`:
+report's 4 articles x 600 words, and parallel slots matching `summaries.max_inflight`:
 
 ```bash
 llama-server -m model.gguf --host 0.0.0.0 --port 8080 --api-key <key> -c 16384 -np 1
@@ -283,9 +335,9 @@ concurrency 2.)
 The demo and tests use a deterministic in-process fake LLM (no network) that writes briefs and
 reports from the sources: about one brief in five gets an invented number (fallbacks show up),
 one story's report fails validation (shows **Retry**; Retry then succeeds), and single-source
-stories with little text show "Report unavailable". The demo writes reports for every
-multi-source story at startup (the fixtures are older than the auto window); open a
-single-source story to see an on-demand report. Demo options: `--report-mode on_demand|off`,
+stories with little text show "Report unavailable". The demo generates and publishes every
+story at startup (the fixtures are older than the backfill window, so the demo widens it).
+Demo options: `--report-mode off`,
 `--fake-llm-delay 3` (slow fake answers to see the generating state), and `?cards=lead_only`
 on a feed URL previews the lead-only cards. To use your server instead:
 

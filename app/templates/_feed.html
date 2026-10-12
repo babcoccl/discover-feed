@@ -14,14 +14,72 @@
     {% for t in tabs %}{{ tab(t.name, t.id, topic is not none and topic.id == t.id) }}{% endfor %}
   </div>
 </nav>
+{% if blockers %}
+<div class="mb-4 space-y-1 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200" role="alert" data-blockers>
+  {% for b in blockers %}<p>{{ b }}</p>{% endfor %}
+</div>
+{% endif %}
+<div class="pointer-events-none sticky top-2 z-10 flex h-0 justify-center" aria-live="polite">
+  <button type="button" id="new-stories" hidden data-new-stories
+          hx-get="/p/{{ profile.slug }}/feed{% if topic %}?topic={{ topic.id }}{% endif %}" hx-target="#feed"
+          class="pointer-events-auto rounded-full bg-sky-700 px-4 py-1.5 text-sm font-semibold text-white shadow-lg hover:bg-sky-800 dark:bg-sky-600"></button>
+</div>
 {% if page.items %}
 <div id="grid" class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
   {% include "_cards.html" %}
+</div>
+{% elif preparing and not topic and preparing.published == 0 %}
+{%- set st = preparing -%}
+<div class="rounded-xl border border-dashed border-slate-300 p-10 text-center text-slate-600 dark:border-slate-700 dark:text-slate-300" data-preparing
+     hx-get="/p/{{ profile.slug }}/feed" hx-trigger="every 5s" hx-target="#feed">
+  <p class="mb-3 text-lg font-semibold">Preparing your first stories...</p>
+  <ul class="inline-flex flex-wrap justify-center gap-3 text-sm text-slate-500 dark:text-slate-400" data-stage-counts>
+    <li>{{ st.ingested }} ingested</li>
+    <li>{{ st.extracting }} extracting</li>
+    <li>{{ st.clustering }} clustering</li>
+    <li>summarizing {{ st.summarizing[0] }} of {{ st.summarizing[1] }}</li>
+  </ul>
+  <p class="mt-3 text-xs text-slate-400">Stories appear here once their summary (and report) are ready.</p>
 </div>
 {% else %}
 <div class="rounded-xl border border-dashed border-slate-300 p-10 text-center text-slate-500 dark:border-slate-700 dark:text-slate-400">
   {% if topic %}No {{ 'articles' if view == 'articles' else 'stories' }} match <strong>{{ topic.name }}</strong> yet.
   <a href="/p/{{ profile.slug }}/settings" class="text-sky-700 hover:underline dark:text-sky-400">Edit its keywords</a>.
-  {% else %}No articles yet. They appear after the next refresh.{% endif %}
+  {% else %}No stories yet. They appear after the next refresh.{% endif %}
 </div>
 {% endif %}
+<script>
+(function () {
+  // Live arrivals: count stories published since this view loaded; never reflows the grid.
+  var pill = document.getElementById("new-stories");
+  if (!pill || window.__feedStream === "{{ stream_url }}") { if (window.__resetNew) window.__resetNew(); return; }
+  window.__feedStream = "{{ stream_url }}";
+  var seen = {}, count = 0, since = new Date().toISOString(), timer = null;
+  function show() {
+    var el = document.getElementById("new-stories");
+    if (!el) return;
+    el.textContent = count + " new stor" + (count === 1 ? "y" : "ies") + " — click to load";
+    el.hidden = count === 0;
+  }
+  window.__resetNew = function () { seen = {}; count = 0; since = new Date().toISOString(); show(); };
+  function arrived(id) {
+    var onPage = document.querySelector('[data-story-id="' + id + '"]');
+    if (onPage || seen[id]) return;
+    seen[id] = true; count += 1; show();
+  }
+  function poll() {
+    fetch("/api/profiles/{{ profile.slug }}/published?since=" + encodeURIComponent(since))
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) { if (d) d.stories.forEach(function (s) { arrived(s.story_id); }); })
+      .catch(function () {});
+  }
+  function fallback() { if (!timer) timer = setInterval(poll, 30000); }
+  if (!window.EventSource) { fallback(); return; }
+  var es = new EventSource("{{ stream_url }}");
+  es.addEventListener("story.published", function (e) { arrived(JSON.parse(e.data).story_id); });
+  es.onerror = function () { if (es.readyState === EventSource.CLOSED) fallback(); };
+  document.body.addEventListener("htmx:afterSwap", function (e) {
+    if (e.detail.target && e.detail.target.id === "feed") window.__resetNew();
+  });
+})();
+</script>

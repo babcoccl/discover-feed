@@ -32,7 +32,8 @@ class Settings(BaseSettings):
     log_level: str = "info"
 
     # Text extraction (app/extract.py)
-    extract_interval_minutes: int = 15
+    pipeline_interval_seconds: int = 60
+    """Extract + cluster runs this often (only new/pending articles are touched)."""
     extract_max_articles: int = 50
     extract_timeout_seconds: float = 10.0
     extract_max_bytes: int = 2 * 1024 * 1024
@@ -49,8 +50,7 @@ class Settings(BaseSettings):
     summarize_enabled: bool = True
     summarize_profile: str | None = None
     """Profile slug whose `llm.summarizer` endpoint is used; default: the first profile."""
-    summarize_interval_minutes: int = 5
-    summarize_concurrency: int = 1
+    summarize_interval_seconds: int = 60
     summarize_max_per_run: int = 25
     summarize_resummarize_min_minutes: float = 30
     summarize_max_articles_per_story: int = 5

@@ -12,14 +12,17 @@ from app.api import router as api_router
 from app.config import AppConfig, Source, load_config
 from app.db import init_db, make_engine, make_session_factory, ping
 from app.ingest import Ingestor, build_user_agent, sources_requiring_contact
+from app.llm.health import check_endpoint
 from app.models import ProfileRecord
 from app.pipeline import (
     Pipeline,
     clusterer_from_settings,
     extractor_from_settings,
+    summarizer_role,
     summary_worker_from_settings,
 )
 from app.profiles import active_sources, seed_from_config
+from app.publish import migrate
 from app.scheduler import (
     create_scheduler,
     schedule_ingestion,
@@ -96,8 +99,14 @@ def create_app(
             ),
         )
         app.state.summaries = app.state.pipeline.summaries
-        if app.state.summaries.enabled:
-            app.state.summaries.enqueue_missing()
+        migrate(
+            app.state.session_factory,
+            summarizer=None,
+            policy=app.state.summaries.policy,
+        )
+        app.state.llm_health = await check_endpoint(
+            summarizer_role(app.state.config, settings), transport=llm_transport
+        )
         _warn_missing_contact(sources, settings)
         scheduler = create_scheduler()
         if settings.scheduler_enabled:
@@ -110,13 +119,13 @@ def create_app(
             schedule_pipeline(
                 scheduler,
                 app.state.pipeline,
-                interval_minutes=settings.extract_interval_minutes,
+                interval_seconds=settings.pipeline_interval_seconds,
             )
             if app.state.summaries.enabled:
                 schedule_summaries(
                     scheduler,
                     app.state.summaries,
-                    interval_minutes=settings.summarize_interval_minutes,
+                    interval_seconds=settings.summarize_interval_seconds,
                 )
             scheduler.start()
         app.state.scheduler = scheduler

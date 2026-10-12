@@ -7,7 +7,7 @@
     <lastBuildDate>Wed, 07 Oct 2026 15:30:00 +0000</lastBuildDate>
     <item>
       <title>Stocks rally as Treasury yields fall; S&amp;P 500 closes at a record</title>
-      <link>https://www.cnbc.com/markets/</link>
+      <link>{{demo_base}}/demo-article/cnbc-markets-1</link>
       <guid isPermaLink="false">cnbc-markets-1</guid>
       <pubDate>Wed, 07 Oct 2026 15:15:00 +0000</pubDate>
       <description>The S&amp;P 500 gained 1.1% and the Nasdaq rose 1.4% as bond yields retreated.</description>
@@ -15,7 +15,7 @@
     </item>
     <item>
       <title>Nvidia earnings: what Wall Street expects from the chipmaker</title>
-      <link>https://www.cnbc.com/semiconductors/</link>
+      <link>{{demo_base}}/demo-article/cnbc-markets-2</link>
       <guid isPermaLink="false">cnbc-markets-2</guid>
       <pubDate>Wed, 07 Oct 2026 09:15:00 +0000</pubDate>
       <description>Analysts expect revenue of $58 billion and strong data center guidance.</description>
@@ -23,14 +23,14 @@
     </item>
     <item>
       <title>Oil prices jump after OPEC+ announces surprise output cut</title>
-      <link>https://www.cnbc.com/energy/</link>
+      <link>{{demo_base}}/demo-article/cnbc-markets-3</link>
       <guid isPermaLink="false">cnbc-markets-3</guid>
       <pubDate>Wed, 07 Oct 2026 03:15:00 +0000</pubDate>
       <description>Brent crude rose above $90 a barrel for the first time since spring.</description>
     </item>
     <item>
       <title>Delta beats on quarterly results and raises full-year guidance</title>
-      <link>https://www.cnbc.com/airlines/</link>
+      <link>{{demo_base}}/demo-article/cnbc-markets-4</link>
       <guid isPermaLink="false">cnbc-markets-4</guid>
       <pubDate>Tue, 06 Oct 2026 21:15:00 +0000</pubDate>
       <description>The airline cited strong premium demand and lower fuel costs.</description>
@@ -38,7 +38,7 @@
     </item>
     <item>
       <title>Nasdaq slips as chip stocks retreat from highs</title>
-      <link>https://www.cnbc.com/technology/</link>
+      <link>{{demo_base}}/demo-article/cnbc-markets-5</link>
       <guid isPermaLink="false">cnbc-markets-5</guid>
       <pubDate>Tue, 06 Oct 2026 15:15:00 +0000</pubDate>
       <description>Semiconductor shares fell 2% after a downgrade from a major broker.</description>
@@ -46,14 +46,14 @@
     </item>
     <item>
       <title>Retailer shares plunge after 8-K filing reveals CEO departure</title>
-      <link>https://www.cnbc.com/retail/</link>
+      <link>{{demo_base}}/demo-article/cnbc-markets-6</link>
       <guid isPermaLink="false">cnbc-markets-6</guid>
       <pubDate>Tue, 06 Oct 2026 09:15:00 +0000</pubDate>
       <description>The company disclosed the abrupt exit in a regulatory filing late Friday.</description>
     </item>
     <item>
       <title>Earnings call transcript: PepsiCo Q3 2026</title>
-      <link>https://www.cnbc.com/earnings/</link>
+      <link>{{demo_base}}/demo-article/cnbc-markets-7</link>
       <guid isPermaLink="false">cnbc-markets-7</guid>
       <pubDate>Tue, 06 Oct 2026 03:15:00 +0000</pubDate>
       <description>Full transcript of the company's third-quarter call with analysts.</description>
@@ -61,7 +61,7 @@
     </item>
     <item>
       <title>Fed cuts interest rates by a quarter point and signals more easing ahead</title>
-      <link>https://www.cnbc.com/2026/10/07/fed-rate-decision-october-2026.html</link>
+      <link>{{demo_base}}/demo-article/cnbc-markets-8</link>
       <guid isPermaLink="false">cnbc-markets-8</guid>
       <pubDate>Wed, 07 Oct 2026 18:05:00 +0000</pubDate>
       <description><![CDATA[<p>The Federal Reserve lowered its benchmark rate a quarter percentage point to a range of 3.25%-3.5%, its third cut this year, as the FOMC pointed to a cooling jobs market.</p>]]></description>
@@ -69,7 +69,7 @@
     </item>
     <item>
       <title>SEC sues crypto lender Nimbus, alleging $1.2 billion fraud</title>
-      <link>https://www.cnbc.com/2026/10/06/sec-sues-crypto-lender-nimbus.html</link>
+      <link>{{demo_base}}/demo-article/cnbc-markets-9</link>
       <guid isPermaLink="false">cnbc-markets-9</guid>
       <pubDate>Tue, 06 Oct 2026 15:40:00 +0000</pubDate>
       <description><![CDATA[<p>The SEC accused Nimbus Lending and CEO Mark Ellery of running a $1.2 billion fraud that promised retail crypto investors returns of up to 14%.</p>]]></description>

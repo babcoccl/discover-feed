@@ -34,6 +34,9 @@ MODES = (
     "duplicate_bullets",
     "copied_report",
     "short_report",
+    "truncated",
+    "reasoning_only",
+    "http_401",
     "demo",
 )
 FAKE_MODEL = "fake-llm"
@@ -270,6 +273,10 @@ class FakeLLM:
         return "invented_number" if digest[0] % 5 == 0 else "ok"
 
     async def handle(self, request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":  # GET /models (the startup health check)
+            return httpx.Response(
+                200, json={"object": "list", "data": [{"id": self.model, "object": "model"}]}
+            )
         if self.delay:
             import asyncio
 
@@ -285,6 +292,8 @@ class FakeLLM:
             mode = self._demo_mode(kind, sources[0][2] if sources else "")
         if mode == "http_500":
             return httpx.Response(500, json={"error": {"message": "fake server error"}})
+        if mode == "http_401":
+            return httpx.Response(401, json={"error": {"message": "invalid api key"}})
         if mode == "timeout":
             raise httpx.ReadTimeout("fake timeout", request=request)
         if kind == "report":
@@ -320,6 +329,11 @@ class FakeLLM:
             content = content[: len(content) // 2]
         elif mode == "empty":
             content = ""
+        finish, reasoning = "stop", None
+        if mode == "truncated":  # hit max_tokens mid-answer
+            content, finish = content[: len(content) // 3], "length"
+        elif mode == "reasoning_only":  # thinking used the whole budget
+            content, finish, reasoning = "", "length", "Let me think step by step. " * 40
         prompt_tokens = sum(len(str(m.get("content", "")).split()) for m in body["messages"])
         return httpx.Response(
             200,
@@ -330,8 +344,12 @@ class FakeLLM:
                 "choices": [
                     {
                         "index": 0,
-                        "message": {"role": "assistant", "content": content},
-                        "finish_reason": "stop",
+                        "message": {
+                            "role": "assistant",
+                            "content": content,
+                            **({"reasoning_content": reasoning} if reasoning else {}),
+                        },
+                        "finish_reason": finish,
                     }
                 ],
                 "usage": {
