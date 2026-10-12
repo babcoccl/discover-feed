@@ -15,6 +15,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app import profiles as repo
 from app.lifecycle import PRE_CLUSTER
+from app.llm.client import INFLIGHT
 from app.models import (
     GenerationAttempt,
     Story,
@@ -26,7 +27,7 @@ from app.models import (
     utcnow,
 )
 from app.publish import Policy, assess, sync_story
-from app.summarize.service import KINDS, Kind, Summarizer, SummaryOutcome
+from app.summarize.service import FOLLOWUPS, KINDS, Kind, Summarizer, SummaryOutcome
 from app.worker_status import SummarizeRunResult, WorkerState, WorkerStatus
 
 logger = logging.getLogger(__name__)
@@ -58,6 +59,7 @@ class SummaryWorker:
         policy: Policy | None = None,
         backfill_hours: float = 24,
         backfill_max: int = 40,
+        followups: bool = False,
         clock: Callable[[], datetime] = utcnow,
     ) -> None:
         self.session_factory = session_factory
@@ -68,6 +70,8 @@ class SummaryWorker:
         self.policy = policy or Policy()
         self.backfill = timedelta(hours=backfill_hours)
         self.backfill_max = backfill_max
+        self.followups = followups
+        """Generate suggested questions for published stories when nothing else waits."""
         self.clock = clock
         self.state = WorkerState()
         self._lock = threading.Lock()
@@ -165,9 +169,10 @@ class SummaryWorker:
         """Stories to work on, in order: Prioritize first, then newest. Never-published
         stories must be updated within ``backfill_hours`` (at most ``backfill_max``)."""
         now = self.clock()
-        backing_off = select(SummaryJob.story_id).where(SummaryJob.next_attempt_at > now)
+        jobs = SummaryJob.kind.in_(KINDS)
+        backing_off = select(SummaryJob.story_id).where(jobs, SummaryJob.next_attempt_at > now)
         # Asked for explicitly (Retry, Regenerate, the admin API) or a retry that came due.
-        requested = select(SummaryJob.story_id).where(_due(now))
+        requested = select(SummaryJob.story_id).where(jobs, _due(now))
         # A brief that failed for good (no retry queued) waits for the fallback timer.
         brief_failed = (Story.state == StoryState.CLUSTERED) & func.coalesce(
             Story.state_reason, ""
@@ -246,11 +251,14 @@ class SummaryWorker:
                     if budget <= 0 or self._paused(self.clock(), manual):
                         break
                     done.add(sid)
+                    await INFLIGHT.wait_for_chat()  # interactive chat goes first
                     self.state.current_story = sid
                     outcomes = await self.process(sid, kinds, manual=manual)
                     result.outcomes.extend(outcomes)
                     if any(o.status not in ("cached", "reused", "skipped") for o in outcomes):
                         budget -= 1
+            if self.followups and story_id is None:
+                result.outcomes.extend(await self._followups_pass(manual))
             for outcome in result.outcomes:
                 result.processed += 1
                 key = outcome.status
@@ -307,6 +315,7 @@ class SummaryWorker:
             if todo is None:
                 continue
             force, attempts = todo
+            await INFLIGHT.wait_for_chat()
             outcome = await self._summarize(story_id, kind, force, attempts)
             outcomes.append(outcome)
             if kind == SummaryKind.BRIEF and outcome.status == "failed":
@@ -367,8 +376,8 @@ class SummaryWorker:
             if retry and kind == SummaryKind.BRIEF:
                 self._record_failure(outcome.reason)
             elif retry:
-                # Report failures never pause the worker: briefs keep coming.
-                self.state.last_error = f"report: {outcome.reason}"
+                # Report/follow-up failures never pause the worker: briefs keep coming.
+                self.state.last_error = f"{kind}: {outcome.reason}"
                 self.state.last_error_at = self.clock()
                 retry = attempts + 1 < REPORT_RETRY_LIMIT
             else:
@@ -390,6 +399,54 @@ class SummaryWorker:
                 )
             session.commit()
         return outcome
+
+    def followup_candidates(self, session, limit: int = 20) -> list[int]:
+        """Published, recently updated stories whose suggested questions are missing or stale
+        (newest first), skipping ones backing off after an endpoint failure."""
+        now = self.clock()
+        backing_off = select(SummaryJob.story_id).where(
+            SummaryJob.kind == FOLLOWUPS, SummaryJob.next_attempt_at > now
+        )
+        stmt = (
+            select(Story.id)
+            .where(
+                Story.state == StoryState.PUBLISHED.value,
+                Story.last_updated_at >= now - self.backfill,
+                ~Story.id.in_(backing_off),
+            )
+            .order_by(Story.priority.desc(), Story.last_updated_at.desc(), Story.id.desc())
+            .limit(limit * 3)
+        )
+        ids = []
+        for sid in session.scalars(stmt):
+            if not self.summarizer.is_current(session, sid, FOLLOWUPS):
+                ids.append(sid)
+            if len(ids) >= limit:
+                break
+        return ids
+
+    async def _followups_pass(self, manual: bool, limit: int = 10) -> list[SummaryOutcome]:
+        """Suggested questions, only while no brief or report is waiting (they never delay
+        the publish pipeline): stops as soon as a story needs one."""
+        outcomes: list[SummaryOutcome] = []
+        with self.session_factory() as session:
+            ids = self.followup_candidates(session, limit)
+        for sid in ids:
+            with self.session_factory() as session:
+                if self.candidates(session, manual=manual):
+                    break
+            if self._paused(self.clock(), manual):
+                break
+            await INFLIGHT.wait_for_chat()
+            job = self.report_job_kind(sid, FOLLOWUPS)
+            outcomes.append(
+                await self._summarize(sid, FOLLOWUPS, False, job.attempts if job else 0)
+            )
+        return outcomes
+
+    def report_job_kind(self, story_id: int, kind: str) -> SummaryJob | None:
+        with self.session_factory() as session:
+            return session.get(SummaryJob, (story_id, kind))
 
     def _record_failure(self, reason: str | None) -> None:
         state = self.state

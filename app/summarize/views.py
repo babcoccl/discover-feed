@@ -7,6 +7,7 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.labels import publisher_of, via_of
 from app.models import Article, StorySummary, SummaryKind, SummaryStatus
 from app.summarize.validate import split_sentences
 
@@ -19,6 +20,10 @@ class Citation:
     headline: str
     url: str
     """The article's raw feed permalink (``Article.url``), never ``canonical_url``."""
+    publisher: str = ""
+    """The URL's domain (the primary label); the source name for local hosts."""
+    via: str | None = None
+    """The aggregator feed's name (secondary label) when the source is an aggregator."""
 
 
 @dataclass(frozen=True)
@@ -149,13 +154,17 @@ def _citations(
         article = articles.get(article_id)
         if article is None:
             return None
+        name = names.get(article.source_id, article.source_id)
+        publisher = publisher_of(article.url, name)
         citations.append(
             Citation(
                 index=index,
                 article_id=article.id,
-                source=names.get(article.source_id, article.source_id),
+                source=name,
                 headline=article.title or article.url,
                 url=article.url,
+                publisher=publisher,
+                via=via_of(article.source_id, name, publisher, getattr(names, "aggregators", ())),
             )
         )
     return citations

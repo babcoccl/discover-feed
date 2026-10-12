@@ -64,7 +64,9 @@ class LLMRole(_Model):
 
 class LLMConfig(_Model):
     summarizer: LLMRole
-    chat: LLMRole | None = Field(default=None, description="Story Q&A (next phase); unused yet.")
+    chat: LLMRole | None = Field(
+        default=None, description="Story Q&A (POST /api/v1/stories/{id}/ask); unset: no chat."
+    )
 
 
 class CardStyle(StrEnum):
@@ -159,6 +161,31 @@ class SummariesConfig(_Model):
     event_retention_days: float = Field(
         default=7, gt=0, description="Story events kept for stream replay (Last-Event-ID)."
     )
+    chat_context_words: int = Field(
+        default=3000,
+        ge=100,
+        description="Source words sent with a follow-up question, shared by the story's "
+        "articles (also trimmed to the chat role's context_tokens).",
+    )
+    chat_history_turns: int = Field(
+        default=6, ge=0, description="Earlier question/answer pairs sent with a question."
+    )
+    chat_retention_days: float = Field(
+        default=30, gt=0, description="Conversations idle this long are deleted."
+    )
+    chat_priority: bool = Field(
+        default=True,
+        description="While a chat request waits or streams, the generation worker starts no "
+        "new LLM request (shared endpoint only).",
+    )
+    chat_max_concurrent: int = Field(
+        default=1, ge=1, description="Chat requests streaming at once for this profile."
+    )
+    followups: bool = Field(
+        default=True,
+        description="Suggest 3 follow-up questions per published story (needs llm.chat); "
+        "generated only when no brief or report is waiting.",
+    )
 
 
 class SourceType(StrEnum):
@@ -184,6 +211,16 @@ class Source(_Model):
     enabled: bool = True
     refresh_minutes: int = Field(default=30, ge=1)
     tags: list[str] = Field(default_factory=list)
+    aggregator: bool = Field(
+        default=False,
+        description="The feed links to other publishers (Hacker News): citations show the "
+        'article\'s domain with "via <name>".',
+    )
+    first_party: bool = Field(
+        default=False,
+        description="The publisher is usually the subject of its own news (company blog, "
+        "press releases, SEC/Fed releases): briefs and reports attribute its claims to it.",
+    )
 
     @model_validator(mode="after")
     def _default_id(self) -> "Source":

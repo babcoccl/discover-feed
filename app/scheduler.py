@@ -84,3 +84,31 @@ def schedule_summaries(
         max_instances=1,
         next_run_time=datetime.now(UTC) + timedelta(seconds=first_run_delay_seconds),
     )
+
+
+def schedule_chat(scheduler: BackgroundScheduler, hub) -> None:
+    """Re-check a chat endpoint that was down (every minute) and delete idle conversations
+    (hourly, ``chat_retention_days``)."""
+    if not hub.services:
+        return
+    now = datetime.now(UTC)
+    scheduler.add_job(
+        hub.recheck_blocking,
+        trigger=IntervalTrigger(seconds=60),
+        id="chat-health",
+        name="Re-check chat endpoints",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+        next_run_time=now + timedelta(seconds=60),
+    )
+    scheduler.add_job(
+        hub.cleanup_blocking,
+        trigger=IntervalTrigger(hours=1),
+        id="chat-retention",
+        name="Delete idle conversations",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+        next_run_time=now + timedelta(minutes=5),
+    )

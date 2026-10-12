@@ -12,7 +12,7 @@ from app.demo import build_demo
 from app.main import create_app
 from app.models import Story, StorySummary, SummaryJob
 from app.summarize.fake import FakeLLM, fake_report
-from app.summarize.prompt import PROMPT_VERSIONS, SourceDoc, build_messages
+from app.summarize.prompt import PROMPT_VERSIONS, PROMPTS, SourceDoc, build_messages
 from app.summarize.service import Summarizer
 from app.summarize.validate import SummaryInvalid, validate_brief, validate_report
 from app.summarize.worker import SummaryWorker
@@ -520,3 +520,91 @@ def test_report_requests_get_their_own_timeout() -> None:
     s = Summarizer(LLMClient(ROLE), report_max_tokens=900, report_timeout_seconds=300)
     assert s.report_client.role.timeout_seconds == 300 and s.report_client.role.max_tokens == 900
     assert s.client.role.timeout_seconds == ROLE.timeout_seconds
+
+
+# --- attribution and citation labels (phase 6) -------------------------------------------
+
+
+def _doc(index, source, headline, url, *, first_party=False, via=None):
+    from app.labels import publisher_of
+
+    return SourceDoc(
+        index, index, source, headline, url, "Body text.", True,
+        publisher=publisher_of(url, source), via=via, first_party=first_party,
+    )  # fmt: skip
+
+
+def test_attribution_prompt_selection() -> None:
+    from app.summarize.prompt import (
+        ATTRIBUTED_PROMPTS,
+        ATTRIBUTION_RULES,
+        BRIEF_PROMPT_VERSION,
+        REPORT_PROMPT_VERSION,
+        build_messages,
+        needs_attribution,
+        system_prompt,
+    )
+
+    meta = _doc(
+        1,
+        "Hacker News",
+        "Meta releases FocusBench",
+        "https://ai.meta.com/blog/x",
+        via="Hacker News",
+    )
+    sec = _doc(
+        1, "SEC press releases", "Adviser charged", "https://www.sec.gov/p/1", first_party=True
+    )
+    verge = _doc(1, "The Verge", "Meta releases FocusBench", "https://www.theverge.com/x")
+    ars = _doc(2, "Ars Technica", "Meta releases FocusBench", "https://arstechnica.com/x")
+    assert needs_attribution([meta]) and needs_attribution([sec])
+    assert not needs_attribution([verge]) and not needs_attribution([verge, ars])
+    assert not needs_attribution([meta, ars])  # several publishers: normal prompt
+    for kind in ("brief", "report"):
+        assert system_prompt(kind, [meta]) == ATTRIBUTED_PROMPTS[kind]
+        assert system_prompt(kind, [verge]) == PROMPTS[kind][0]
+        assert build_messages([sec], kind=kind)[0]["content"] == ATTRIBUTED_PROMPTS[kind]
+    assert ATTRIBUTION_RULES in ATTRIBUTED_PROMPTS["brief"]
+    assert ATTRIBUTION_RULES not in PROMPTS["brief"][0]
+    for needle in ("Meta says", "according to the SEC", "promotional", "self-reported"):
+        assert needle in ATTRIBUTION_RULES
+    assert (BRIEF_PROMPT_VERSION, REPORT_PROMPT_VERSION) == ("brief-v2", "report-v3")
+    assert (
+        FakeLLM.kind_of({"messages": [{"role": "system", "content": ATTRIBUTED_PROMPTS["report"]}]})
+        == "report"
+    )
+
+
+def test_publisher_and_via_labels() -> None:
+    from app.labels import names_subject, publisher_of, via_of
+    from app.summarize.prompt import format_sources
+
+    assert publisher_of("https://www.theverge.com/2026/x") == "theverge.com"
+    assert publisher_of("https://ai.meta.com/blog/x") == "ai.meta.com"
+    assert publisher_of("http://localhost:8000/demo-article/x", "The Verge") == "The Verge"
+    assert via_of("hacker-news", "Hacker News", "ai.meta.com", {"hacker-news"}) == "Hacker News"
+    assert via_of("the-verge", "The Verge", "theverge.com", {"hacker-news"}) is None
+    assert names_subject("federalreserve.gov", "Federal Reserve issues FOMC statement")
+    assert not names_subject("ai.meta.com", "Metaverse sales slow")
+    meta = _doc(
+        1, "Hacker News", "Meta releases FocusBench", "https://ai.meta.com/b", via="Hacker News"
+    )
+    assert "[1] Source: ai.meta.com (via Hacker News)\n" in format_sources([meta])
+
+
+def test_labels_reach_api_page_and_atom(demo) -> None:
+    from app.models import SourceRecord
+
+    with demo.app.state.session_factory() as session:
+        hn = session.get(SourceRecord, "hacker-news")
+        assert hn.aggregator  # synced from the YAML
+    story = demo.get("/api/v1/profiles/personal-reader/feed?limit=1&include=full").json()["items"][
+        0
+    ]
+    for s in story["sources"]:
+        assert s["publisher"] and "via" in s
+    for c in story["brief"]["sources"]:
+        assert c["publisher"] and "via" in c
+    page = demo.get(f"/story/{story['id']}?p=personal-reader").text
+    assert "data-publisher" in page
+    assert demo.get("/api/v1/profiles/personal-reader/feed.atom").status_code == 200

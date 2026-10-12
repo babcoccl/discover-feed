@@ -202,7 +202,7 @@ def test_input_assembly(session_factory) -> None:
     assert sources[0].full_text and sources[0].text == " ".join(["word"] * 10)
     assert not sources[1].full_text and sources[1].text == "feed 1"  # text_status != ok
     prompt = build_messages(sources)[1]["content"]
-    assert "[1] Source: Zero\nHeadline: T0\nText: word" in prompt
+    assert "[1] Source: Zero (s0.example)\nHeadline: T0\nText: word" in prompt
 
 
 def test_validator_sees_headline_and_text_sent(session_factory, story) -> None:
@@ -334,7 +334,8 @@ def test_story_context_keeps_summary_numbering(session_factory, story) -> None:
     assert [c.url for c in context.summary.citations] == [s.url for s in context.sources[:2]]
     assert context.sources[2].article_id == late and context.sources[2].index == 3
     prompt = context.prompt()
-    assert "[1] Source: a\nHeadline: Acme raises $40M" in prompt and "[3] Source: z" in prompt
+    assert "[1] Source: a (a.example)\nHeadline: Acme raises $40M" in prompt
+    assert "[3] Source: z" in prompt
     assert "Current summary: Acme Robotics said" in prompt and "[1] " in prompt
 
 
@@ -364,7 +365,14 @@ def test_api_summary_shape_and_citation_urls(demo_client) -> None:
     assert story["summary"] == summary
     members = {m["url"]: m for m in story["members"]}
     for n, citation in enumerate(summary["citations"], 1):
-        assert citation["index"] == n and set(citation) == {"index", "source", "headline", "url"}
+        assert citation["index"] == n and set(citation) == {
+            "index",
+            "source",
+            "headline",
+            "url",
+            "publisher",
+            "via",
+        }
         assert citation["url"] in members  # the raw Article.url
         assert members[citation["url"]]["source"] == citation["source"]
     sb = demo_client.build.settings

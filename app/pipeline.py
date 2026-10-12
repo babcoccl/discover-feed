@@ -95,6 +95,7 @@ def summary_worker_from_settings(
         policy=Policy.from_config(options, settings.report_mode),
         backfill_hours=options.summarize_backfill_hours,
         backfill_max=options.summarize_backfill_max,
+        followups=bool(profile and profile.llm.chat and options.followups),
     )
 
 

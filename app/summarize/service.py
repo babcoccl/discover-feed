@@ -33,10 +33,12 @@ from app.summarize.sources import basis, input_hash, select_sources
 from app.summarize.validate import (
     SummaryInvalid,
     ValidBrief,
+    ValidFollowups,
     ValidReport,
     ValidSummary,
     VerbatimGuard,
     validate_brief,
+    validate_followups,
     validate_report,
     validate_summary,
 )
@@ -46,8 +48,14 @@ from app.worker_status import SummaryOutcome
 logger = logging.getLogger(__name__)
 
 Status = Literal["ok", "fallback", "failed", "skipped"]
-Kind = Literal["brief", "report"]
+Kind = Literal["brief", "report", "followups"]
 KINDS: tuple[Kind, ...] = ("brief", "report")
+"""What the worker generates per story before publishing."""
+FOLLOWUPS: Kind = "followups"
+"""Suggested questions: generated after publishing, never part of the publish gate."""
+GENERATED = (*KINDS, FOLLOWUPS)
+FOLLOWUPS_WORDS = 1200
+FOLLOWUPS_MAX_TOKENS = 200
 
 INSUFFICIENT_TEXT = "insufficient_text"
 REPORT_MIN_SOURCE_WORDS = 150
@@ -65,6 +73,7 @@ class Generation:
     summary: ValidSummary | None = None
     brief: ValidBrief | None = None
     report: ValidReport | None = None
+    followups: ValidFollowups | None = None
     style: str | None = None
     """Brief fallbacks: ``summary`` (Phase 4 style answer) or ``snippet`` (feed snippet)."""
     reason: str | None = None
@@ -218,6 +227,10 @@ class Summarizer:
         if update:
             role = client.role.model_copy(update=update)
             self.report_client = LLMClient(role, transport=client.transport)
+        followups_role = client.role.model_copy(
+            update={"max_tokens": min(client.role.max_tokens, FOLLOWUPS_MAX_TOKENS)}
+        )
+        self.followups_client = LLMClient(followups_role, transport=client.transport)
         self.max_articles = max_articles
         self.max_words = max_words
         self.report_max_articles = report_max_articles
@@ -258,7 +271,7 @@ class Summarizer:
         previous = error = None
         phrases: tuple[str, ...] = ()
         errors: list[str] = []
-        tries = (1, 2, 3) if kind in KINDS else (1, 2)
+        tries = (1, 2, 3) if kind in GENERATED else (1, 2)
         retry_client = self._retry_client(client)
         for attempt in tries:
             final = attempt == 3
@@ -268,7 +281,7 @@ class Summarizer:
             )
             words = sum(len(str(m["content"]).split()) for m in messages)
             entry: dict[str, Any] = {
-                "kind": kind if kind in KINDS else "brief",
+                "kind": kind if kind in GENERATED else "brief",
                 "prompt": kind,
                 "attempt": attempt,
                 "run_id": gen.run_id,
@@ -407,6 +420,30 @@ class Summarizer:
             gen.reason = INVALID + _attempt_reason(gen.errors)
         return gen
 
+    async def generate_followups(self, sources: Sequence[SourceDoc]) -> Generation:
+        """Three suggested questions; after three invalid answers ``failed`` (``invalid:``,
+        cached like a rejected report)."""
+        gen = Generation(status="failed", kind=FOLLOWUPS, model=self.client.model)
+        grounding = [s.grounding for s in sources]
+        try:
+            gen.followups, gen.errors = await self._ask(
+                self.followups_client,
+                FOLLOWUPS,
+                sources,
+                lambda c: validate_followups(
+                    c, grounding, duplicate_threshold=self.duplicate_threshold
+                ),
+                gen,
+            )
+        except LLMError as exc:
+            gen.reason = f"{exc.kind}: {exc}"
+            return gen
+        if gen.followups is not None:
+            gen.status = "ok"
+        else:
+            gen.reason = INVALID + _attempt_reason(gen.errors)
+        return gen
+
     # --- inputs ----------------------------------------------------------------------------
 
     def sources_for(
@@ -424,6 +461,10 @@ class Summarizer:
                 ),
                 context_tokens=role.context_tokens,
                 max_tokens=role.max_tokens,
+            )
+        if kind == FOLLOWUPS:
+            return select_sources(
+                item.members, names, max_articles=self.max_articles, total_words=FOLLOWUPS_WORDS
             )
         return select_sources(
             item.members, names, max_articles=self.max_articles, max_words=self.max_words
@@ -515,6 +556,8 @@ class Summarizer:
 
         if kind == SummaryKind.REPORT:
             gen = await self.generate_report(sources, item.title)
+        elif kind == FOLLOWUPS:
+            gen = await self.generate_followups(sources)
         else:
             gen = await self.generate_brief(sources)
         _fill(row, gen, fallback_text)
@@ -616,6 +659,9 @@ def _fill(row: StorySummary, gen: Generation, fallback_text: str) -> None:
         row.text = gen.report.text
         row.citations_json = [p.citations for p in gen.report.paragraphs]
         row.content_json = gen.report.as_json()
+    elif gen.followups is not None:
+        row.text, row.citations_json = gen.followups.text, []
+        row.content_json = gen.followups.as_json()
     elif gen.summary is not None:
         row.text, row.citations_json = gen.summary.summary, gen.summary.citations
         row.content_json = {"style": "summary"}

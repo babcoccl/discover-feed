@@ -126,6 +126,13 @@ def test_glued_words_are_warnings_only() -> None:
     assert report.warnings == ("paragraph 1 has suspected glued words: AIworkloads",)
 
 
+def test_glued_word_warning_skips_words_found_in_a_source() -> None:
+    text = "Meta released FocusBench and AIworkloads."
+    assert glued_words(text) == ["FocusBench", "AIworkloads"]
+    assert glued_words(text, sources=["Meta unveils FocusBench, a benchmark."]) == ["AIworkloads"]
+    assert glued_words("Focusbench", sources=["FocusBenchmarks"]) == []
+
+
 def _docs() -> list[SourceDoc]:
     return [
         SourceDoc(i, i, f"Outlet {i}", f"Story {i}", f"https://s{i}.example/", t, True)

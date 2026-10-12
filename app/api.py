@@ -118,6 +118,15 @@ class CitationOut(BaseModel):
     source: str
     headline: str
     url: str = Field(description="The cited article's own permalink (never the canonical URL).")
+    publisher: str = Field(
+        default="",
+        description="The primary label: the article URL's domain (e.g. `ai.meta.com`).",
+    )
+    via: str | None = Field(
+        default=None,
+        description="The aggregator feed it came through (`Hacker News`), shown as "
+        '"via ..."; null for a publisher\'s own feed.',
+    )
 
 
 class SummarySentenceOut(BaseModel):
@@ -182,7 +191,14 @@ class ReportOut(BaseModel):
 
 
 def _citation_out(c) -> CitationOut:
-    return CitationOut(index=c.index, source=c.source, headline=c.headline, url=c.url)
+    return CitationOut(
+        index=c.index,
+        source=c.source,
+        headline=c.headline,
+        url=c.url,
+        publisher=c.publisher or c.source,
+        via=c.via,
+    )
 
 
 def _cited_out(point: views.Point) -> CitedTextOut:

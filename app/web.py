@@ -9,13 +9,14 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import profiles as repo
 from app import story_views as views
 from app.config import CardStyle
 from app.demo_pages import FIXTURE_DIR, page_html
-from app.models import ProfileRecord, Topic
+from app.models import ProfileRecord, StorySummary, Topic
 from app.pipeline_panel import pipeline_queue, quality_metrics, recent_attempts
 from app.runs import last_runs, text_status_counts
 from app.topics import TopicRule, split_keywords
@@ -285,8 +286,35 @@ def story_page(
             brief=story.brief,
             summary=story.brief,
             **_report_context(request, story),
+            **_chat_context(request, session, story.story_id, p),
         )
     return TEMPLATES.TemplateResponse(request, "story.html", context)
+
+
+def _chat_context(request: Request, session: Session, story_id: int, slug: str | None) -> dict:
+    """The "Ask a follow-up" panel: availability (``unset``/``unreachable`` disable it with an
+    explanation) and the stored suggested questions (never generated here)."""
+    hub = getattr(request.app.state, "chat", None)
+    state, message = hub.state(slug) if hub is not None else ("unset", "Q&A is off.")
+    row = session.scalar(
+        select(StorySummary)
+        .where(
+            StorySummary.story_id == story_id,
+            StorySummary.kind == "followups",
+            StorySummary.status == "ok",
+        )
+        .order_by(StorySummary.id.desc())
+        .limit(1)
+    )
+    questions = list((row.content_json or {}).get("questions") or [])[:3] if row else []
+    service = hub.for_profile(slug) if hub is not None else None
+    return {
+        "chat_state": state,
+        "chat_message": message,
+        "chat_model": service.model if service is not None else None,
+        "chat_profile": service.profile if service is not None else None,
+        "followups": questions,
+    }
 
 
 def _report_context(request: Request, story, state: str | None = None) -> dict:

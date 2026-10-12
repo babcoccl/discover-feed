@@ -12,6 +12,7 @@ from datetime import datetime
 from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
+from app.labels import label, publisher_of
 from app.models import Story, StoryState, StoryView
 from app.topics import TopicRule, matches
 
@@ -29,6 +30,14 @@ class Citation:
     source: str
     headline: str
     url: str
+    publisher: str = ""
+    """The URL's domain, the primary label (documents from before it: derived on load)."""
+    via: str | None = None
+    """``Hacker News`` when the source is an aggregator (secondary label)."""
+
+    @property
+    def label(self) -> str:
+        return label(self.publisher, self.via)
 
 
 @dataclass(frozen=True)
@@ -115,6 +124,12 @@ class Member:
     summary_raw: str
     text_status: str
     words: int
+    publisher: str = ""
+    via: str | None = None
+
+    @property
+    def label(self) -> str:
+        return label(self.publisher, self.via)
 
 
 @dataclass
@@ -165,7 +180,11 @@ class PublishedStory:
 
 
 def _citations(items: Sequence[dict]) -> list[Citation]:
-    return [Citation(**c) for c in items]
+    out = []
+    for c in items:
+        c = {**c, "publisher": c.get("publisher") or publisher_of(c["url"], c["source"])}
+        out.append(Citation(**c))
+    return out
 
 
 def _points(items: Sequence[dict], citations: list[Citation]) -> list[Point]:
@@ -224,6 +243,8 @@ def load(view: StoryView, source_ids: Sequence[str] | None = None) -> PublishedS
             summary_raw=m.get("summary", ""),
             text_status=m.get("text_status", ""),
             words=m.get("words", 0),
+            publisher=m.get("publisher") or publisher_of(m["url"], m["source"]),
+            via=m.get("via"),
         )
         for m in doc.get("members", [])
     ]

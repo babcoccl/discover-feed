@@ -12,9 +12,16 @@ from dataclasses import dataclass
 PROMPT_VERSION = "summary-v1"
 TARGET_WORDS = 60
 
-BRIEF_PROMPT_VERSION = "brief-v1"
-REPORT_PROMPT_VERSION = "report-v2"
-PROMPT_VERSIONS = {"brief": BRIEF_PROMPT_VERSION, "report": REPORT_PROMPT_VERSION}
+BRIEF_PROMPT_VERSION = "brief-v2"
+REPORT_PROMPT_VERSION = "report-v3"
+FOLLOWUPS_PROMPT_VERSION = "followups-v1"
+PROMPT_VERSIONS = {
+    "brief": BRIEF_PROMPT_VERSION,
+    "report": REPORT_PROMPT_VERSION,
+    "followups": FOLLOWUPS_PROMPT_VERSION,
+}
+FOLLOWUP_COUNT = 3
+FOLLOWUP_MAX_WORDS = 12
 
 LEAD_MAX_WORDS = 30
 BULLET_MAX_WORDS = 28
@@ -105,6 +112,31 @@ Reply with JSON only, no prose: {{"paragraphs": [{{"text": "<paragraph>", \
 "citations": [1, 2]}}, {{"text": "<paragraph>", "citations": [3]}}]}}"""
 
 
+FOLLOWUPS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "questions": {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": FOLLOWUP_COUNT,
+            "maxItems": FOLLOWUP_COUNT,
+        },
+    },
+    "required": ["questions"],
+    "additionalProperties": False,
+}
+
+FOLLOWUPS_SYSTEM_PROMPT = f"""You suggest follow-up questions for a personal news reader.
+You get numbered sources [1]..[k] that all cover the same story.
+Write exactly {FOLLOWUP_COUNT} short questions (at most {FOLLOWUP_MAX_WORDS} words each) a \
+reader might ask next.
+Rules:
+- Each question must be answerable from the sources.
+- Make the questions distinct: different aspects (details, context, what happens next).
+- Plain questions ending with "?"; no numbering, no citation markers.
+Reply with JSON only, no prose: {{"questions": ["<question>", "<question>", "<question>"]}}"""
+
+
 RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -134,7 +166,22 @@ PROMPTS = {
     "summary": (SYSTEM_PROMPT, RESPONSE_SCHEMA, "Write the JSON summary."),
     "brief": (BRIEF_SYSTEM_PROMPT, BRIEF_SCHEMA, "Write the JSON brief."),
     "report": (REPORT_SYSTEM_PROMPT, REPORT_SCHEMA, "Write the JSON report."),
+    "followups": (FOLLOWUPS_SYSTEM_PROMPT, FOLLOWUPS_SCHEMA, "Write the JSON questions."),
 }
+
+ATTRIBUTION_RULES = """- The only source is published by the organisation the story is \
+about (a company blog, press release, or an SEC/Fed release). Attribute its claims, \
+opinions and superlatives to that source ("Meta says ...", "according to the SEC"). Do not \
+state promotional or self-reported claims (best, first, fastest, record, breakthrough, \
+results it reports about itself) as fact."""
+
+ATTRIBUTED_PROMPTS = {
+    kind: PROMPTS[kind][0].replace(
+        "\nReply with JSON only", f"\n{ATTRIBUTION_RULES}\nReply with JSON only", 1
+    )
+    for kind in ("brief", "report")
+}
+"""Brief/report system prompts for first-party stories (:func:`needs_attribution`)."""
 
 
 @dataclass(frozen=True)
@@ -149,11 +196,27 @@ class SourceDoc:
     text: str
     """The words sent to the model: the start of the extracted text, or the feed summary."""
     full_text: bool
+    publisher: str = ""
+    """The article URL's domain (``ai.meta.com``); the source name for local hosts."""
+    via: str | None = None
+    """The aggregator feed's name (``Hacker News``) when the source is an aggregator."""
+    first_party: bool = False
+    """The source is flagged ``first_party`` (its publisher is usually the subject)."""
+
+    @property
+    def label(self) -> str:
+        """How the source is named to the model: ``ai.meta.com (via Hacker News)``,
+        ``The Verge (theverge.com)`` or just the source name."""
+        if self.via:
+            return f"{self.publisher} (via {self.via})"
+        if self.publisher and self.publisher != self.source:
+            return f"{self.source} ({self.publisher})"
+        return self.source
 
     @property
     def grounding(self) -> str:
         """Everything the model saw for this source (used to check numbers)."""
-        return f"{self.headline}\n{self.text}"
+        return f"{self.label}\n{self.headline}\n{self.text}"
 
     @property
     def text_hash(self) -> str:
@@ -162,8 +225,26 @@ class SourceDoc:
 
 def format_sources(sources: Sequence[SourceDoc]) -> str:
     return "\n\n".join(
-        f"[{s.index}] Source: {s.source}\nHeadline: {s.headline}\nText: {s.text}" for s in sources
+        f"[{s.index}] Source: {s.label}\nHeadline: {s.headline}\nText: {s.text}" for s in sources
     )
+
+
+def needs_attribution(sources: Sequence[SourceDoc]) -> bool:
+    """A single-publisher story whose publisher is the subject: the source is flagged
+    ``first_party``, or a headline names the publisher (ai.meta.com: "Meta releases ...")."""
+    from app.labels import names_subject
+
+    publishers = {s.publisher or s.source for s in sources}
+    if len(publishers) != 1:
+        return False
+    publisher = publishers.pop()
+    return any(s.first_party or names_subject(publisher, s.headline) for s in sources)
+
+
+def system_prompt(kind: str, sources: Sequence[SourceDoc]) -> str:
+    if kind in ATTRIBUTED_PROMPTS and needs_attribution(sources):
+        return ATTRIBUTED_PROMPTS[kind]
+    return PROMPTS[kind][0]
 
 
 def build_messages(
@@ -176,7 +257,8 @@ def build_messages(
 ) -> list[dict[str, str]]:
     """Messages for one attempt; a retry adds the rejected answer, the validation error and
     the exact ``phrases`` it copied from the sources."""
-    system, _schema, ask = PROMPTS[kind]
+    _system, _schema, ask = PROMPTS[kind]
+    system = system_prompt(kind, sources)
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": f"Sources:\n\n{format_sources(sources)}\n\n{ask}"},

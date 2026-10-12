@@ -42,6 +42,8 @@ _SOURCE_EXAMPLE = {
     "title": "Chipmaker unveils agent-ready accelerator",
     "url": "https://www.theverge.com/2026/10/12/chip-launch",
     "published_at": _NOW,
+    "publisher": "theverge.com",
+    "via": None,
 }
 _BRIEF_EXAMPLE = {
     "lead": "A chipmaker unveiled an accelerator aimed at AI agents.",
@@ -130,6 +132,12 @@ class StorySourceV1(BaseModel):
     title: str
     url: str = Field(description="The publisher's own permalink (the raw feed URL).")
     published_at: datetime
+    publisher: str = Field(
+        default="", description="The primary label: the article URL's domain (`ai.meta.com`)."
+    )
+    via: str | None = Field(
+        default=None, description="The aggregator feed (`Hacker News`) when there is one."
+    )
 
 
 class StoryCardV1(BaseModel):
@@ -305,7 +313,14 @@ def _base(request: Request) -> str:
 
 def _sources(members: Sequence[views.Member]) -> list[StorySourceV1]:
     return [
-        StorySourceV1(name=m.source, title=m.title, url=m.url, published_at=m.published_at)
+        StorySourceV1(
+            name=m.source,
+            title=m.title,
+            url=m.url,
+            published_at=m.published_at,
+            publisher=m.publisher,
+            via=m.via,
+        )
         for m in members
     ]
 
@@ -486,7 +501,7 @@ def atom_feed(profile: ProfileRecord, stories: Sequence[views.PublishedStory], b
         sub(entry, "published", _iso(story.published_at or story.first_seen_at))
         sub(entry, "link", rel="alternate", href=f"{base}/story/{story.story_id}")
         for m in story.sources:
-            sub(entry, "link", rel="related", href=m.url, title=m.source)
+            sub(entry, "link", rel="related", href=m.url, title=m.label)
         brief = story.brief
         if brief is not None and brief.style != "snippet":
             lead = ET.Element("p")

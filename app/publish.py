@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app import profiles as repo
 from app.config import ReportMode, SummariesConfig
 from app.events import record
+from app.labels import publisher_of, via_of
 from app.lifecycle import PRE_CLUSTER, ensure_stories
 from app.models import (
     Story,
@@ -157,6 +158,7 @@ def _members(item: repo.StoryItem, names: dict[str, str]) -> list[dict]:
             "id": m.id,
             "source_id": m.source_id,
             "source": names.get(m.source_id, m.source_id),
+            **_labels(m, names),
             "title": m.title,
             "url": m.url,
             "published_at": _iso(m.published_at),
@@ -167,6 +169,13 @@ def _members(item: repo.StoryItem, names: dict[str, str]) -> list[dict]:
         }
         for m in item.members
     ]
+
+
+def _labels(article, names: dict[str, str]) -> dict:
+    name = names.get(article.source_id, article.source_id)
+    publisher = publisher_of(article.url, name)
+    aggregators = getattr(names, "aggregators", ())
+    return {"publisher": publisher, "via": via_of(article.source_id, name, publisher, aggregators)}
 
 
 def _point(point) -> dict:

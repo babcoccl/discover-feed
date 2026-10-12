@@ -1,6 +1,6 @@
 {#- Generated text: each point followed by its [n] markers, linked to the cited article's raw URL. -#}
 {%- macro markers(citations) -%}
-{%- for c in citations %}<a href="{{ c.url }}" target="_blank" rel="noopener noreferrer" data-citation="{{ c.index }}" title="[{{ c.index }}] {{ c.source }}: {{ c.headline }}" class="ml-0.5 align-super text-[0.7em] font-semibold text-sky-700 hover:underline dark:text-sky-400">[{{ c.index }}]</a>{% endfor -%}
+{%- for c in citations %}<a href="{{ c.url }}" target="_blank" rel="noopener noreferrer" data-citation="{{ c.index }}" title="[{{ c.index }}] {{ c.publisher or c.source }}{% if c.via %} via {{ c.via }}{% endif %}: {{ c.headline }}" class="ml-0.5 align-super text-[0.7em] font-semibold text-sky-700 hover:underline dark:text-sky-400">[{{ c.index }}]</a>{% endfor -%}
 {%- endmacro -%}
 
 {%- macro point_text(point) -%}{{ point.text }}{{ markers(point.citations) }}{%- endmacro -%}
