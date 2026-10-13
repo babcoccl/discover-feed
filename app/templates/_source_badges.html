@@ -1,0 +1,12 @@
+{%- macro state_badge(h) -%}
+{%- set colors = {"ok": "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300", "pending": "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300", "failing": "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300", "disabled": "bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-400", "auto_disabled": "bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-300", "removed": "bg-slate-200 text-slate-500 dark:bg-slate-800 dark:text-slate-500"} -%}
+<span class="inline-block whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium {{ colors[h.state] }}" data-state="{{ h.state }}">{{ h.state | replace("_", " ") }}</span>
+{%- endmacro -%}
+{%- macro when(value, empty="never") -%}
+{% if value %}<time datetime="{{ value.isoformat() }}" title="{{ value.strftime('%Y-%m-%d %H:%M UTC') }}">{{ value | reltime }}</time>{% else %}<span class="text-slate-400">{{ empty }}</span>{% endif %}
+{%- endmacro -%}
+{%- macro quota(h) -%}
+{% if h.daily_request_budget %}<span title="API requests today (UTC) / daily budget">{{ h.requests_today }}/{{ h.daily_request_budget }} req</span>{% elif h.requests_today %}{{ h.requests_today }} req{% endif %}
+{% if h.monthly_budget_usd %}<span class="block" title="Spend this month (UTC) / cap">${{ "%.2f" | format(h.spend_this_month_usd) }} / ${{ "%.2f" | format(h.monthly_budget_usd) }}</span>{% endif %}
+{% if not h.daily_request_budget and not h.requests_today and not h.monthly_budget_usd %}<span class="text-slate-400">—</span>{% endif %}
+{%- endmacro -%}

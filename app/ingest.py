@@ -17,10 +17,10 @@ from sqlalchemy.orm import sessionmaker
 
 from app.config import Source
 from app.lifecycle import ensure_stories
-from app.models import Article, SourceStatus, utcnow
+from app.models import Article, SourceRecord, SourceStatus, SourceUsage, TextStatus, utcnow
 from app.normalize import NormalizedArticle, normalize, normalize_title
 from app.runs import record_run
-from app.sources import FetchState, RawArticle, create_adapter
+from app.sources import FetchState, Quota, QuotaExhausted, RateLimited, RawArticle, create_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ MAX_BACKOFF = timedelta(hours=24)
 
 class SourceRunResult(BaseModel):
     source_id: str
-    status: Literal["ok", "not_modified", "error", "skipped"]
+    status: Literal["ok", "not_modified", "error", "skipped", "disabled"]
     fetched: int = 0
     new_articles: int = 0
     error: str | None = None
@@ -80,8 +80,11 @@ class Ingestor:
         user_agent: str = USER_AGENT,
         transport: httpx.AsyncBaseTransport | None = None,
         clock: Callable[[], datetime] = utcnow,
+        auto_disable_failures: int = 10,
     ) -> None:
         self.session_factory = session_factory
+        self.auto_disable_failures = auto_disable_failures
+        """Disable a source after this many consecutive failures (0 = never)."""
         self.timeout = timeout
         self.user_agent = user_agent
         self.transport = transport
@@ -98,6 +101,10 @@ class Ingestor:
             follow_redirects=True,
             transport=self.transport,
         )
+
+    def http_client(self) -> httpx.AsyncClient:
+        """A client with the ingestion User-Agent, timeout and transport (test fetches)."""
+        return self._client()
 
     def _lock(self, source_id: str) -> threading.Lock:
         with self._locks_guard:
@@ -151,7 +158,11 @@ class Ingestor:
         self, client: httpx.AsyncClient, source: Source, force: bool
     ) -> SourceRunResult:
         with self.session_factory() as session:
+            record = session.get(SourceRecord, source.id)
+            if record is not None and (record.removed_at is not None or not record.enabled):
+                return SourceRunResult(source_id=source.id, status="skipped", error="disabled")
             status = session.get(SourceStatus, source.id) or SourceStatus(source_id=source.id)
+            quota = load_quota(session, source, self.clock()) if source.is_api else None
         if not force and not is_due(status, self.clock(), source.refresh_minutes):
             return SourceRunResult(
                 source_id=source.id,
@@ -159,17 +170,27 @@ class Ingestor:
                 error=f"backing off until {status.next_attempt_at.isoformat()}",
             )
 
-        state = FetchState(etag=status.etag, last_modified=status.last_modified)
+        state = FetchState(etag=status.etag, last_modified=status.last_modified, quota=quota)
         try:
             raws = await create_adapter(source.type, client).fetch(source, state)
+        except QuotaExhausted as exc:
+            self._save_usage(source, quota)
+            self._record_skip(source, exc)
+            return SourceRunResult(source_id=source.id, status="skipped", error=str(exc))
         except Exception as exc:
+            self._save_usage(source, quota)
             logger.warning("fetch of %s failed: %s", source.id, _describe(exc))
-            self._record_failure(source, exc)
-            return SourceRunResult(source_id=source.id, status="error", error=_describe(exc))
+            disabled = self._record_failure(source, exc)
+            return SourceRunResult(
+                source_id=source.id,
+                status="disabled" if disabled else "error",
+                error=_describe(exc),
+            )
 
+        self._save_usage(source, quota)
         fetched_at = self.clock()
         new = 0 if state.not_modified else self._store(source, raws, fetched_at)
-        self._record_success(source, state, fetched_at)
+        self._record_success(source, state, fetched_at, len(raws))
         return SourceRunResult(
             source_id=source.id,
             status="not_modified" if state.not_modified else "ok",
@@ -177,13 +198,42 @@ class Ingestor:
             new_articles=new,
         )
 
+    def _save_usage(self, source: Source, quota: Quota | None) -> None:
+        if quota is None or not (quota.new_requests or quota.new_reads):
+            return
+        now = self.clock()
+        with self.session_factory() as session:
+            for period in usage_periods(now):
+                row = session.get(SourceUsage, (source.id, period)) or SourceUsage(
+                    source_id=source.id, period=period, requests=0, reads=0, spend_usd=0.0
+                )
+                row.requests = (row.requests or 0) + quota.new_requests
+                row.reads = (row.reads or 0) + quota.new_reads
+                row.spend_usd = round((row.spend_usd or 0.0) + quota.new_spend_usd, 6)
+                session.add(row)
+            session.commit()
+        quota.requests_today += quota.new_requests
+        quota.spend_month_usd = quota.spent_usd
+        quota.new_requests = quota.new_reads = 0
+        quota.new_spend_usd = 0.0
+
+    def _record_skip(self, source: Source, exc: BaseException) -> None:
+        with self.session_factory() as session:
+            status = session.get(SourceStatus, source.id) or SourceStatus(source_id=source.id)
+            status.last_attempt_at = self.clock()
+            status.last_error = str(exc)[:2000]
+            session.add(status)
+            session.commit()
+
     def _store(self, source: Source, raws: list[RawArticle], fetched_at: datetime) -> int:
         base_url = str(source.url)
         items: list[NormalizedArticle] = []
+        extra: dict[str, dict] = {}
         for raw in raws:
             item = normalize(raw, source_id=source.id, fetched_at=fetched_at, base_url=base_url)
             if item is not None:
                 items.append(item)
+                extra[item.canonical_url] = _text_columns(raw, source, fetched_at)
         if not items:
             return 0
 
@@ -212,7 +262,7 @@ class Ingestor:
                     continue
                 result = session.execute(
                     sqlite_insert(Article)
-                    .values(**asdict(item))
+                    .values(**asdict(item), **extra[item.canonical_url])
                     .on_conflict_do_nothing(index_elements=["canonical_url"])
                 )
                 new += result.rowcount
@@ -235,7 +285,9 @@ class Ingestor:
                 logger.exception("alert evaluation failed for %d new articles", len(ids))
         return new
 
-    def _record_success(self, source: Source, state: FetchState, at: datetime) -> None:
+    def _record_success(
+        self, source: Source, state: FetchState, at: datetime, items: int | None = None
+    ) -> None:
         with self.session_factory() as session:
             status = session.get(SourceStatus, source.id) or SourceStatus(source_id=source.id)
             status.last_attempt_at = at
@@ -245,11 +297,15 @@ class Ingestor:
             status.next_attempt_at = None
             status.etag = state.etag
             status.last_modified = state.last_modified
+            if not state.not_modified:
+                status.items_last_run = items
             session.add(status)
             session.commit()
 
-    def _record_failure(self, source: Source, exc: BaseException) -> None:
+    def _record_failure(self, source: Source, exc: BaseException) -> bool:
+        """Back off; returns True when this failure auto-disabled the source."""
         now = self.clock()
+        disabled = False
         with self.session_factory() as session:
             status = session.get(SourceStatus, source.id) or SourceStatus(source_id=source.id)
             status.consecutive_failures = (status.consecutive_failures or 0) + 1
@@ -258,8 +314,64 @@ class Ingestor:
             status.next_attempt_at = now + backoff_delay(
                 status.consecutive_failures, source.refresh_minutes
             )
+            retry_after = getattr(exc, "retry_after", None)
+            if isinstance(exc, RateLimited) and retry_after is not None:
+                status.next_attempt_at = max(
+                    status.next_attempt_at, now + timedelta(seconds=retry_after)
+                )
             session.add(status)
+            limit = self.auto_disable_failures
+            record = session.get(SourceRecord, source.id)
+            if (
+                limit
+                and record is not None
+                and record.enabled
+                and status.consecutive_failures >= limit
+            ):
+                record.enabled = False
+                record.auto_disabled_at = now
+                record.disabled_reason = (
+                    f"{status.consecutive_failures} consecutive failures; last: {status.last_error}"
+                )[:2000]
+                disabled = True
+                logger.warning(
+                    "source %s disabled after %d consecutive failures",
+                    source.id,
+                    status.consecutive_failures,
+                )
             session.commit()
+        return disabled
+
+
+def usage_periods(now: datetime) -> tuple[str, str]:
+    return f"day:{now:%Y-%m-%d}", f"month:{now:%Y-%m}"
+
+
+def load_quota(session, source: Source, now: datetime) -> Quota:
+    day, month = usage_periods(now)
+    today = session.get(SourceUsage, (source.id, day))
+    this_month = session.get(SourceUsage, (source.id, month))
+    return Quota(
+        daily_request_budget=source.daily_request_budget,
+        monthly_budget_usd=source.monthly_budget_usd,
+        cost_per_read_usd=source.cost_per_read_usd,
+        requests_today=today.requests if today else 0,
+        spend_month_usd=this_month.spend_usd if this_month else 0.0,
+    )
+
+
+def _text_columns(raw: RawArticle, source: Source, fetched_at: datetime) -> dict:
+    """Body text the API already supplied (no extraction needed) or social posts (none)."""
+    if raw.text:
+        return {
+            "text": raw.text,
+            "text_status": TextStatus.OK.value,
+            "text_fetched_at": fetched_at,
+            "word_count": len(raw.text.split()),
+        }
+    if raw.social or source.social:
+        return {"text_status": TextStatus.SKIPPED.value, "text_fetched_at": fetched_at}
+    return {}
 
 
 def _describe(exc: BaseException) -> str:

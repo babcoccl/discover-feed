@@ -1,0 +1,43 @@
+{# Editable source fields; `d` is the draft/source dict. #}
+{% set input = "w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-950" %}
+{% set kind = d.type or "rss" %}
+<input type="hidden" name="type" value="{{ kind }}">
+<div class="grid gap-3 sm:grid-cols-2">
+  <label class="block text-sm"><span class="mb-1 block font-medium">Name</span><input name="name" value="{{ d.name or '' }}" class="{{ input }}" required></label>
+  {% if kind in ("rss", "atom") %}
+  <label class="block text-sm"><span class="mb-1 block font-medium">Feed URL</span><input name="url" value="{{ d.url or '' }}" class="{{ input }}" required></label>
+  {% endif %}
+  <label class="block text-sm"><span class="mb-1 block font-medium">Tags</span><input name="tags" value="{{ d.tags or '' }}" class="{{ input }}" placeholder="comma separated"></label>
+  <label class="block text-sm"><span class="mb-1 block font-medium">Refresh every (minutes)</span><input type="number" min="1" name="refresh_minutes" value="{{ d.refresh_minutes or 30 }}" class="{{ input }}"></label>
+</div>
+{% if kind in api_params %}
+<fieldset class="mt-3 grid gap-3 sm:grid-cols-3">
+  <legend class="mb-1 text-sm font-medium">{{ type_labels.get(kind, kind) }} query</legend>
+  {% for key in api_params[kind] %}
+  {% set value = (d.params or {}).get(key, "") %}
+  <label class="block text-sm"><span class="mb-1 block text-slate-600 dark:text-slate-400">{{ key }}</span><input name="p_{{ key }}" value="{{ value | join(' ') if value is not string and value is iterable else value }}" class="{{ input }}"></label>
+  {% endfor %}
+</fieldset>
+<div class="mt-3 grid gap-3 sm:grid-cols-3">
+  <label class="block text-sm"><span class="mb-1 block font-medium">API key variable</span><input name="api_key" value="{{ d.api_key or '' }}" class="{{ input }} font-mono" placeholder="{{ {'guardian': 'GUARDIAN_API_KEY', 'newsdata': 'NEWSDATA_API_KEY', 'x': 'X_BEARER_TOKEN'}[kind] }}"><span class="mt-1 block text-xs text-slate-500">Environment variable name only; the key never enters the DB.</span></label>
+  <label class="block text-sm"><span class="mb-1 block font-medium">Daily request budget</span><input type="number" min="1" name="daily_request_budget" value="{{ d.daily_request_budget or '' }}" class="{{ input }}"></label>
+  {% if kind == "x" %}
+  <label class="block text-sm"><span class="mb-1 block font-medium">Max posts per run</span><input type="number" min="10" max="100" name="max_posts_per_run" value="{{ d.max_posts_per_run or 10 }}" class="{{ input }}"></label>
+  <label class="block text-sm"><span class="mb-1 block font-medium">Monthly budget (USD)</span><input type="number" step="0.01" min="0.01" name="monthly_budget_usd" value="{{ d.monthly_budget_usd or '' }}" class="{{ input }}"><span class="mt-1 block text-xs text-slate-500">Required: X is never fetched without a cap.</span></label>
+  <label class="block text-sm"><span class="mb-1 block font-medium">Cost per read (USD)</span><input type="number" step="0.0001" min="0.0001" name="cost_per_read_usd" value="{{ d.cost_per_read_usd or 0.005 }}" class="{{ input }}"></label>
+  {% endif %}
+</div>
+{% endif %}
+<div class="mt-3 flex flex-wrap gap-4 text-sm">
+  <label class="flex items-center gap-1"><input type="checkbox" name="enabled" {% if d.enabled is not defined or d.enabled %}{% if not (kind == "x" and not d.monthly_budget_usd) %}checked{% endif %}{% endif %}> Enabled</label>
+  <label class="flex items-center gap-1"><input type="checkbox" name="aggregator" {% if d.aggregator %}checked{% endif %}> Aggregator (links to other publishers)</label>
+  <label class="flex items-center gap-1"><input type="checkbox" name="first_party" {% if d.first_party %}checked{% endif %}> First party</label>
+</div>
+<fieldset class="mt-3 text-sm">
+  <legend class="mb-1 font-medium">Profiles</legend>
+  <div class="flex flex-wrap gap-4">
+  {% for p in all_profiles %}
+  <label class="flex items-center gap-1"><input type="checkbox" name="profiles" value="{{ p.slug }}" {% if p.slug in (d.profiles or []) %}checked{% endif %}> {{ p.name }}</label>
+  {% endfor %}
+  </div>
+</fieldset>

@@ -53,6 +53,60 @@ across renames). New source kinds plug in via `app/sources/base.py` (`SourceAdap
 `@register(SourceType...)`). The optional `state` argument of `fetch()` carries
 ETag/Last-Modified for conditional requests; adapters without them can ignore it.
 
+## Sources: management, API adapters and budgets
+
+Sources live in the DB (seeded once from YAML) and are managed in **Settings > Sources** or via
+`/api/v1/sources` (admin key required). A source can be assigned to several profiles and is
+still fetched once; adding a feed/API query that already exists just shares it.
+
+- **Add feed**: paste a site or feed URL; HTML `<link rel="alternate">` RSS/Atom links are
+  discovered, **Test fetch** shows HTTP status, latency, title, item count and the 5 newest items
+  without writing anything, then **Save**. API: `POST /api/v1/sources/discover`, `/sources/test`.
+- **Edit, enable/disable, remove, restore**. Remove is a soft delete: fetching stops, its
+  articles and stories stay; restore re-enables it.
+- **Health** (Settings table, source page, `GET /api/v1/sources/health`): last success,
+  items/day (7 d), consecutive failures, last error, next fetch, API requests today vs budget,
+  X reads/spend vs cap. After `DISCOVER_SOURCE_AUTO_DISABLE_FAILURES` (10) consecutive failures a
+  source is disabled (never deleted) with a banner and a one-click **Re-enable**.
+- **OPML** import/export per profile (name, URL, tags as `category`):
+  `GET|POST /api/v1/profiles/{slug}/sources.opml`.
+- **Catalog**: [`config/source_catalog.yaml`](config/source_catalog.yaml) lists free feeds
+  (finance, regulators, tech, science, world), picked in Settings > Sources > Catalog. Re-check
+  the URLs with `python scripts/verify_catalog.py` (network).
+- **Sync from YAML** adds profiles, sources, profile links and topics that the YAML has and the
+  DB lacks. It never overwrites or deletes, and leaves app-removed sources removed.
+
+API sources (the key is an env var *name*; the value never reaches the DB, logs or responses):
+
+```yaml
+sources:
+  - name: Guardian business
+    type: guardian            # Guardian Open Platform; bodyText is stored, no extraction
+    api_key: ${GUARDIAN_API_KEY}
+    params: {q: "interest rates", section: business, from_date: 2026-10-01, page_size: 50, max_pages: 2}
+    daily_request_budget: 400
+  - name: NewsData markets
+    type: newsdata            # NewsData.io /api/1/latest
+    api_key: ${NEWSDATA_API_KEY}
+    params: {q: ecb, country: de, language: en, category: business, max_pages: 1}
+    daily_request_budget: 150 # enforced locally per UTC day; set it to your plan's limit
+  - name: Fed watchers on X
+    type: x                   # optional, enabled only with a monthly cap
+    api_key: ${X_BEARER_TOKEN}
+    params: {users: [federalreserve], query: "rate cut"}
+    max_posts_per_run: 20
+    monthly_budget_usd: 5     # hard stop; spend persists across restarts
+    cost_per_read_usd: 0.005  # default
+```
+
+Requests and paid reads are counted in `source_usage` (`day:YYYY-MM-DD`, `month:YYYY-MM`); an
+exhausted budget skips the run (not a failure). HTTP 429 honours `Retry-After`; invalid keys and
+provider quota errors show a clear reason in the health table. X posts are short social items:
+no text extraction and no detailed report (`insufficient_text`), the card shows the post.
+Missing `${ENV}` values for alert channels and sources are logged once at startup and listed on
+the Alerts page and Settings > Pipeline (names only). `python scripts/demo_api_sources.py` builds
+the demo with fake Guardian and NewsData APIs and shows their items joining stories.
+
 ## Profiles, topics and the UI
 
 On first start the profiles, their sources and topics are seeded from the YAML config into the
@@ -619,6 +673,8 @@ Without make (e.g. Windows), run the same commands directly from the activated v
 | `DISCOVER_REFRESH_JITTER_SECONDS` | `60` |
 | `DISCOVER_API_KEYS` | unset (API open); comma-separated keys, see [Authentication](#authentication-nas--exposed-port) |
 | `DISCOVER_ADMIN_KEY` | unset (admin open); guards `/api/admin/*`, topic writes and Settings |
+| `DISCOVER_SOURCE_AUTO_DISABLE_FAILURES` | `10` consecutive failures before a source is disabled |
+| `GUARDIAN_API_KEY`, `NEWSDATA_API_KEY`, `X_BEARER_TOKEN` | unset; referenced by API sources as `api_key: ${NAME}` |
 | `DISCOVER_CONTACT_EMAIL` | unset; appended to the fetch User-Agent. Set it if you use SEC feeds (startup warns otherwise). |
 | `DISCOVER_EXTRACT_INTERVAL_MINUTES` | `15` (extract + cluster job) |
 | `DISCOVER_EXTRACT_MAX_ARTICLES` | `50` per run |

@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% from "_source_badges.html" import state_badge, when, quota %}
+{% block title %}{{ source.name }} · Sources{% endblock %}
+{% set card = "rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900" %}
+{% set btn = "rounded-full border border-slate-300 bg-white px-4 py-1.5 text-sm font-medium shadow-sm hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800" %}
+{% block content %}
+<h1 class="mb-1 flex items-center gap-2 text-2xl font-bold tracking-tight">{{ source.name }} {{ state_badge(health) }}</h1>
+<p class="mb-6 text-sm text-slate-500 dark:text-slate-400">{{ type_labels.get(source.type, source.type) }} · {{ source.url }} · <a class="underline" href="/p/{{ profile.slug }}/settings#sources">Back to sources</a></p>
+{% if message %}<p class="mb-4 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300" role="status" data-message>{{ message }}</p>{% endif %}
+{% if error %}<p class="mb-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-800 dark:bg-red-950/50 dark:text-red-300" role="alert" data-error>{{ error }}</p>{% endif %}
+{% if health.state == "auto_disabled" %}
+<div class="mb-4 flex flex-wrap items-center gap-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-200" role="alert" data-auto-disabled="{{ source.id }}">
+  <p class="min-w-0 flex-1"><span class="font-semibold">Disabled automatically</span> {{ source.auto_disabled_at | reltime }}: {{ source.disabled_reason }}</p>
+  <form method="post" action="/p/{{ profile.slug }}/settings/sources/{{ source.id }}/enable"><button class="rounded-full bg-amber-600 px-3 py-1 text-sm font-semibold text-white hover:bg-amber-700">Re-enable</button></form>
+</div>
+{% endif %}
+<section class="{{ card }} mb-6" aria-labelledby="health-heading" data-health>
+  <h2 id="health-heading" class="mb-3 font-semibold">Health</h2>
+  <dl class="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+    <div><dt class="text-xs text-slate-500">Last success</dt><dd class="font-medium">{{ when(health.last_success_at) }}</dd></div>
+    <div><dt class="text-xs text-slate-500">Next fetch</dt><dd class="font-medium">{{ when(health.next_fetch_at, "—") }}</dd></div>
+    <div><dt class="text-xs text-slate-500">Items/day (7 d)</dt><dd class="font-medium">{{ health.items_per_day }}</dd></div>
+    <div><dt class="text-xs text-slate-500">Consecutive failures</dt><dd class="font-medium">{{ health.consecutive_failures }}</dd></div>
+    <div><dt class="text-xs text-slate-500">API requests today</dt><dd class="font-medium" data-requests>{{ health.requests_today }}{% if health.daily_request_budget %} / {{ health.daily_request_budget }}{% endif %}</dd></div>
+    <div><dt class="text-xs text-slate-500">Paid reads this month</dt><dd class="font-medium">{{ health.reads_this_month }}</dd></div>
+    <div><dt class="text-xs text-slate-500">Spend this month</dt><dd class="font-medium" data-spend>${{ "%.2f" | format(health.spend_this_month_usd) }}{% if health.monthly_budget_usd %} / ${{ "%.2f" | format(health.monthly_budget_usd) }}{% endif %}</dd></div>
+    <div><dt class="text-xs text-slate-500">Profiles</dt><dd class="font-medium">{{ health.profiles | join(", ") or "—" }}</dd></div>
+  </dl>
+  {% if health.last_error %}<p class="mt-3 break-words text-sm text-red-700 dark:text-red-400">Last error: {{ health.last_error }}</p>{% endif %}
+</section>
+{% if not health.removed %}
+<section class="{{ card }} mb-6" aria-labelledby="edit-heading">
+  <h2 id="edit-heading" class="mb-3 font-semibold">Edit</h2>
+  {% set limits = source.limits or {} %}
+  <form method="post" action="/p/{{ profile.slug }}/settings/sources/{{ source.id }}">
+    {% with d = {"type": source.type, "name": source.name, "url": source.url, "tags": (source.tags or []) | join(", "), "refresh_minutes": source.refresh_minutes, "params": source.params or {}, "api_key": source.api_key_env, "enabled": source.enabled, "aggregator": source.aggregator, "first_party": source.first_party, "profiles": health.profiles, "daily_request_budget": limits.get("daily_request_budget"), "max_posts_per_run": limits.get("max_posts_per_run"), "monthly_budget_usd": limits.get("monthly_budget_usd"), "cost_per_read_usd": limits.get("cost_per_read_usd")} %}{% include "_source_fields.html" %}{% endwith %}
+    <div class="mt-4"><button class="rounded-full bg-sky-600 px-4 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-sky-700">Save</button></div>
+  </form>
+</section>
+{% endif %}
+<div class="flex flex-wrap gap-2">
+  {% if health.removed %}
+  <form method="post" action="/p/{{ profile.slug }}/settings/sources/{{ source.id }}/restore"><button class="{{ btn }}">Restore</button></form>
+  {% else %}
+  <form method="post" action="/p/{{ profile.slug }}/settings/sources/{{ source.id }}/{{ 'disable' if source.enabled else 'enable' }}"><button class="{{ btn }}">{{ "Disable" if source.enabled else "Enable" }}</button></form>
+  <form method="post" action="/p/{{ profile.slug }}/settings/sources/{{ source.id }}/delete" onsubmit="return confirm('Remove {{ source.name }}? Its articles and stories are kept.')"><button class="rounded-full border border-red-300 px-4 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950">Remove</button></form>
+  {% endif %}
+</div>
+{% endblock %}

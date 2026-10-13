@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     fetch_timeout_seconds: float = 10.0
     refresh_jitter_seconds: int = 60
     contact_email: str | None = None
+    source_auto_disable_failures: int = 10
+    """Disable a source after this many consecutive fetch failures (0 = never)."""
     log_level: str = "info"
 
     # Optional auth (app/auth.py); both off when unset

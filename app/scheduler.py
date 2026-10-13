@@ -43,6 +43,26 @@ def schedule_ingestion(
         )
 
 
+def sync_ingestion_jobs(
+    scheduler: BackgroundScheduler,
+    sources: Sequence[Source],
+    ingestor: Ingestor,
+    *,
+    jitter_seconds: int = 60,
+) -> None:
+    """Make the ``ingest:*`` jobs match ``sources`` after sources are added, edited,
+    disabled or removed: unchanged jobs keep their schedule."""
+    jobs = {job.id: job for job in scheduler.get_jobs() if job.id.startswith("ingest:")}
+    changed = []
+    for source in sources:
+        job = jobs.pop(f"ingest:{source.id}", None)
+        if job is None or list(job.args) != [[source]]:
+            changed.append(source)
+    for job_id in jobs:
+        scheduler.remove_job(job_id)
+    schedule_ingestion(scheduler, changed, ingestor, jitter_seconds=jitter_seconds)
+
+
 def schedule_pipeline(
     scheduler: BackgroundScheduler,
     pipeline: Pipeline,

@@ -257,6 +257,7 @@ class SourceStatus(Base):
     next_attempt_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     etag: Mapped[str | None] = mapped_column(String(500))
     last_modified: Mapped[str | None] = mapped_column(String(100))
+    items_last_run: Mapped[int | None] = mapped_column(Integer)
 
 
 profile_sources = Table(
@@ -281,19 +282,78 @@ class SourceRecord(Base):
     tags: Mapped[list[str]] = mapped_column(JSON, default=list)
     aggregator: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     first_party: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    params: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=dict)
+    api_key_env: Mapped[str | None] = mapped_column(String(100))
+    """Environment variable *name* of the API key; the value is never stored."""
+    limits: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=dict)
+    """daily_request_budget, max_posts_per_run, monthly_budget_usd, cost_per_read_usd."""
+    removed_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    """Deleted in the UI/API: no longer fetched or listed; its articles and stories stay."""
+    auto_disabled_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    disabled_reason: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime | None] = mapped_column(UTCDateTime, default=utcnow)
 
     def to_config(self) -> Source:
+        limits = {k: v for k, v in (self.limits or {}).items() if v is not None}
         return Source(
             id=self.id,
             name=self.name,
             type=self.type,
-            url=self.url,
+            url=self.url or None,
             enabled=self.enabled,
             refresh_minutes=self.refresh_minutes,
             tags=list(self.tags or []),
             aggregator=bool(self.aggregator),
             first_party=bool(self.first_party),
+            params=dict(self.params or {}),
+            api_key=self.api_key_env or None,
+            **limits,
         )
+
+    def apply(self, source: Source) -> None:
+        """Copy editable fields from a validated config model."""
+        self.name = source.name
+        self.type = source.type.value
+        self.url = str(source.url)
+        self.enabled = source.enabled
+        self.refresh_minutes = source.refresh_minutes
+        self.tags = list(source.tags)
+        self.aggregator = source.aggregator
+        self.first_party = source.first_party
+        self.params = dict(source.params)
+        self.api_key_env = source.api_key
+        self.limits = {
+            key: getattr(source, key)
+            for key in LIMIT_FIELDS
+            if getattr(source, key) is not None and key in source.model_fields_set
+        }
+
+    @classmethod
+    def from_config(cls, source: Source) -> "SourceRecord":
+        record = cls(id=source.id)
+        record.apply(source)
+        return record
+
+
+LIMIT_FIELDS = (
+    "daily_request_budget",
+    "max_posts_per_run",
+    "monthly_budget_usd",
+    "cost_per_read_usd",
+)
+
+
+class SourceUsage(Base):
+    """API calls and paid reads per source and period (``day:2026-10-12`` / ``month:2026-10``)
+    so budgets survive restarts."""
+
+    __tablename__ = "source_usage"
+
+    source_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    period: Mapped[str] = mapped_column(String(20), primary_key=True)
+    requests: Mapped[int] = mapped_column(Integer, default=0)
+    reads: Mapped[int] = mapped_column(Integer, default=0)
+    spend_usd: Mapped[float] = mapped_column(Float, default=0.0)
 
 
 class ProfileRecord(Base):

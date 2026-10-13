@@ -21,6 +21,7 @@
 <h1 class="mb-1 text-2xl font-bold tracking-tight">Alerts</h1>
 <p class="mb-4 max-w-3xl text-sm text-slate-600 dark:text-slate-400">{{ profile.name }} · A rule notifies its channels the moment a matching article is ingested (title and feed summary; extracted text too if selected), once per story, even when stories merge later. Only recently published articles fire (alerts.alert_max_age_hours), so a first start or backfill never floods you. <a class="underline" href="/p/{{ profile.slug }}/settings">Settings</a></p>
 {% if message %}<p class="mb-4 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300" role="status" data-message>{{ message }}</p>{% endif %}
+{% include "_secret_warnings.html" %}
 {% if error %}<p class="mb-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-800 dark:bg-red-950/50 dark:text-red-300" role="alert" data-error>{{ error }}</p>{% endif %}
 
 <dl class="mb-8 grid grid-cols-2 gap-2 text-sm sm:grid-cols-5" data-alert-stats>

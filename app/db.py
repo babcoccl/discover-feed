@@ -34,6 +34,7 @@ def init_db(engine: Engine) -> None:
     _add_attempt_quality_columns(engine)
     _add_source_flags(engine)
     _add_alert_columns(engine)
+    _add_source_management_columns(engine)
 
 
 def _add_article_url(engine: Engine) -> None:
@@ -175,6 +176,26 @@ def _add_alert_columns(engine: Engine) -> None:
             conn.execute(text("ALTER TABLE story_events ADD COLUMN data JSON"))
         if "alerts_seeded_at" not in {c["name"] for c in inspect(conn).get_columns("profiles")}:
             conn.execute(text("ALTER TABLE profiles ADD COLUMN alerts_seeded_at DATETIME"))
+
+
+def _add_source_management_columns(engine: Engine) -> None:
+    """Pre-source-management DBs: API params/limits, soft delete and auto-disable markers."""
+    columns = {
+        "params": "JSON",
+        "api_key_env": "VARCHAR(100)",
+        "limits": "JSON",
+        "removed_at": "DATETIME",
+        "auto_disabled_at": "DATETIME",
+        "disabled_reason": "TEXT",
+        "created_at": "DATETIME",
+    }
+    with engine.begin() as conn:
+        existing = {c["name"] for c in inspect(conn).get_columns("sources")}
+        for name, ddl in columns.items():
+            if name not in existing:
+                conn.execute(text(f"ALTER TABLE sources ADD COLUMN {name} {ddl}"))
+        if "items_last_run" not in {c["name"] for c in inspect(conn).get_columns("source_status")}:
+            conn.execute(text("ALTER TABLE source_status ADD COLUMN items_last_run INTEGER"))
 
 
 def ping(engine: Engine) -> bool:

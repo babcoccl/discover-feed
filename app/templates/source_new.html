@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% from "_source_badges.html" import when %}
+{% block title %}Add source · {{ profile.name }}{% endblock %}
+{% set card = "rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900" %}
+{% set input = "w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-950" %}
+{% set primary = "rounded-full bg-sky-600 px-4 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-sky-700" %}
+{% set btn = "rounded-full border border-slate-300 bg-white px-4 py-1.5 text-sm font-medium shadow-sm hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800" %}
+{% block content %}
+<h1 class="mb-1 text-2xl font-bold tracking-tight">Add source</h1>
+<p class="mb-6 text-sm text-slate-500 dark:text-slate-400">{{ profile.name }} · <a class="underline" href="/p/{{ profile.slug }}/settings#sources">Back to sources</a> · <a class="underline" href="/p/{{ profile.slug }}/settings/sources/catalog">Catalog</a></p>
+{% if error %}<p class="mb-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-800 dark:bg-red-950/50 dark:text-red-300" role="alert" data-error>{{ error }}</p>{% endif %}
+
+<section class="{{ card }} mb-6" aria-labelledby="feed-heading">
+  <h2 id="feed-heading" class="mb-2 font-semibold">1 · Site or feed URL</h2>
+  <form method="post" action="/p/{{ profile.slug }}/settings/sources/discover" class="flex flex-col gap-2 sm:flex-row">
+    <input name="url" type="url" value="{{ draft.page_url or '' }}" class="{{ input }}" placeholder="https://www.example.com or https://example.com/feed.xml" required aria-label="Site or feed URL">
+    <button class="{{ primary }} shrink-0">Find feeds</button>
+  </form>
+  {% if candidates %}
+  <ul class="mt-4 divide-y divide-slate-100 dark:divide-slate-800" data-candidates>
+    {% for c in candidates %}
+    <li class="flex flex-wrap items-center gap-3 py-2">
+      <div class="min-w-0 flex-1"><div class="font-medium">{{ c.title or "Untitled feed" }} <span class="text-xs uppercase text-slate-500">{{ c.type.value }}</span></div><div class="truncate text-xs text-slate-500">{{ c.url }}</div></div>
+      <form method="post" action="/p/{{ profile.slug }}/settings/sources/test">
+        <input type="hidden" name="type" value="{{ c.type.value }}"><input type="hidden" name="url" value="{{ c.url }}"><input type="hidden" name="name" value="{{ c.title or '' }}"><input type="hidden" name="profiles" value="{{ profile.slug }}">
+        <button class="{{ btn }}">Test fetch</button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+
+{% if preview %}
+<section class="{{ card }} mb-6" aria-labelledby="preview-heading" data-preview>
+  <h2 id="preview-heading" class="mb-2 font-semibold">2 · Test fetch <span class="text-xs font-normal text-slate-500">(nothing has been saved)</span></h2>
+  <dl class="mb-3 grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
+    <div><dt class="text-xs text-slate-500">Status</dt><dd class="font-semibold {% if not preview.ok %}text-red-600 dark:text-red-400{% endif %}">{{ preview.status or "—" }} {{ "OK" if preview.ok else "failed" }}</dd></div>
+    <div><dt class="text-xs text-slate-500">Latency</dt><dd class="font-semibold">{{ preview.latency_ms }} ms</dd></div>
+    <div><dt class="text-xs text-slate-500">Title</dt><dd class="truncate font-semibold">{{ preview.title or "—" }}</dd></div>
+    <div><dt class="text-xs text-slate-500">Items</dt><dd class="font-semibold">{{ preview.item_count }}</dd></div>
+  </dl>
+  {% if preview.error %}<p class="mb-3 text-sm text-red-700 dark:text-red-400">{{ preview.error }}</p>{% endif %}
+  {% if preview.items %}
+  <ol class="mb-4 space-y-1 text-sm">
+    {% for item in preview.items %}<li class="flex gap-2"><span class="shrink-0 text-xs text-slate-500">{{ when(item.published_at, "undated") }}</span><a href="{{ item.url }}" target="_blank" rel="noopener noreferrer" class="line-clamp-1 hover:underline">{{ item.title }}</a></li>{% endfor %}
+  </ol>
+  {% endif %}
+  {% if preview.ok %}
+  <h3 class="mb-2 font-semibold">3 · Save</h3>
+  <form method="post" action="/p/{{ profile.slug }}/settings/sources">
+    {% with d = draft %}{% include "_source_fields.html" %}{% endwith %}
+    <div class="mt-4"><button class="{{ primary }}">Save source</button></div>
+  </form>
+  {% endif %}
+</section>
+{% endif %}
+
+<section class="{{ card }} mb-6" aria-labelledby="api-heading">
+  <h2 id="api-heading" class="mb-2 font-semibold">News API source</h2>
+  <div class="mb-3 flex flex-wrap gap-2 text-sm">
+    {% for kind in ("guardian", "newsdata", "x") %}
+    <a href="/p/{{ profile.slug }}/settings/sources/new?type={{ kind }}#api-heading" class="rounded-full px-3 py-1 {% if draft.type == kind %}bg-slate-900 text-white dark:bg-white dark:text-slate-900{% else %}border border-slate-300 dark:border-slate-700{% endif %}">{{ type_labels[kind] }}</a>
+    {% endfor %}
+  </div>
+  {% if draft.type in api_params and not preview %}
+  <form method="post" action="/p/{{ profile.slug }}/settings/sources/test">
+    {% with d = draft %}{% include "_source_fields.html" %}{% endwith %}
+    <div class="mt-4 flex gap-2"><button class="{{ btn }}">Test fetch</button>
+      <button class="{{ primary }}" formaction="/p/{{ profile.slug }}/settings/sources">Save without testing</button></div>
+  </form>
+  {% else %}
+  <p class="text-sm text-slate-600 dark:text-slate-400">Guardian Open Platform, NewsData.io, or X (opt-in, needs a monthly budget). Keys stay in the environment.</p>
+  {% endif %}
+</section>
+
+<section id="opml" class="{{ card }}" aria-labelledby="opml-heading">
+  <h2 id="opml-heading" class="mb-2 font-semibold">Import OPML</h2>
+  {% if opml %}
+  <div class="mb-3 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300" role="status" data-opml-result>
+    Imported: {{ opml.added | length }} new, {{ opml.shared | length }} shared with other profiles, {{ opml.skipped | length }} already here{% if opml.errors %}, {{ opml.errors | length }} invalid{% endif %}.
+    {% if opml.added %}<span class="block text-xs">{{ opml.added | join(", ") }}</span>{% endif %}
+    {% for e in opml.errors %}<span class="block text-xs text-red-700 dark:text-red-400">{{ e }}</span>{% endfor %}
+  </div>
+  {% endif %}
+  <form method="post" action="/p/{{ profile.slug }}/settings/sources/opml" enctype="multipart/form-data" class="space-y-2">
+    <input type="file" name="file" accept=".opml,.xml,text/x-opml,text/xml" class="block text-sm" aria-label="OPML file">
+    <textarea name="opml" rows="3" class="{{ input }} font-mono" placeholder="…or paste OPML here" aria-label="OPML text"></textarea>
+    <div class="flex gap-2"><button class="{{ primary }}">Import</button><a class="{{ btn }}" href="/p/{{ profile.slug }}/settings/sources.opml">Export this profile</a></div>
+  </form>
+</section>
+{% endblock %}

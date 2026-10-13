@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Source catalog · {{ profile.name }}{% endblock %}
+{% block content %}
+<h1 class="mb-1 text-2xl font-bold tracking-tight">Source catalog</h1>
+<p class="mb-6 text-sm text-slate-500 dark:text-slate-400">{{ profile.name }} · Free feeds checked when the catalog was last updated. <a class="underline" href="/p/{{ profile.slug }}/settings#sources">Back to sources</a></p>
+{% if message %}<p class="mb-4 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300" role="status" data-message>{{ message }}</p>{% endif %}
+<form method="post" action="/p/{{ profile.slug }}/settings/sources/catalog" data-catalog>
+  <div class="grid gap-4 lg:grid-cols-2">
+  {% for category, entries in categories.items() %}
+  <fieldset class="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+    <legend class="px-1 font-semibold">{{ category }}</legend>
+    <ul class="space-y-2">
+      {% for e in entries %}
+      <li>
+        <label class="flex gap-2 text-sm {% if e.url in present %}opacity-60{% endif %}">
+          <input type="checkbox" name="entry" value="{{ e.id }}" class="mt-1" {% if e.url in present %}disabled checked{% endif %}>
+          <span class="min-w-0"><span class="font-medium">{{ e.name }}</span>{% if e.first_party %} <span class="text-xs text-slate-500">first party</span>{% endif %}{% if e.url in present %} <span class="text-xs text-emerald-700 dark:text-emerald-400">added</span>{% endif %}
+          <span class="block truncate text-xs text-slate-500">{{ e.url }}</span>{% if e.note %}<span class="block text-xs text-amber-700 dark:text-amber-400">{{ e.note }}</span>{% endif %}</span>
+        </label>
+      </li>
+      {% endfor %}
+    </ul>
+  </fieldset>
+  {% endfor %}
+  </div>
+  <div class="sticky bottom-0 mt-4 bg-slate-50/90 py-3 dark:bg-slate-950/90"><button class="rounded-full bg-sky-600 px-4 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-sky-700">Add selected to {{ profile.name }}</button></div>
+</form>
+{% endblock %}

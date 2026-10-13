@@ -20,6 +20,7 @@ from app.demo_pages import FIXTURE_DIR, page_html
 from app.models import ProfileRecord, StorySummary, Topic
 from app.pipeline_panel import pipeline_queue, quality_metrics, recent_attempts
 from app.runs import last_runs, text_status_counts
+from app.secret_warnings import missing_secrets
 from app.topics import TopicRule, split_keywords
 
 
@@ -363,13 +364,16 @@ def _settings_context(
     message_topic: Topic | None = None,
     draft: dict | None = None,
 ) -> dict:
-    source_ids = [s.id for s in profile.sources]
+    from app.sources_web import TYPE_LABELS, _health_rows
+
     return _base_context(
         session,
         profile,
         on_settings=True,
         topics=sorted(profile.topics, key=lambda t: t.position),
-        statuses=repo.source_statuses(session, source_ids),
+        **_health_rows(session, profile),
+        type_labels=TYPE_LABELS,
+        auto_disable_failures=request.app.state.settings.source_auto_disable_failures,
         **_pipeline_context(request, session),
         error=error,
         message=message,
@@ -397,6 +401,23 @@ async def _topic_form(request: Request) -> dict:
     }
 
 
+def x_spend(session: Session) -> list[dict]:
+    """Month-to-date spend of every X source against its cap (Pipeline panel)."""
+    from app import source_admin
+
+    records = [r for r in source_admin.list_sources(session) if r.type == "x"]
+    return [
+        {
+            "name": h.name,
+            "spent": h.spend_this_month_usd,
+            "cap": h.monthly_budget_usd,
+            "reads": h.reads_this_month,
+            "enabled": h.enabled,
+        }
+        for h in source_admin.source_health(session, records)
+    ]
+
+
 def _pipeline_context(request: Request, session: Session) -> dict:
     worker = getattr(request.app.state, "summaries", None)
     return {
@@ -409,6 +430,8 @@ def _pipeline_context(request: Request, session: Session) -> dict:
         "attempts": recent_attempts(session),
         "quality": quality_metrics(session),
         "alert_stats": alert_repo.stats(session),
+        "secret_warnings": missing_secrets(session),
+        "x_spend": x_spend(session),
     }
 
 
@@ -426,6 +449,7 @@ def settings_page(request: Request, slug: str) -> Response:
     with _session(request) as session:
         profile = _profile_or_404(session, slug)
         context = _settings_context(request, session, profile)
+        context["source_message"] = request.query_params.get("msg")
     return TEMPLATES.TemplateResponse(request, "settings.html", context)
 
 
