@@ -16,3 +16,4 @@ data/
 *.db
 .env
 config/profiles.yaml
+diag.md
