@@ -35,6 +35,7 @@ def init_db(engine: Engine) -> None:
     _add_source_flags(engine)
     _add_alert_columns(engine)
     _add_source_management_columns(engine)
+    _add_image_columns(engine)
 
 
 def _add_article_url(engine: Engine) -> None:
@@ -205,3 +206,30 @@ def ping(engine: Engine) -> bool:
         return True
     except Exception:
         return False
+
+
+_IMAGE_COLUMNS = {
+    "articles": {
+        "page_image_url": "VARCHAR(2048)",
+        "icon_url": "VARCHAR(2048)",
+        "page_scanned_at": "DATETIME",
+        "image_source": "VARCHAR(10)",
+        "image_checked_at": "DATETIME",
+    },
+    "stories": {"image_source": "VARCHAR(10)"},
+}
+
+
+def _add_image_columns(engine: Engine) -> None:
+    """Pre-image DBs: article/story image columns (old articles are picked up by the image
+    backfill)."""
+    with engine.begin() as conn:
+        for table, columns in _IMAGE_COLUMNS.items():
+            existing = {c["name"] for c in inspect(conn).get_columns(table)}
+            for name, ddl in columns.items():
+                if name not in existing:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+        for name in ("page_image_url", "image_checked_at", "image_url"):
+            conn.execute(
+                text(f"CREATE INDEX IF NOT EXISTS ix_articles_{name} ON articles ({name})")
+            )

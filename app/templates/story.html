@@ -23,7 +23,8 @@
   {{ story.members | length }} article{{ "s" if story.members | length != 1 }} ·
   first seen <time datetime="{{ story.first_seen_at.isoformat() }}" title="{{ story.first_seen_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ story.first_seen_at | reltime }}</time>
 </p>
-{% if story.image_url %}<img src="{{ story.image_url }}" alt="" referrerpolicy="no-referrer" onerror="this.remove()" class="mb-6 aspect-video w-full max-w-3xl rounded-xl object-cover" data-story-image>{% endif %}
+{% set story_src = story.image | image_src %}
+{% if story_src %}<img src="{{ story_src }}" alt="" referrerpolicy="no-referrer" onerror="this.remove()" class="mb-6 aspect-video w-full max-w-3xl rounded-xl object-cover" data-story-image>{% endif %}
 {% if brief %}
 <section class="mb-6 max-w-3xl rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900" aria-labelledby="brief-heading" data-summary data-brief="{{ brief.style }}">
   <h2 id="brief-heading" class="sr-only">Brief</h2>

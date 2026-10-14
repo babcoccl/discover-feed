@@ -57,7 +57,8 @@ class Article(Base):
     author: Mapped[str | None] = mapped_column(String(500))
     published_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
     fetched_at: Mapped[datetime] = mapped_column(UTCDateTime)
-    image_url: Mapped[str | None] = mapped_column(String(2048))
+    image_url: Mapped[str | None] = mapped_column(String(2048), index=True)
+    """The feed's image (original URL, unvalidated)."""
     content_hash: Mapped[str] = mapped_column(String(64), index=True)
     raw_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     text: Mapped[str | None] = mapped_column(Text)
@@ -70,6 +71,52 @@ class Article(Base):
     story_id: Mapped[int | None] = mapped_column(
         ForeignKey("stories.id", ondelete="SET NULL"), index=True
     )
+    page_image_url: Mapped[str | None] = mapped_column(String(2048), index=True)
+    """og:image / twitter:image / JSON-LD image of the fetched page (absolute http(s))."""
+    icon_url: Mapped[str | None] = mapped_column(String(2048))
+    """apple-touch-icon / icon declared by the page."""
+    page_scanned_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    """When the page HTML was read for images (NULL: never, e.g. before image support)."""
+    image_source: Mapped[str | None] = mapped_column(String(10))
+    """``ImageSource`` the article's own image came from: ``feed`` | ``page`` | ``none``."""
+    image_checked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, index=True)
+
+
+class ImageSource(StrEnum):
+    FEED = "feed"
+    PAGE = "page"
+    MEMBER = "member"
+    """Story image taken from another member article."""
+    LOGO = "logo"
+    NONE = "none"
+
+
+class ImageAsset(Base):
+    """One remote image (article photo or publisher icon), validated once and optionally
+    cached as WebP under ``images_dir`` (``key``). ``url`` is the original URL."""
+
+    __tablename__ = "images"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    url: Mapped[str] = mapped_column(String(2048), unique=True)
+    key: Mapped[str] = mapped_column(String(64), unique=True)
+    kind: Mapped[str] = mapped_column(String(10), default="photo")
+    """``photo`` | ``icon``."""
+    status: Mapped[str] = mapped_column(String(10), index=True)
+    """``ok`` | ``rejected`` (not a usable image) | ``failed`` (fetch error)."""
+    reason: Mapped[str | None] = mapped_column(String(40))
+    content_type: Mapped[str | None] = mapped_column(String(100))
+    width: Mapped[int | None] = mapped_column(Integer)
+    height: Mapped[int | None] = mapped_column(Integer)
+    bytes: Mapped[int | None] = mapped_column(Integer)
+    cached_bytes: Mapped[int | None] = mapped_column(Integer)
+    """Size of the cached WebP; NULL when not cached (cache off, or evicted)."""
+    tint: Mapped[str | None] = mapped_column(String(7))
+    tint_dark: Mapped[str | None] = mapped_column(String(7))
+    generic: Mapped[bool] = mapped_column(Boolean, default=False)
+    """Same URL on ``generic_threshold`` or more articles of one domain (a site default)."""
+    checked_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    last_access_at: Mapped[datetime | None] = mapped_column(UTCDateTime, index=True)
 
 
 class TextStatus(StrEnum):
@@ -110,6 +157,8 @@ class Story(Base):
     """When the story was first published."""
     published_sort_at: Mapped[datetime | None] = mapped_column(UTCDateTime, index=True)
     """``last_updated_at`` of the served version (feed order)."""
+    image_source: Mapped[str | None] = mapped_column(String(10))
+    """``ImageSource`` of the newest view's image (Pipeline stats)."""
 
 
 class StoryState(StrEnum):

@@ -7,16 +7,20 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app import images
 from app import profiles as repo
 from app import story_views as views
 from app.alerts import repo as alert_repo
-from app.config import CardStyle
+from app.config import CardStyle, NoImageStyle
+from app.demo_images import demo_image
 from app.demo_pages import FIXTURE_DIR, page_html
+from app.images.cache import image_key, is_key
+from app.images.service import ImageWorker, image_stats
 from app.models import ProfileRecord, StorySummary, Topic
 from app.pipeline_panel import pipeline_queue, quality_metrics, recent_attempts
 from app.runs import last_runs, text_status_counts
@@ -35,9 +39,18 @@ def _card_style(request: Request) -> dict:
     return {"card_style": profile.summaries.card_style.value if profile else "lead_bullets"}
 
 
+def _image_style(request: Request) -> dict:
+    """``images.no_image_style`` (``?no_image=`` overrides it, for previews)."""
+    override = request.query_params.get("no_image")
+    if override in {s.value for s in NoImageStyle}:
+        return {"no_image_style": override}
+    return {"no_image_style": images.no_image_style().value}
+
+
 router = APIRouter(include_in_schema=False)
 TEMPLATES = Jinja2Templates(
-    directory=Path(__file__).parent / "templates", context_processors=[_card_style]
+    directory=Path(__file__).parent / "templates",
+    context_processors=[_card_style, _image_style],
 )
 PAGE_SIZE = 24
 
@@ -84,8 +97,39 @@ def placeholder_gradient(key: str) -> str:
     return _PLACEHOLDER_GRADIENTS[zlib.crc32(key.encode()) % len(_PLACEHOLDER_GRADIENTS)]
 
 
+def image_src(image: dict | None) -> str | None:
+    """The cached WebP (``/img/{key}``) when there is one, else the original URL."""
+    if not image or not image.get("url"):
+        return None
+    if image.get("key") and images.config().cache:
+        return f"/img/{image['key']}"
+    return image["url"]
+
+
+def article_image(article) -> str | None:
+    """An article card's image: the checked page/feed image (cached when possible), or the
+    unchecked feed image."""
+    if article.image_checked_at is None:
+        return article.image_url
+    url = {"page": article.page_image_url, "feed": article.image_url}.get(
+        article.image_source or ""
+    )
+    if url and images.config().cache:
+        return f"/img/{image_key(url)}"
+    return url
+
+
+def megabytes(n: int | None) -> str:
+    return f"{(n or 0) / (1024 * 1024):.1f} MB"
+
+
 TEMPLATES.env.filters.update(
-    reltime=reltime, snippet=snippet, placeholder_gradient=placeholder_gradient
+    reltime=reltime,
+    snippet=snippet,
+    placeholder_gradient=placeholder_gradient,
+    image_src=image_src,
+    article_image=article_image,
+    megabytes=megabytes,
 )
 
 
@@ -432,7 +476,26 @@ def _pipeline_context(request: Request, session: Session) -> dict:
         "alert_stats": alert_repo.stats(session),
         "secret_warnings": missing_secrets(session),
         "x_spend": x_spend(session),
+        "image_stats": image_stats(session, _image_cache(request)),
+        "image_backfill": _image_backfill(request),
     }
+
+
+def _image_worker(request: Request) -> ImageWorker | None:
+    pipeline = getattr(request.app.state, "pipeline", None)
+    return getattr(pipeline, "images", None)
+
+
+def _image_cache(request: Request):
+    worker = _image_worker(request)
+    return worker.cache if worker is not None else None
+
+
+def _image_backfill(request: Request) -> dict | None:
+    worker = _image_worker(request)
+    if worker is None or worker.last_backfill is None:
+        return None
+    return worker.last_backfill.model_dump()
 
 
 @router.get("/p/{slug}/settings/pipeline", response_class=HTMLResponse)
@@ -521,10 +584,49 @@ def settings_delete_topic(request: Request, slug: str, topic_id: int) -> Respons
     return _settings_response(request, context)
 
 
+IMMUTABLE = "public, max-age=31536000, immutable"
+
+
+@router.get("/img/{key}")
+def cached_image(request: Request, key: str) -> Response:
+    """A validated image from the local cache (WebP, cached for a year by the browser); an
+    evicted or uncached one redirects to its original URL. Unknown keys are 404."""
+    key = key.removesuffix(".webp")
+    worker = _image_worker(request)
+    if worker is None or not is_key(key):
+        raise HTTPException(404, "no such image")
+    row = worker.touch(key)
+    if row is None or row.status != "ok":
+        raise HTTPException(404, "no such image")
+    path = worker.cache.path(key)
+    if row.cached_bytes and path.is_file():
+        return FileResponse(
+            path,
+            media_type="image/webp",
+            headers={"Cache-Control": IMMUTABLE, "Referrer-Policy": "no-referrer"},
+        )
+    return RedirectResponse(
+        row.url,
+        status_code=302,
+        headers={"Cache-Control": "public, max-age=3600", "Referrer-Policy": "no-referrer"},
+    )
+
+
+@router.get("/demo-image/{name}")
+def demo_image_route(name: str) -> Response:
+    """Generated demo images and icons (``app.demo_images``) the demo pages reference."""
+    found = demo_image(name)
+    if found is None:
+        raise HTTPException(404, "no such demo image")
+    body, ctype = found
+    return Response(body, media_type=ctype, headers={"Cache-Control": IMMUTABLE})
+
+
 @router.get("/demo-article/{article_id}", response_class=HTMLResponse)
-def demo_article(article_id: str) -> HTMLResponse:
+def demo_article(request: Request, article_id: str) -> HTMLResponse:
     """Local demo fixture page (the demo's feed items link here), marked "Demo article"."""
-    body = page_html(FIXTURE_DIR, article_id, banner=True)
+    base = str(request.base_url)
+    body = page_html(FIXTURE_DIR, article_id, banner=True, base=base)
     if body is None:
         raise HTTPException(404, "no such demo article")
     return HTMLResponse(body)

@@ -148,6 +148,10 @@ class PublishedStory:
     generated_at: datetime
     published_at: datetime | None
     all_source_count: int
+    image: dict | None = None
+    """``{url, key, source, width, height, generic}`` (``app.images.select``)."""
+    logo: dict | None = None
+    """``{url, key, tint, tint_dark}``: publisher icon for the no-image card."""
 
     @property
     def first_seen_at(self) -> datetime:
@@ -252,14 +256,22 @@ def load(view: StoryView, source_ids: Sequence[str] | None = None) -> PublishedS
     if not visible:
         return None
     rep = next((m for m in visible if m.id == doc.get("representative_id")), visible[0])
-    image = rep.image_url or next((m.image_url for m in visible if m.image_url), None)
+    image = doc.get("image")
+    if image is None:  # views written before image selection
+        url = rep.image_url or next((m.image_url for m in visible if m.image_url), None)
+        image = {"url": url, "source": "feed" if url else "none"}
+    elif image.get("article_id") and image["article_id"] not in {m.id for m in visible}:
+        url = next((m.image_url for m in visible if m.image_url), None)
+        image = {"url": url, "source": "member" if url else "none"}
     return PublishedStory(
         story_id=doc["story_id"],
         version=view.version,
         title=doc.get("title") or rep.title,
         members=visible,
         representative=rep,
-        image_url=image,
+        image_url=image.get("url"),
+        image=image,
+        logo=doc.get("logo"),
         brief=_brief(doc.get("brief")),
         report=_report(doc.get("report")),
         model=doc.get("model", ""),

@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from sqlalchemy import select, update
 from sqlalchemy.orm import sessionmaker
 
+from app.images.meta import PageImages, page_images
 from app.ingest import USER_AGENT
 from app.models import Article, TextStatus, utcnow
 
@@ -155,15 +156,17 @@ class Extractor:
         robots: dict[str, RobotFileParser | None] = {}
         results = []
         for article_id, url in batch:
-            text = None
+            text, images = None, None
             try:
-                result, text = await self._extract_one(client, domain, article_id, url, robots)
+                result, text, images = await self._extract_one(
+                    client, domain, article_id, url, robots
+                )
             except Exception as exc:  # never let one page break the run
                 logger.warning("extraction of %s failed: %s", url, exc)
                 result = ArticleExtractResult(
                     article_id=article_id, url=url, status="failed", reason=_describe(exc)
                 )
-            self._save(result, text)
+            self._save(result, text, images)
             results.append(result)
         return results
 
@@ -174,12 +177,39 @@ class Extractor:
         article_id: int,
         url: str,
         robots: dict[str, RobotFileParser | None],
-    ) -> tuple[ArticleExtractResult, str | None]:
+    ) -> tuple[ArticleExtractResult, str | None, PageImages | None]:
+        images = None
+
         def result(status: str, reason: str | None = None, words: int = 0):
             item = ArticleExtractResult(
                 article_id=article_id, url=url, status=status, word_count=words, reason=reason
             )
-            return item, None
+            return item, None, images
+
+        html = await self._fetch_allowed(client, domain, url, robots, article_id)
+        if isinstance(html, ArticleExtractResult):
+            return html, None, None
+        images = page_images(html, url)
+        text = await asyncio.to_thread(extract_text, html, url)
+        words = len(text.split())
+        if words < self.min_words:
+            return result("failed", f"extracted {words} words (< {self.min_words})", words)
+        return result("ok", words=words)[0], text, images
+
+    async def _fetch_allowed(
+        self,
+        client: httpx.AsyncClient,
+        domain: str,
+        url: str,
+        robots: dict[str, RobotFileParser | None],
+        article_id: int = 0,
+    ) -> bytes | ArticleExtractResult:
+        """The page's HTML, or why not (robots.txt, HTTP error, not HTML...)."""
+
+        def result(status: str, reason: str) -> ArticleExtractResult:
+            return ArticleExtractResult(
+                article_id=article_id, url=url, status=status, reason=reason
+            )
 
         parts = urlsplit(url)
         if parts.scheme not in ("http", "https") or not parts.hostname:
@@ -192,19 +222,21 @@ class Extractor:
             return result("skipped", "robots.txt unavailable")
         if not parser.can_fetch(self.user_agent, url):
             return result("skipped", "disallowed by robots.txt")
-
         try:
-            html = await self._get(client, domain, url)
+            return await self._get(client, domain, url)
         except _Rejected as exc:
             return result("failed", str(exc))
         except httpx.HTTPError as exc:
             return result("failed", _describe(exc))
 
-        text = await asyncio.to_thread(extract_text, html, url)
-        words = len(text.split())
-        if words < self.min_words:
-            return result("failed", f"extracted {words} words (< {self.min_words})", words)
-        return result("ok", words=words)[0], text
+    async def page_images(self, url: str) -> PageImages | None:
+        """Fetch one page (robots.txt and the per-domain delay apply) just for its images:
+        the image backfill for articles extracted before image support. None on failure."""
+        async with self._client() as client:
+            html = await self._fetch_allowed(client, domain_of(url), url, {})
+        if isinstance(html, ArticleExtractResult):
+            return None
+        return page_images(html, url)
 
     async def _wait_turn(self, domain: str) -> None:
         last = self._last_request.get(domain)
@@ -252,7 +284,16 @@ class Extractor:
         parser.parse(body.decode("utf-8", errors="replace").splitlines())
         return parser
 
-    def _save(self, result: ArticleExtractResult, text: str | None) -> None:
+    def _save(
+        self, result: ArticleExtractResult, text: str | None, images: PageImages | None = None
+    ) -> None:
+        values = {}
+        if images is not None:
+            values = {
+                "page_image_url": images.image,
+                "icon_url": images.icon,
+                "page_scanned_at": self.now(),
+            }
         with self.session_factory() as session:
             session.execute(
                 update(Article)
@@ -262,6 +303,7 @@ class Extractor:
                     text_status=result.status,
                     text_fetched_at=self.now(),
                     word_count=result.word_count or None,
+                    **values,
                 )
             )
             session.commit()

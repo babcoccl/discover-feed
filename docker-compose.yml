@@ -14,6 +14,8 @@ services:
       DISCOVER_CONFIG_PATH: ${DISCOVER_CONFIG_PATH:-/app/config/profiles.example.yaml}
       DISCOVER_LOG_LEVEL: ${DISCOVER_LOG_LEVEL:-info}
       DISCOVER_CONTACT_EMAIL: ${DISCOVER_CONTACT_EMAIL:-}
+      # Validated card images, resized to WebP (images.max_mb LRU cap), next to the DB.
+      DISCOVER_IMAGES_DIR: /data/images
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-}
       LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:-}

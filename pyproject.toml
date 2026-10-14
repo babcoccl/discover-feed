@@ -24,6 +24,7 @@ dependencies = [
     "trafilatura>=2.0",
     "scikit-learn>=1.5",
     "tzdata>=2024.1",
+    "pillow>=10.4",
 ]
 
 [project.optional-dependencies]

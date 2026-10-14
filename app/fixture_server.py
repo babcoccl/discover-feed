@@ -11,6 +11,7 @@ import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from app.demo_images import demo_image
 from app.demo_pages import DEMO_PATH, FIXTURE_DIR, feed_xml, page_html, robots_txt
 
 
@@ -27,7 +28,11 @@ def make_handler(fixture_dir: Path, base: str) -> type[BaseHTTPRequestHandler]:
                 source_id = path.removeprefix("/feeds/").removesuffix(".xml")
                 body, ctype = feed_xml(fixture_dir, source_id, base), "application/rss+xml"
             elif path.startswith(DEMO_PATH):
-                body = page_html(fixture_dir, path.removeprefix(DEMO_PATH), banner=True)
+                body = page_html(fixture_dir, path.removeprefix(DEMO_PATH), banner=True, base=base)
+            elif path.startswith("/demo-image/"):
+                found = demo_image(path.removeprefix("/demo-image/"))
+                if found is not None:
+                    body, ctype = found
             self.send_response(200 if body is not None else 404)
             self.send_header("content-type", ctype)
             body = body if body is not None else b"not found"

@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 
 from app.config import load_config, parse_config
 from app.demo import build_demo
+from app.images.cache import image_key
 from app.main import create_app
 from app.models import Article, ProfileRecord, SourceRecord, Topic
 from app.profiles import active_sources, decode_cursor, encode_cursor, feed_page, seed_from_config
@@ -332,7 +333,8 @@ def test_profile_page_renders_tabs_cards_and_switcher(demo_client: TestClient) -
     assert 'id="profile-switcher"' in html and "Market Monitor" in html
     assert html.count("<article") == 24
     assert 'target="_blank" rel="noopener noreferrer"' in html
-    assert "https://picsum.photos/seed/ars-technica-1/800/450" in html
+    # validated feed image, served from the local WebP cache
+    assert f'src="/img/{image_key("https://picsum.photos/seed/ars-technica-1/800/450")}"' in html
     assert "Read on Hacker News" in html
     assert demo_client.get("/p/nope").status_code == 404
 

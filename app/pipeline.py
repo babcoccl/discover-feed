@@ -7,14 +7,16 @@ from datetime import timedelta
 import httpx
 from sqlalchemy.orm import sessionmaker
 
+from app import images
 from app.cluster import Clusterer, TfidfClusterer
 from app.cluster.service import ClusterRunResult, run_clustering
 from app.config import AppConfig, LLMRole, Profile, SummariesConfig
 from app.extract import Extractor, ExtractRunResult
+from app.images.service import ImageRunResult, ImageWorker
 from app.ingest import USER_AGENT
 from app.llm import LLMClient
 from app.llm.client import set_max_inflight
-from app.publish import Policy
+from app.publish import Policy, sync_story
 from app.runs import record_run
 from app.settings import Settings
 from app.summarize.service import Summarizer, summarizer_options
@@ -99,6 +101,24 @@ def summary_worker_from_settings(
     )
 
 
+def images_from_settings(
+    session_factory: sessionmaker,
+    settings: Settings,
+    config: AppConfig,
+    extractor: Extractor | None = None,
+    **kwargs,
+) -> ImageWorker:
+    images.configure(config.images, settings.no_image_style)
+    return ImageWorker(
+        session_factory,
+        config.images,
+        settings.images_dir,
+        pages=extractor.page_images if extractor is not None else None,
+        allow_hosts=[h for h in settings.images_allow_hosts.split(",") if h.strip()],
+        **kwargs,
+    )
+
+
 class Pipeline:
     def __init__(
         self,
@@ -113,6 +133,28 @@ class Pipeline:
         self.summaries = summaries
         self.alerts = None
         """An ``AlertEngine``: text rules after extraction, updates after clustering."""
+        self.images: ImageWorker | None = None
+        """Checks new articles' images after clustering (``app.images``)."""
+
+    def attach_images(self, worker: ImageWorker) -> ImageWorker:
+        worker.on_changed = self._republish
+        self.images = worker
+        return worker
+
+    def _republish(self, session, story_ids: list[int]) -> None:
+        """A member's image changed: rebuild those stories' views (no LLM call)."""
+        summarizer = self.summaries.summarizer if self.summaries is not None else None
+        policy = self.summaries.policy if self.summaries is not None else Policy()
+        for sid in story_ids:
+            sync_story(session, sid, summarizer=summarizer, policy=policy)
+
+    async def check_images(self) -> ImageRunResult | None:
+        if self.images is None:
+            return None
+        result = await self.images.run()
+        if result.status == "ok" and result.checked:
+            self._record("images", result.model_dump())
+        return result
 
     def _alert(self, hook: str, ids: list[int]) -> None:
         if self.alerts is None or not ids:
@@ -169,6 +211,7 @@ class Pipeline:
     async def run(self) -> tuple[ExtractRunResult, ClusterRunResult]:
         extracted = await self.extract()
         clustered = await asyncio.to_thread(self.cluster)
+        await self.check_images()
         return extracted, clustered
 
     def run_blocking(self) -> None:

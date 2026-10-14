@@ -1,13 +1,9 @@
 {#- Articles view: only articles of published stories; the card opens the story page. -#}
 {%- set source_name = names.get(article.source_id, article.source_id) -%}
+{%- from "_media.html" import media -%}
 {%- set href = "/story/" ~ article.story_id ~ "?p=" ~ profile.slug -%}
 <article class="flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm transition hover:shadow-md dark:border-slate-800 dark:bg-slate-900">
-  <a href="{{ href }}" tabindex="-1" aria-hidden="true"
-     class="relative block aspect-video overflow-hidden bg-gradient-to-br {{ article.source_id | placeholder_gradient }}">
-    <span class="absolute inset-0 flex items-center justify-center px-4 text-center text-lg font-semibold text-slate-700/60 dark:text-slate-200/50">{{ source_name }}</span>
-    {% if article.image_url %}<img src="{{ article.image_url }}" alt="" loading="lazy" referrerpolicy="no-referrer"
-         class="absolute inset-0 h-full w-full object-cover" onerror="this.remove()">{% endif %}
-  </a>
+  {% call media(href, article | article_image, None, source_name, article.source_id ~ "-" ~ article.id, no_image_style) %}{% endcall %}
   <div class="flex flex-1 flex-col p-4">
     <div class="mb-1 flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
       <span class="truncate font-medium text-slate-700 dark:text-slate-300">{{ source_name }}</span>

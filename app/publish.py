@@ -19,9 +19,11 @@ from datetime import datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from app import images
 from app import profiles as repo
 from app.config import ReportMode, SummariesConfig
 from app.events import record
+from app.images.select import story_image
 from app.labels import publisher_of, via_of
 from app.lifecycle import PRE_CLUSTER, ensure_stories
 from app.models import (
@@ -242,12 +244,15 @@ def build_doc(
         ]
     rows = [r for r in (a.brief_row, a.report_row) if r is not None]
     generated = max((r.created_at for r in rows), default=None)
+    image, logo = story_image(session, item.members, item.representative.id, images.config())
     return {
         "schema_version": SCHEMA_VERSION,
         "story_id": story_id,
         "title": item.title,
         "representative_id": item.representative.id,
-        "image_url": item.image_url,
+        "image_url": image["url"],
+        "image": image,
+        "logo": logo,
         "first_seen_at": _iso(item.first_seen_at),
         "last_updated_at": _iso(item.last_updated_at),
         "article_count": len(item.members),
@@ -304,6 +309,7 @@ def sync_story(
         story.brief_ready_at = None
     view_state, publishable = decide(story, a, policy, now)
     doc = build_doc(session, story_id, item, names, a, fallback=view_state == "brief_fallback")
+    story.image_source = doc["image"]["source"]
     latest = session.scalar(
         select(StoryView)
         .where(StoryView.story_id == story_id)
