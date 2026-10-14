@@ -29,6 +29,7 @@ from app.pipeline import (
     Pipeline,
     clusterer_from_settings,
     extractor_from_settings,
+    images_from_settings,
     summarize_profile,
     summarizer_role,
     summary_worker_from_settings,
@@ -39,6 +40,7 @@ from app.scheduler import (
     create_scheduler,
     schedule_alerts,
     schedule_chat,
+    schedule_image_backfill,
     schedule_pipeline,
     schedule_summaries,
     sync_ingestion_jobs,
@@ -165,6 +167,14 @@ def create_app(
             ),
         )
         app.state.summaries = app.state.pipeline.summaries
+        app.state.pipeline.attach_images(
+            images_from_settings(
+                app.state.session_factory,
+                settings,
+                app.state.config,
+                app.state.pipeline.extractor,
+            )
+        )
         app.state.alert_sender = AlertSender(app.state.session_factory, app.state.config)
         app.state.alerts = AlertEngine(
             app.state.session_factory,
@@ -206,6 +216,11 @@ def create_app(
                 scheduler,
                 app.state.pipeline,
                 interval_seconds=settings.pipeline_interval_seconds,
+            )
+            schedule_image_backfill(
+                scheduler,
+                app.state.pipeline.images,
+                interval_minutes=app.state.config.images.backfill_interval_minutes,
             )
             if app.state.summaries.enabled:
                 schedule_summaries(

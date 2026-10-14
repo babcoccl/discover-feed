@@ -525,8 +525,49 @@ class Profile(_Model):
         return self
 
 
+class NoImageStyle(StrEnum):
+    LOGO = "logo"
+    """Publisher icon on a tint derived from it, with the publisher name."""
+    TEXT_ONLY = "text_only"
+    """Compact card without an image area."""
+    GRADIENT = "gradient"
+    """Per-publisher gradient with the publisher name (the pre-image-support look)."""
+
+
+class ImagesConfig(_Model):
+    """Top-level ``images:`` block: card images (``app/images``)."""
+
+    cache: bool = Field(
+        default=True,
+        description="Download validated images once, serve resized WebP from /img/{key}.",
+    )
+    max_mb: float = Field(default=500, gt=0, description="LRU cap of the image cache.")
+    no_image_style: NoImageStyle = NoImageStyle.LOGO
+    backfill_days: float = Field(
+        default=7, ge=0, description="Backfill images of stories published this recently."
+    )
+    backfill_per_run: int = Field(default=20, ge=1, description="Articles per backfill run.")
+    backfill_interval_minutes: float = Field(default=10, gt=0)
+    per_run: int = Field(default=50, ge=1, description="New articles checked per pipeline run.")
+    timeout_seconds: float = Field(default=10, gt=0)
+    max_bytes: int = Field(default=3 * 1024 * 1024, gt=0)
+    min_width: int = Field(default=320, ge=1)
+    min_height: int = Field(default=180, ge=1)
+    tiny_feed_width: int = Field(
+        default=640, ge=1, description="Prefer the page image over a feed image narrower."
+    )
+    cache_width: int = Field(default=640, ge=16)
+    generic_threshold: int = Field(
+        default=3, ge=2, description="Same image URL on this many articles of one domain."
+    )
+    max_pixels: int = Field(
+        default=40_000_000, ge=1, description="Decompression-bomb guard (Pillow)."
+    )
+
+
 class AppConfig(_Model):
     profiles: list[Profile] = Field(default_factory=list)
+    images: ImagesConfig = Field(default_factory=ImagesConfig)
 
     @model_validator(mode="after")
     def _unique_ids(self) -> "AppConfig":

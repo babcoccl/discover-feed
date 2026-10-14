@@ -33,11 +33,13 @@ def feed_xml(fixture_dir: Path, source_id: str, base: str) -> bytes | None:
     return path.read_text(encoding="utf-8").replace(PLACEHOLDER, base.rstrip("/")).encode()
 
 
-def page_html(fixture_dir: Path, article_id: str, *, banner: bool = False) -> bytes | None:
+def page_html(
+    fixture_dir: Path, article_id: str, *, banner: bool = False, base: str = ""
+) -> bytes | None:
     path = fixture_dir / "pages" / f"{article_id}.html"
     if not _ID.match(article_id) or not path.exists():
         return None
-    html = path.read_text(encoding="utf-8")
+    html = path.read_text(encoding="utf-8").replace(PLACEHOLDER, base.rstrip("/"))
     if banner:
         html = html.replace("<body>", f"<body>\n{BANNER}", 1)
     return html.encode()

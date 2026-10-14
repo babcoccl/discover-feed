@@ -22,8 +22,10 @@ make demo             # throwaway demo on :8000 (see below)
 `httpx.MockTransport`, no network), extracts text from `tests/fixtures/demo/pages/` and clusters
 stories (4 multi-source stories), then runs the app with the scheduler off. It never touches
 `./data` or the Docker volume. Open http://localhost:8000/ (redirects to the first profile).
-Override with `make demo PORT=8001` / `DEMO_HOST=0.0.0.0`. Card images point at picsum.photos;
-without internet the cards fall back to gradient placeholders.
+Override with `make demo PORT=8001` / `DEMO_HOST=0.0.0.0`. Card images are generated locally
+(`app/demo_images.py`, served by the mock transport and `/demo-image/...`), validated and cached
+under `.demo/demo-images/`; no internet needed. `python -m app.demo --no-image-style text_only`
+(or `?no_image=logo|text_only|gradient` on any feed page) previews the no-image fallbacks.
 
 Without make (Windows): `demo.cmd` (double-click or `demo.cmd --port 8001 --no-open`) finds
 Python 3.12+ via `py`/`python` and runs `scripts/demo.py`, a stdlib-only launcher that creates
@@ -209,3 +211,26 @@ update it when fixtures or defaults change. README "Tuning clustering" has the f
 - Demo: `python scripts/demo_api_sources.py` (fake Guardian/NewsData items join stories).
   Catalog: `python scripts/verify_catalog.py --out catalog.md` (network) before editing
   `config/source_catalog.yaml`.
+
+## Card images
+
+- Code: `app/images/` — `meta.py` (og/twitter/JSON-LD/icon parsing, called by
+  `Extractor._fetch_one` on the HTML it already has), `safety.py` (`Guard`: public IPs only,
+  re-checked per redirect and at connect time via `_GuardedBackend`), `fetch.py` (`Rejected`
+  reasons: `too_large`, `not_image`, `svg`, `ico`, `tracking_pixel`, `too_small`,
+  `decompression_bomb`, `private_address`, `bad_scheme`, `too_many_redirects`, `http_NNN`),
+  `cache.py` (`image_key` = hash of the URL, WebP <= 640 px, two-level dirs), `select.py`
+  (`story_image`, generic = same URL on 3+ articles of a domain), `service.py` (`ImageWorker`:
+  `run` after clustering, `backfill` job `images-backfill`, `evict` LRU, `image_stats`).
+- Config: top-level `images:` in profiles.yaml (`ImagesConfig`); env `DISCOVER_IMAGES_DIR`
+  (`/data/images` in compose), `DISCOVER_NO_IMAGE_STYLE`, `DISCOVER_IMAGES_ALLOW_HOSTS`
+  (the e2e override sets `fixtures`, which is on a private compose network).
+- Templates: `_media.html` macro (photo / `data-fallback="logo|gradient"` / `data-compact`)
+  used by `_story_card.html`, `_card.html`; story page; Pipeline panel `data-image-stats`.
+- Tests: `tests/test_images.py`. Build workers with `transport=httpx.MockTransport(...)`,
+  `resolver=lambda host: ["93.184.216.34"]` (any public IP) and an instant `sleep`; never the
+  system resolver. Freeze `now` per step when testing LRU order. Fallback styles: the logo
+  fallback only shows on `/p/market-monitor` in the demo. Adding a scheduler job changes the
+  job-count assertion in `tests/test_api.py`. New API fields: `make openapi`.
+- Demo pages use `{{demo_base}}` for image URLs (substituted by `app/demo_pages.py` and
+  `app/fixture_server.py`).

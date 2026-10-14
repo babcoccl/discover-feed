@@ -19,6 +19,7 @@ from fastapi.responses import RedirectResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session, sessionmaker
 
+from app import images
 from app import profiles as repo
 from app import story_views as views
 from app.api import BriefOut, ReportOut, _brief_out, _report_out
@@ -140,6 +141,35 @@ class StorySourceV1(BaseModel):
     )
 
 
+class ImageOut(BaseModel):
+    """The story's chosen card image (validated; see ``source``)."""
+
+    url: str | None = Field(description="Original image URL (null: no usable image).")
+    proxy_url: str | None = Field(
+        default=None, description="This app's cached, resized WebP copy (`/img/{key}`)."
+    )
+    source: Literal["feed", "page", "member", "logo", "none"] = Field(
+        description="feed/page: the representative article's feed or page image; member: "
+        "another member's; logo/none: no image (logo: a publisher icon is available)."
+    )
+    width: int | None = None
+    height: int | None = None
+
+
+def _image_out(story: views.PublishedStory, base: str) -> ImageOut | None:
+    image = story.image
+    if not image:
+        return None
+    key = image.get("key") if images.config().cache else None
+    return ImageOut(
+        url=image.get("url"),
+        proxy_url=f"{base}/img/{key}" if key and image.get("url") else None,
+        source=image.get("source") or ("feed" if image.get("url") else "none"),
+        width=image.get("width"),
+        height=image.get("height"),
+    )
+
+
 class StoryCardV1(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
@@ -174,6 +204,7 @@ class StoryCardV1(BaseModel):
     first_seen_at: datetime
     last_updated_at: datetime = Field(description="Newest member article.")
     image_url: str | None
+    image: ImageOut | None = None
     snippet: str = Field(description="The feed's own summary (when `brief` is null).")
     brief: BriefOut | None
     source_count: int
@@ -247,6 +278,7 @@ class StoryV1(BaseModel):
     first_seen_at: datetime
     last_updated_at: datetime
     image_url: str | None
+    image: ImageOut | None = None
     snippet: str
     brief: BriefOut | None
     report: ReportOut | None = Field(description="Paragraphs only when `report_state=ready`.")
@@ -336,6 +368,7 @@ def card(story: views.PublishedStory, base: str, full: bool = False) -> StoryCar
         first_seen_at=story.first_seen_at,
         last_updated_at=story.last_updated_at,
         image_url=story.image_url,
+        image=_image_out(story, base),
         snippet=snippet(story.snippet_source),
         brief=_brief_out(story.brief),
         source_count=story.source_count,
@@ -457,6 +490,7 @@ def get_story(
         first_seen_at=story.first_seen_at,
         last_updated_at=story.last_updated_at,
         image_url=story.image_url,
+        image=_image_out(story, _base(request)),
         snippet=snippet(story.snippet_source),
         brief=_brief_out(story.brief),
         report=_report_out(report),

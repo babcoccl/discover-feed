@@ -16,6 +16,7 @@ import argparse
 import asyncio
 import os
 import re
+import shutil
 import threading
 import webbrowser
 from collections.abc import Sequence
@@ -34,14 +35,17 @@ from app.alerts.sink import FakeSink
 from app.cluster.service import ClusterRunResult
 from app.config import Source, load_config
 from app.db import init_db, make_engine, make_session_factory
+from app.demo_images import demo_image, picsum_image
 from app.demo_pages import DEMO_PATH, FIXTURE_DIR, PLACEHOLDER, feed_xml, page_html, robots_txt
 from app.extract import ExtractRunResult
+from app.images.service import ImageRunResult
 from app.ingest import Ingestor, SourceRunResult
 from app.models import Notification, utcnow
 from app.pipeline import (
     Pipeline,
     clusterer_from_settings,
     extractor_from_settings,
+    images_from_settings,
     summary_worker_from_settings,
 )
 from app.profiles import active_sources, seed_from_config
@@ -83,7 +87,11 @@ def page_transport(fixture_dir: Path) -> httpx.MockTransport:
         if path == "/robots.txt":
             return httpx.Response(200, text=robots, headers={"content-type": "text/plain"})
         body = (
-            page_html(fixture_dir, path.removeprefix(DEMO_PATH))
+            page_html(
+                fixture_dir,
+                path.removeprefix(DEMO_PATH),
+                base=f"{request.url.scheme}://{request.url.netloc.decode()}",
+            )
             if path.startswith(DEMO_PATH)
             else None
         )
@@ -92,6 +100,30 @@ def page_transport(fixture_dir: Path) -> httpx.MockTransport:
         return httpx.Response(
             200, content=body, headers={"content-type": "text/html; charset=utf-8"}
         )
+
+    return httpx.MockTransport(handler)
+
+
+DEMO_PUBLIC_IP = "93.184.216.34"
+"""What every demo host "resolves" to for the image SSRF guard (the transport is local)."""
+
+
+def image_transport() -> httpx.MockTransport:
+    """Generated images for the fixture feeds (``picsum.photos/seed/...``) and demo pages
+    (``/demo-image/...``); domain icons (``/favicon.ico``) are 404, so pages without a
+    declared icon show the gradient fallback."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.url.host == "picsum.photos":
+            body = picsum_image(path)
+            if body is not None:
+                return httpx.Response(200, content=body, headers={"content-type": "image/jpeg"})
+        elif path.startswith("/demo-image/"):
+            found = demo_image(path.removeprefix("/demo-image/"))
+            if found is not None:
+                return httpx.Response(200, content=found[0], headers={"content-type": found[1]})
+        return httpx.Response(404, text="not found")
 
     return httpx.MockTransport(handler)
 
@@ -175,7 +207,9 @@ class DemoBuild:
         llm_transport: httpx.AsyncBaseTransport | None = None,
         sink: FakeSink | None = None,
         alerts: dict | None = None,
+        images: ImageRunResult | None = None,
     ) -> None:
+        self.images = images
         self.settings = settings
         self.ingested = ingested
         self.extracted = extracted
@@ -204,6 +238,7 @@ def build_demo(
     fake_token_delay: float = 0.03,
     demo_base: str = DEMO_BASE,
     sink: FakeSink | None = None,
+    no_image_style: str | None = None,
 ) -> DemoBuild:
     """``summarize_limit``: summarize only the newest N stories now (default: all); the rest
     stay queued for "Summarize now" in Settings > Pipeline. Every story is generated and
@@ -222,11 +257,15 @@ def build_demo(
                 f"Cannot replace {db_path}: is another demo still running? Stop it and retry."
             ) from exc
 
+    images_dir = db_path.parent / f"{db_path.stem}-images"
+    shutil.rmtree(images_dir, ignore_errors=True)
     settings = Settings(
         config_path=config_path,
         database_url=f"sqlite:///{db_path.as_posix()}",
         scheduler_enabled=False,
         report_mode=report_mode,
+        images_dir=images_dir,
+        no_image_style=no_image_style,
     )
     engine = make_engine(settings.database_url)
     try:
@@ -268,8 +307,21 @@ def build_demo(
             ),
             clusterer,
         )
+        pipeline.attach_images(
+            images_from_settings(
+                session_factory,
+                settings,
+                # every fixture article in one run
+                config.model_copy(
+                    update={"images": config.images.model_copy(update={"per_run": 100_000})}
+                ),
+                transport=image_transport(),
+                resolver=lambda host: [DEMO_PUBLIC_IP],
+            )
+        )
         pipeline.alerts = alerts
         extracted, clustered = asyncio.run(pipeline.run())
+        images_result = pipeline.images.last_run
         alert_counts = None
         if sender is not None:
             for _ in range(20):  # retries without backoff, so the failing channel gives up
@@ -297,7 +349,15 @@ def build_demo(
     finally:
         engine.dispose()
     return DemoBuild(
-        settings, results, extracted, clustered, summarized, transport, sink, alert_counts
+        settings,
+        results,
+        extracted,
+        clustered,
+        summarized,
+        transport,
+        sink,
+        alert_counts,
+        images_result,
     )
 
 
@@ -355,6 +415,12 @@ def main() -> None:
         default=0,
         help="seconds the fake LLM takes per answer while the demo runs (default 0)",
     )
+    parser.add_argument(
+        "--no-image-style",
+        choices=["logo", "text_only", "gradient"],
+        help="cards without an image: publisher logo (default), compact text-only, or "
+        "gradient (overrides images.no_image_style)",
+    )
     args = parser.parse_args()
     if args.real_llm:
         if not os.environ.get("LOCAL_LLM_BASE_URL"):
@@ -375,6 +441,7 @@ def main() -> None:
         fake_delay=args.fake_llm_delay,
         fake_chat_mode=args.fake_chat_mode,
         demo_base=f"http://localhost:{args.port}",
+        no_image_style=args.no_image_style,
     )
     settings = build.settings
     for r in build.ingested:
@@ -382,6 +449,8 @@ def main() -> None:
     e, c = build.extracted, build.clustered
     print(f"  text extraction: {e.ok} ok, {e.failed} failed, {e.skipped} skipped")
     print(f"  stories: {c.stories} ({c.multi_source_stories} covered by 2+ sources)")
+    if (im := build.images) is not None:
+        print(f"  images: {im.ok} valid, {im.rejected} rejected ({im.checked} articles)")
     if (sm := build.summarized) is not None:
         llm = "real LLM" if args.real_llm else "fake LLM"
         print(

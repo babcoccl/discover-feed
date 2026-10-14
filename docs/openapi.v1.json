@@ -1042,6 +1042,75 @@
         "title": "HealthV1",
         "type": "object"
       },
+      "ImageOut": {
+        "description": "The story's chosen card image (validated; see ``source``).",
+        "properties": {
+          "height": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height"
+          },
+          "proxy_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "This app's cached, resized WebP copy (`/img/{key}`).",
+            "title": "Proxy Url"
+          },
+          "source": {
+            "description": "feed/page: the representative article's feed or page image; member: another member's; logo/none: no image (logo: a publisher icon is available).",
+            "enum": [
+              "feed",
+              "page",
+              "member",
+              "logo",
+              "none"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Original image URL (null: no usable image).",
+            "title": "Url"
+          },
+          "width": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Width"
+          }
+        },
+        "required": [
+          "url",
+          "source"
+        ],
+        "title": "ImageOut",
+        "type": "object"
+      },
       "MessageV1": {
         "properties": {
           "citations": {
@@ -2311,6 +2380,16 @@
             "title": "Id",
             "type": "integer"
           },
+          "image": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImageOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "image_url": {
             "anyOf": [
               {
@@ -2550,6 +2629,16 @@
           "id": {
             "title": "Id",
             "type": "integer"
+          },
+          "image": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImageOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "image_url": {
             "anyOf": [

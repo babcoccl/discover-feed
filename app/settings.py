@@ -49,6 +49,14 @@ class Settings(BaseSettings):
     extract_min_words: int = 80
     extract_domain_delay_seconds: float = 2.0
 
+    # Card images (app/images); behaviour is the YAML `images:` block
+    images_dir: Path = Path("data/images")
+    """Image cache directory (Docker: ``/data/images``)."""
+    no_image_style: Literal["logo", "text_only", "gradient"] | None = None
+    """Overrides ``images.no_image_style`` (the demo's ``--no-image-style``)."""
+    images_allow_hosts: str = ""
+    """Comma-separated hosts exempt from the public-IP check (Docker e2e fixture server)."""
+
     # Story clustering (app/cluster); see README "Tuning clustering"
     cluster_threshold: float = 0.45
     cluster_window_hours: float = 72

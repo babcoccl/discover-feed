@@ -6,6 +6,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 from app.config import Source
+from app.images.service import ImageWorker
 from app.ingest import Ingestor
 from app.pipeline import Pipeline
 from app.summarize.worker import SummaryWorker
@@ -78,6 +79,27 @@ def schedule_pipeline(
         trigger=IntervalTrigger(seconds=interval_seconds),
         id="pipeline",
         name="Extract text and cluster stories",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+        next_run_time=datetime.now(UTC) + timedelta(seconds=first_run_delay_seconds),
+    )
+
+
+def schedule_image_backfill(
+    scheduler: BackgroundScheduler,
+    worker: ImageWorker,
+    *,
+    interval_minutes: float = 10,
+    first_run_delay_seconds: int = 30,
+) -> None:
+    """Images for recently published stories that predate image support (or whose check
+    was interrupted): a few articles per run, so it is rate limited and resumable."""
+    scheduler.add_job(
+        worker.backfill_blocking,
+        trigger=IntervalTrigger(seconds=interval_minutes * 60),
+        id="images-backfill",
+        name="Backfill story images",
         replace_existing=True,
         coalesce=True,
         max_instances=1,

@@ -5,7 +5,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     DISCOVER_DATABASE_URL=sqlite:////data/discover.db \
-    DISCOVER_CONFIG_PATH=/app/config/profiles.yaml
+    DISCOVER_CONFIG_PATH=/app/config/profiles.yaml \
+    DISCOVER_IMAGES_DIR=/data/images
 
 WORKDIR /app
 

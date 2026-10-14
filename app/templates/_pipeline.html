@@ -16,6 +16,7 @@
 {%- set ingest = (runs.get("ingest").last_result if runs.get("ingest") else {}) or {} -%}
 {%- set extract = (runs.get("extract").last_result if runs.get("extract") else {}) or {} -%}
 {%- set cluster = (runs.get("cluster").last_result if runs.get("cluster") else {}) or {} -%}
+{%- set image_run = (runs.get("images").last_result if runs.get("images") else {}) or {} -%}
 <dl class="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
   {% for status in ("ok", "pending", "failed", "skipped") %}
   <div class="rounded-xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-800 dark:bg-slate-900">
@@ -45,6 +46,11 @@
         <td class="whitespace-nowrap px-4 py-2">{{ run_cell("cluster") }}</td>
         <td class="px-4 py-2 text-slate-600 dark:text-slate-400">{% if cluster %}{{ cluster.processed }} article(s) assigned{% if cluster.rebuild %} (rebuild){% endif %}; {{ cluster.stories }} stories, {{ cluster.multi_source_stories }} with 2+ sources{% endif %}</td>
       </tr>
+      <tr>
+        <td class="px-4 py-2 font-medium">Images</td>
+        <td class="whitespace-nowrap px-4 py-2">{{ run_cell("images") }}</td>
+        <td class="px-4 py-2 text-slate-600 dark:text-slate-400">{% if image_run %}{{ image_run.checked }} article(s) checked: {{ image_run.ok }} valid, {{ image_run.rejected }} rejected image(s){% endif %}{% if image_backfill %}; backfill: {{ image_backfill.checked }} checked, {{ image_backfill.remaining }} left{% endif %}</td>
+      </tr>
       {%- set sm = summarizer %}
       <tr data-summarizer>
         <td class="px-4 py-2 font-medium">Briefs &amp; reports</td>
@@ -63,6 +69,32 @@
     </tbody>
   </table>
 </div>
+{% if image_stats %}
+{%- set ims = image_stats -%}
+<section class="mt-4 rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900" aria-labelledby="images-heading" data-image-stats>
+  <h3 id="images-heading" class="mb-3 text-sm font-semibold">Card images</h3>
+  <dl class="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+    <div><dt class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Missing (published)</dt><dd class="text-xl font-semibold" data-images-missing>{{ ims.missing }}</dd></div>
+    <div><dt class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Not yet checked</dt><dd class="text-xl font-semibold">{{ ims.unchecked }}</dd></div>
+    <div><dt class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Cache</dt><dd class="text-xl font-semibold" data-images-cache>{{ ims.cache_bytes | megabytes }}</dd><dd class="text-xs text-slate-500 dark:text-slate-400">{{ ims.cached_files }} file(s){% if ims.max_bytes %} of {{ ims.max_bytes | megabytes }}{% endif %}</dd></div>
+    <div><dt class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Generic site images</dt><dd class="text-xl font-semibold">{{ ims.generic }}</dd></div>
+  </dl>
+  <div class="grid gap-4 sm:grid-cols-2">
+    <div>
+      <h4 class="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Published stories by image source</h4>
+      <ul class="space-y-0.5 text-sm" data-images-by-source>
+        {% for source in ("feed", "page", "member", "logo", "none") %}<li class="flex justify-between gap-4"><span>{{ source }}</span><span class="font-medium tabular-nums">{{ ims.stories.get(source, 0) }}</span></li>{% endfor %}
+      </ul>
+    </div>
+    <div>
+      <h4 class="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Rejected or failed images by reason</h4>
+      {% if ims.failures %}<ul class="space-y-0.5 text-sm" data-images-failures>
+        {% for reason, n in ims.failures.items() %}<li class="flex justify-between gap-4"><span>{{ reason or "unknown" }}</span><span class="font-medium tabular-nums">{{ n }}</span></li>{% endfor %}
+      </ul>{% else %}<p class="text-sm text-slate-500 dark:text-slate-400">None.</p>{% endif %}
+    </div>
+  </div>
+</section>
+{% endif %}
 {% if summarizer and summarizer.running and profile %}<div hidden hx-get="/p/{{ profile.slug }}/settings/pipeline" hx-trigger="load delay:2s" hx-target="#pipeline"></div>{% endif %}
 {%- set base = "/p/" ~ profile.slug ~ "/settings/pipeline" if profile else "" -%}
 {% if blockers %}

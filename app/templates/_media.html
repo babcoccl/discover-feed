@@ -1,0 +1,25 @@
+{#- Card image area. ``src``: the image (cached /img/... or original URL); else the
+    no-image fallback by ``style`` (images.no_image_style): ``logo`` = publisher icon on a tint
+    derived from it plus the name; ``gradient`` (or a logo-less publisher) = a gradient
+    picked per card, not per source; ``text_only`` renders nothing (the card is compact).
+    ``caller()`` draws the badges on top. -#}
+{%- macro media(href, src, logo, name, seed, style) -%}
+{%- if src or style != "text_only" -%}
+<a href="{{ href }}" tabindex="-1" aria-hidden="true"
+   class="relative block aspect-video overflow-hidden {% if not src and style == 'logo' and logo %}bg-[var(--tint)] dark:bg-[var(--tint-dark)]{% else %}bg-gradient-to-br {{ seed | placeholder_gradient }}{% endif %}"
+   {%- if not src and style == "logo" and logo %} style="--tint: {{ logo.tint or '#e2e8f0' }}; --tint-dark: {{ logo.tint_dark or '#1e293b' }}" data-fallback="logo"{% elif not src %} data-fallback="gradient"{% else %} data-image{% endif %}>
+  {%- if not src and style == "logo" and logo %}
+  <span class="absolute inset-0 flex flex-col items-center justify-center gap-2 px-4 text-center">
+    <img src="{{ logo | image_src }}" alt="" loading="lazy" referrerpolicy="no-referrer" width="56" height="56"
+         class="h-14 w-14 rounded-xl object-contain shadow-sm" onerror="this.remove()" data-logo>
+    <span class="text-base font-semibold text-slate-800 dark:text-slate-100">{{ name }}</span>
+  </span>
+  {%- else %}
+  <span class="absolute inset-0 flex items-center justify-center px-4 text-center text-lg font-semibold text-slate-700/60 dark:text-slate-200/50">{{ name }}</span>
+  {%- endif %}
+  {% if src %}<img src="{{ src }}" alt="" loading="lazy" referrerpolicy="no-referrer"
+       class="absolute inset-0 h-full w-full object-cover" onerror="this.remove()">{% endif %}
+  {{ caller() }}
+</a>
+{%- endif -%}
+{%- endmacro -%}
