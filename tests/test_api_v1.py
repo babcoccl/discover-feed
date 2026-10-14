@@ -137,7 +137,7 @@ def test_openapi_snapshot_is_current(v1) -> None:
     schema = v1.get("/api/v1/openapi.json").json()
     assert all(p.startswith("/api/v1/") for p in schema["paths"])
     for path, ops in schema["paths"].items():
-        if path.endswith(("/stream", ".atom")) or "get" not in ops:
+        if path.endswith(("/stream", ".atom", ".opml")) or "get" not in ops:
             continue
         response = ops["get"]["responses"]["200"]["content"]["application/json"]["schema"]
         ref = response.get("$ref") or response["items"]["$ref"]

@@ -50,17 +50,7 @@ def seed_from_config(session: Session, config: AppConfig) -> bool:
         record = ProfileRecord(slug=profile.id, name=profile.name, description=profile.description)
         for source in profile.sources:
             if source.id not in sources:
-                sources[source.id] = SourceRecord(
-                    id=source.id,
-                    name=source.name,
-                    type=source.type.value,
-                    url=str(source.url),
-                    enabled=source.enabled,
-                    refresh_minutes=source.refresh_minutes,
-                    tags=list(source.tags),
-                    aggregator=source.aggregator,
-                    first_party=source.first_party,
-                )
+                sources[source.id] = SourceRecord.from_config(source)
             record.sources.append(sources[source.id])
         ids_by_name = {s.name: s.id for s in profile.sources}
         for position, topic in enumerate(profile.topics):
@@ -96,6 +86,7 @@ def active_sources(session: Session) -> list[Source]:
         select(SourceRecord)
         .where(
             SourceRecord.enabled.is_(True),
+            SourceRecord.removed_at.is_(None),
             SourceRecord.id.in_(select(profile_sources.c.source_id)),
         )
         .order_by(SourceRecord.id)

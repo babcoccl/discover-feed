@@ -1,0 +1,68 @@
+{% from "_source_badges.html" import state_badge, when, quota %}
+{% set btn = "rounded-full border border-slate-300 bg-white px-3 py-1 text-sm font-medium shadow-sm hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800" %}
+{% if source_message %}<p class="mb-4 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300" role="status" data-source-message>{{ source_message }}</p>{% endif %}
+{% for s in auto_disabled %}
+<div class="mb-3 flex flex-wrap items-center gap-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-200" role="alert" data-auto-disabled="{{ s.id }}">
+  <p class="min-w-0 flex-1"><span class="font-semibold">{{ s.name }} was disabled automatically</span> {{ s.auto_disabled_at | reltime }}: <span class="break-words">{{ s.disabled_reason }}</span></p>
+  <form method="post" action="/p/{{ profile.slug }}/settings/sources/{{ s.id }}/enable"><button class="rounded-full bg-amber-600 px-3 py-1 text-sm font-semibold text-white hover:bg-amber-700">Re-enable</button></form>
+</div>
+{% endfor %}
+<div class="mb-3 flex flex-wrap gap-2">
+  <a href="/p/{{ profile.slug }}/settings/sources/new" class="rounded-full bg-sky-600 px-3 py-1 text-sm font-semibold text-white shadow-sm hover:bg-sky-700">Add source</a>
+  <a href="/p/{{ profile.slug }}/settings/sources/catalog" class="{{ btn }}">Catalog</a>
+  <a href="/p/{{ profile.slug }}/settings/sources/new#opml" class="{{ btn }}">Import OPML</a>
+  <a href="/p/{{ profile.slug }}/settings/sources.opml" class="{{ btn }}">Export OPML</a>
+  <form method="post" action="/p/{{ profile.slug }}/settings/sources/sync-yaml" title="Add profiles, sources and topics from the YAML that the DB lacks. It does not delete or overwrite anything."><button class="{{ btn }}">Sync from YAML</button></form>
+</div>
+<div class="overflow-x-auto rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+  <table class="min-w-full text-left text-sm" data-source-health>
+    <thead class="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500 dark:border-slate-800 dark:text-slate-400">
+      <tr>
+        <th class="px-3 py-2 font-medium">Source</th>
+        <th class="px-3 py-2 font-medium">State</th>
+        <th class="px-3 py-2 font-medium">Last success</th>
+        <th class="px-3 py-2 font-medium">Items/day</th>
+        <th class="px-3 py-2 font-medium">Failures</th>
+        <th class="px-3 py-2 font-medium">Quota</th>
+        <th class="px-3 py-2 font-medium">Next fetch</th>
+        <th class="px-3 py-2 font-medium">Last error</th>
+        <th class="px-3 py-2 font-medium"><span class="sr-only">Actions</span></th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+      {% for h in source_health %}
+      <tr data-source="{{ h.id }}">
+        <td class="px-3 py-2">
+          <a href="/p/{{ profile.slug }}/settings/sources/{{ h.id }}" class="font-medium hover:underline">{{ h.name }}</a>
+          <div class="max-w-[16rem] truncate text-xs text-slate-500 dark:text-slate-400" title="{{ h.url }}">{{ type_labels.get(h.type, h.type) }} · {{ h.url }}</div>
+          {% if h.profiles | length > 1 %}<div class="text-xs text-slate-500 dark:text-slate-400">shared: {{ h.profiles | join(", ") }}</div>{% endif %}
+        </td>
+        <td class="px-3 py-2">{{ state_badge(h) }}</td>
+        <td class="whitespace-nowrap px-3 py-2">{{ when(h.last_success_at) }}</td>
+        <td class="px-3 py-2">{{ h.items_per_day }}</td>
+        <td class="px-3 py-2 {% if h.consecutive_failures %}font-semibold text-red-600 dark:text-red-400{% endif %}">{{ h.consecutive_failures }}</td>
+        <td class="whitespace-nowrap px-3 py-2 text-xs">{{ quota(h) }}</td>
+        <td class="whitespace-nowrap px-3 py-2">{{ when(h.next_fetch_at, "—") }}</td>
+        <td class="max-w-xs px-3 py-2 text-xs text-red-700 dark:text-red-400"><span class="line-clamp-2" title="{{ h.last_error or '' }}">{{ h.last_error or "" }}</span>{% if not h.last_error %}<span class="text-slate-400">—</span>{% endif %}</td>
+        <td class="whitespace-nowrap px-3 py-2">
+          <form method="post" action="/p/{{ profile.slug }}/settings/sources/{{ h.id }}/{{ 'disable' if h.enabled else 'enable' }}">
+            <button class="text-sm font-medium text-sky-700 hover:underline dark:text-sky-400">{{ "Disable" if h.enabled else "Enable" }}</button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="9" class="px-4 py-6 text-center text-slate-500">No sources assigned to this profile. <a class="underline" href="/p/{{ profile.slug }}/settings/sources/new">Add one</a> or pick from the <a class="underline" href="/p/{{ profile.slug }}/settings/sources/catalog">catalog</a>.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% if removed_sources %}
+<details class="mt-3 text-sm text-slate-600 dark:text-slate-400">
+  <summary class="cursor-pointer">Removed sources ({{ removed_sources | length }}) — their articles and stories are kept</summary>
+  <ul class="mt-2 space-y-1">
+    {% for s in removed_sources %}
+    <li class="flex items-center gap-3"><span>{{ s.name }}</span><form method="post" action="/p/{{ profile.slug }}/settings/sources/{{ s.id }}/restore"><button class="font-medium text-sky-700 hover:underline dark:text-sky-400">Restore</button></form></li>
+    {% endfor %}
+  </ul>
+</details>
+{% endif %}

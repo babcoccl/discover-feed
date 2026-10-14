@@ -438,6 +438,83 @@
         "title": "BriefOut",
         "type": "object"
       },
+      "CatalogEntryV1": {
+        "examples": [
+          {
+            "aggregator": false,
+            "category": "Regulators",
+            "first_party": true,
+            "id": "federal-reserve-press-releases",
+            "name": "Federal Reserve press releases",
+            "tags": [
+              "fed",
+              "rates"
+            ],
+            "type": "rss",
+            "url": "https://www.federalreserve.gov/feeds/press_all.xml"
+          }
+        ],
+        "properties": {
+          "aggregator": {
+            "title": "Aggregator",
+            "type": "boolean"
+          },
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "first_party": {
+            "title": "First Party",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tags",
+            "type": "array"
+          },
+          "type": {
+            "$ref": "#/components/schemas/SourceType"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "category",
+          "name",
+          "url",
+          "type",
+          "tags",
+          "first_party",
+          "aggregator",
+          "note"
+        ],
+        "title": "CatalogEntryV1",
+        "type": "object"
+      },
       "ChatCitationV1": {
         "properties": {
           "article_id": {
@@ -696,6 +773,51 @@
           "messages"
         ],
         "title": "ConversationV1",
+        "type": "object"
+      },
+      "DiscoverIn": {
+        "properties": {
+          "url": {
+            "description": "A site or feed URL.",
+            "examples": [
+              "https://www.theverge.com"
+            ],
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "DiscoverIn",
+        "type": "object"
+      },
+      "FeedCandidate": {
+        "properties": {
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "type": {
+            "$ref": "#/components/schemas/SourceType",
+            "default": "rss"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "FeedCandidate",
         "type": "object"
       },
       "FeedV1": {
@@ -1222,6 +1344,43 @@
         "title": "NotificationV1",
         "type": "object"
       },
+      "OpmlImportV1": {
+        "properties": {
+          "added": {
+            "description": "New source ids.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Added",
+            "type": "array"
+          },
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "shared": {
+            "description": "Existing sources now also in this profile.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Shared",
+            "type": "array"
+          },
+          "skipped": {
+            "description": "Already in the profile.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Skipped",
+            "type": "array"
+          }
+        },
+        "title": "OpmlImportV1",
+        "type": "object"
+      },
       "PreviewMatchV1": {
         "properties": {
           "article_id": {
@@ -1515,6 +1674,546 @@
         ],
         "title": "ReportOut",
         "type": "object"
+      },
+      "SourceAdminV1": {
+        "examples": [
+          {
+            "aggregator": false,
+            "api_key_env": "GUARDIAN_API_KEY",
+            "api_key_set": true,
+            "enabled": true,
+            "first_party": false,
+            "health": {
+              "consecutive_failures": 0,
+              "daily_request_budget": 200,
+              "enabled": true,
+              "id": "guardian-world",
+              "items_last_run": 20,
+              "items_per_day": 42.3,
+              "last_attempt_at": "2026-10-12T08:30:00Z",
+              "last_success_at": "2026-10-12T08:30:00Z",
+              "name": "Guardian world",
+              "next_fetch_at": "2026-10-12T09:00:00Z",
+              "profiles": [
+                "market-monitor"
+              ],
+              "reads_this_month": 0,
+              "requests_today": 12,
+              "spend_this_month_usd": 0.0,
+              "state": "ok",
+              "type": "guardian"
+            },
+            "id": "guardian-world",
+            "limits": {
+              "daily_request_budget": 200
+            },
+            "name": "Guardian world",
+            "params": {
+              "page_size": 20,
+              "section": "world"
+            },
+            "profiles": [
+              "market-monitor"
+            ],
+            "refresh_minutes": 30,
+            "tags": [
+              "world"
+            ],
+            "type": "guardian",
+            "url": "https://content.guardianapis.com/"
+          }
+        ],
+        "properties": {
+          "aggregator": {
+            "title": "Aggregator",
+            "type": "boolean"
+          },
+          "api_key_env": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Variable name only; the key is never returned.",
+            "title": "Api Key Env"
+          },
+          "api_key_set": {
+            "description": "Whether that variable is set in the environment.",
+            "title": "Api Key Set",
+            "type": "boolean"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "first_party": {
+            "title": "First Party",
+            "type": "boolean"
+          },
+          "health": {
+            "$ref": "#/components/schemas/SourceHealthV1"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "limits": {
+            "additionalProperties": true,
+            "title": "Limits",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "params": {
+            "additionalProperties": true,
+            "title": "Params",
+            "type": "object"
+          },
+          "profiles": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Profiles",
+            "type": "array"
+          },
+          "refresh_minutes": {
+            "title": "Refresh Minutes",
+            "type": "integer"
+          },
+          "removed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Removed At"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tags",
+            "type": "array"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "type",
+          "url",
+          "enabled",
+          "refresh_minutes",
+          "tags",
+          "aggregator",
+          "first_party",
+          "params",
+          "api_key_env",
+          "api_key_set",
+          "limits",
+          "removed_at",
+          "profiles",
+          "health"
+        ],
+        "title": "SourceAdminV1",
+        "type": "object"
+      },
+      "SourceHealthV1": {
+        "examples": [
+          {
+            "consecutive_failures": 0,
+            "daily_request_budget": 200,
+            "enabled": true,
+            "id": "guardian-world",
+            "items_last_run": 20,
+            "items_per_day": 42.3,
+            "last_attempt_at": "2026-10-12T08:30:00Z",
+            "last_success_at": "2026-10-12T08:30:00Z",
+            "name": "Guardian world",
+            "next_fetch_at": "2026-10-12T09:00:00Z",
+            "profiles": [
+              "market-monitor"
+            ],
+            "reads_this_month": 0,
+            "requests_today": 12,
+            "spend_this_month_usd": 0.0,
+            "state": "ok",
+            "type": "guardian"
+          }
+        ],
+        "properties": {
+          "auto_disabled_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Disabled At"
+          },
+          "consecutive_failures": {
+            "title": "Consecutive Failures",
+            "type": "integer"
+          },
+          "daily_request_budget": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daily Request Budget"
+          },
+          "disabled_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disabled Reason"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "items_last_run": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Items Last Run"
+          },
+          "items_per_day": {
+            "description": "Articles stored per day, last 7 days.",
+            "title": "Items Per Day",
+            "type": "number"
+          },
+          "last_attempt_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Attempt At"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "last_success_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Success At"
+          },
+          "monthly_budget_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monthly Budget Usd"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "next_fetch_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Fetch At"
+          },
+          "profiles": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Profiles",
+            "type": "array"
+          },
+          "reads_this_month": {
+            "description": "Paid reads (X posts) this month (UTC).",
+            "title": "Reads This Month",
+            "type": "integer"
+          },
+          "requests_today": {
+            "description": "API requests today (UTC).",
+            "title": "Requests Today",
+            "type": "integer"
+          },
+          "spend_this_month_usd": {
+            "title": "Spend This Month Usd",
+            "type": "number"
+          },
+          "state": {
+            "description": "ok, pending, failing, disabled, auto_disabled or removed.",
+            "title": "State",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "type",
+          "state",
+          "enabled",
+          "auto_disabled_at",
+          "disabled_reason",
+          "last_success_at",
+          "last_attempt_at",
+          "consecutive_failures",
+          "last_error",
+          "next_fetch_at",
+          "items_per_day",
+          "items_last_run",
+          "requests_today",
+          "daily_request_budget",
+          "reads_this_month",
+          "spend_this_month_usd",
+          "monthly_budget_usd",
+          "profiles"
+        ],
+        "title": "SourceHealthV1",
+        "type": "object"
+      },
+      "SourceIn": {
+        "additionalProperties": false,
+        "examples": [
+          {
+            "name": "Ars Technica",
+            "profiles": [
+              "personal-reader"
+            ],
+            "tags": [
+              "tech"
+            ],
+            "type": "rss",
+            "url": "https://feeds.arstechnica.com/arstechnica/index"
+          },
+          {
+            "api_key": "GUARDIAN_API_KEY",
+            "daily_request_budget": 200,
+            "name": "Guardian world",
+            "params": {
+              "page_size": 20,
+              "section": "world"
+            },
+            "profiles": [
+              "market-monitor"
+            ],
+            "type": "guardian"
+          }
+        ],
+        "properties": {
+          "aggregator": {
+            "default": false,
+            "title": "Aggregator",
+            "type": "boolean"
+          },
+          "api_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Environment variable name (`GUARDIAN_API_KEY` or `${...}`).",
+            "title": "Api Key"
+          },
+          "cost_per_read_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Per Read Usd"
+          },
+          "daily_request_budget": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daily Request Budget"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "first_party": {
+            "default": false,
+            "title": "First Party",
+            "type": "boolean"
+          },
+          "id": {
+            "default": "",
+            "description": "Defaults to a slug of the name.",
+            "title": "Id",
+            "type": "string"
+          },
+          "max_posts_per_run": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Posts Per Run"
+          },
+          "monthly_budget_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monthly Budget Usd"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "params": {
+            "additionalProperties": true,
+            "title": "Params",
+            "type": "object"
+          },
+          "profiles": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Profile slugs; on update, omit to keep the current ones.",
+            "title": "Profiles"
+          },
+          "refresh_minutes": {
+            "default": 30,
+            "title": "Refresh Minutes",
+            "type": "integer"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tags",
+            "type": "array"
+          },
+          "type": {
+            "$ref": "#/components/schemas/SourceType",
+            "default": "rss"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "SourceIn",
+        "type": "object"
+      },
+      "SourceType": {
+        "enum": [
+          "rss",
+          "atom",
+          "web",
+          "api",
+          "guardian",
+          "newsdata",
+          "x"
+        ],
+        "title": "SourceType",
+        "type": "string"
       },
       "SourceV1": {
         "properties": {
@@ -1984,6 +2683,167 @@
           "sources"
         ],
         "title": "StoryV1",
+        "type": "object"
+      },
+      "SyncResult": {
+        "properties": {
+          "profiles_added": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Profiles Added",
+            "type": "array"
+          },
+          "skipped_removed": {
+            "description": "Sources removed in the app; left removed.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Skipped Removed",
+            "type": "array"
+          },
+          "sources_added": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sources Added",
+            "type": "array"
+          },
+          "sources_linked": {
+            "description": "`profile/source` links added for existing sources.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Sources Linked",
+            "type": "array"
+          },
+          "topics_added": {
+            "description": "`profile/topic`.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Topics Added",
+            "type": "array"
+          }
+        },
+        "title": "SyncResult",
+        "type": "object"
+      },
+      "TestFetchResult": {
+        "properties": {
+          "detected_type": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SourceType"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "item_count": {
+            "title": "Item Count",
+            "type": "integer"
+          },
+          "items": {
+            "description": "The five newest items.",
+            "items": {
+              "$ref": "#/components/schemas/TestItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "latency_ms": {
+            "title": "Latency Ms",
+            "type": "integer"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "HTTP status of the (first) request.",
+            "title": "Status"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Feed title (or the API source's name).",
+            "title": "Title"
+          }
+        },
+        "required": [
+          "ok",
+          "status",
+          "latency_ms",
+          "title",
+          "item_count",
+          "items"
+        ],
+        "title": "TestFetchResult",
+        "type": "object"
+      },
+      "TestItem": {
+        "properties": {
+          "published_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published At"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "title",
+          "url",
+          "published_at"
+        ],
+        "title": "TestItem",
         "type": "object"
       },
       "TopicV1": {
@@ -3047,6 +3907,94 @@
         ]
       }
     },
+    "/api/v1/profiles/{slug}/sources.opml": {
+      "get": {
+        "operationId": "export_opml_api_v1_profiles__slug__sources_opml_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/x-opml": {}
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export a profile's feeds as OPML",
+        "tags": [
+          "v1"
+        ]
+      },
+      "post": {
+        "operationId": "import_opml_api_v1_profiles__slug__sources_opml_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "text/x-opml": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpmlImportV1"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Import feeds from OPML (request body: the OPML document)",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
     "/api/v1/profiles/{slug}/topics": {
       "get": {
         "operationId": "list_topics_api_v1_profiles__slug__topics_get",
@@ -3096,6 +4044,509 @@
           }
         ],
         "summary": "A profile's topics",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
+    "/api/v1/source-catalog": {
+      "get": {
+        "operationId": "source_catalog_api_v1_source_catalog_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CatalogEntryV1"
+                  },
+                  "title": "Response Source Catalog Api V1 Source Catalog Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Starter feeds",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
+    "/api/v1/sources": {
+      "get": {
+        "operationId": "list_sources_api_v1_sources_get",
+        "parameters": [
+          {
+            "description": "Also list removed sources.",
+            "in": "query",
+            "name": "include_removed",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Also list removed sources.",
+              "title": "Include Removed",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SourceAdminV1"
+                  },
+                  "title": "Response List Sources Api V1 Sources Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List sources",
+        "tags": [
+          "v1"
+        ]
+      },
+      "post": {
+        "operationId": "create_source_api_v1_sources_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourceIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceAdminV1"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add a source (an identical existing source is shared instead)",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
+    "/api/v1/sources/discover": {
+      "post": {
+        "operationId": "discover_api_v1_sources_discover_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiscoverIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/FeedCandidate"
+                  },
+                  "title": "Response Discover Api V1 Sources Discover Post",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Find the feeds of a site (HTML <link rel=alternate>) or confirm a feed URL",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
+    "/api/v1/sources/health": {
+      "get": {
+        "operationId": "sources_health_api_v1_sources_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SourceHealthV1"
+                  },
+                  "title": "Response Sources Health Api V1 Sources Health Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Fetch health, budgets and spend of every source",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
+    "/api/v1/sources/sync-yaml": {
+      "post": {
+        "operationId": "sync_yaml_api_v1_sources_sync_yaml_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Add profiles, sources and topics from the YAML that the DB lacks (never deletes)",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
+    "/api/v1/sources/test": {
+      "post": {
+        "operationId": "test_fetch_api_v1_sources_test_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourceIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestFetchResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fetch a source once without saving anything",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
+    "/api/v1/sources/{source_id}": {
+      "delete": {
+        "operationId": "delete_source_api_v1_sources__source_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "title": "Source Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceAdminV1"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove a source (stops fetching; its articles and stories are kept)",
+        "tags": [
+          "v1"
+        ]
+      },
+      "get": {
+        "operationId": "get_source_api_v1_sources__source_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "title": "Source Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceAdminV1"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "One source",
+        "tags": [
+          "v1"
+        ]
+      },
+      "put": {
+        "operationId": "update_source_api_v1_sources__source_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "title": "Source Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourceIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceAdminV1"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Edit a source",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
+    "/api/v1/sources/{source_id}/disable": {
+      "post": {
+        "operationId": "disable_source_api_v1_sources__source_id__disable_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "title": "Source Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceAdminV1"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Disable",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
+    "/api/v1/sources/{source_id}/enable": {
+      "post": {
+        "operationId": "enable_source_api_v1_sources__source_id__enable_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "title": "Source Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceAdminV1"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Enable",
+        "tags": [
+          "v1"
+        ]
+      }
+    },
+    "/api/v1/sources/{source_id}/restore": {
+      "post": {
+        "operationId": "restore_source_api_v1_sources__source_id__restore_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "title": "Source Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceAdminV1"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Undelete",
         "tags": [
           "v1"
         ]

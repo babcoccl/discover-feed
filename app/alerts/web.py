@@ -9,6 +9,7 @@ from app.alerts import repo
 from app.alerts.api import notification_out, query_notifications
 from app.config import SECRET_FIELDS, AlertChannel, secret_ref_name
 from app.models import Notification, ProfileRecord
+from app.secret_warnings import missing_secrets
 from app.web import TEMPLATES, _base_context, _profile_or_404, _session
 
 router = APIRouter(include_in_schema=False)
@@ -29,6 +30,7 @@ def _context(request: Request, session: Session, profile: ProfileRecord, **extra
         session,
         profile,
         on_alerts=True,
+        secret_warnings=missing_secrets(session),
         rules=rules,
         rule_dicts={r.id: repo.rule_dict(r) for r in rules},
         channels=repo.list_channels(session, profile),

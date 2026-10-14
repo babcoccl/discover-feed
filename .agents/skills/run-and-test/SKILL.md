@@ -189,3 +189,23 @@ update it when fixtures or defaults change. README "Tuning clustering" has the f
 - Gotcha: suppression of a not-yet-clustered article uses the clusterer with a looser
   threshold (`PREDICT_MARGIN`); similar titles in tests may be suppressed as "same story".
 
+## Sources, adapters and budgets
+
+- Code: `app/source_admin.py` (CRUD/sharing, soft delete, health, autodiscovery, read-only
+  `test_fetch`, OPML, catalog, `sync_from_yaml`, `reschedule`), `app/sources_api.py` (v1, router
+  -level `require_admin`), `app/sources_web.py` + `source_*.html`/`_sources.html` templates,
+  adapters `app/sources/{rss,guardian,newsdata,x}.py` on `app/sources/api.py` (`JsonApiAdapter`:
+  key in headers only, `scrub()`, 429/`Retry-After` -> `RateLimited`, quota -> `QuotaExhausted`).
+- Budgets: `Quota` in `FetchState`; counters in `source_usage` (UTC day/month), loaded by
+  `ingest.load_quota`. Auto-disable: `Ingestor(auto_disable_failures=...)` /
+  `DISCOVER_SOURCE_AUTO_DISABLE_FAILURES`. Secret warnings: `app/secret_warnings.py`.
+- Env: `GUARDIAN_API_KEY`, `NEWSDATA_API_KEY`, `X_BEARER_TOKEN` (see `.env.example`); compose
+  passes all of `.env` via `env_file` (optional), uvicorn `--timeout-graceful-shutdown 5`.
+- Tests: `tests/test_source_adapters.py` (fake APIs via `httpx.MockTransport`, budgets, X cap,
+  restart persistence), `tests/test_source_management.py` (swap
+  `app.state.ingestor.transport` for discovery/test fetch; admin auth over every write route),
+  `tests/test_ops.py` (compose/.env.example, SIGINT with an open SSE stream; POSIX only).
+  Never call real providers. New v1 routes: `make openapi`.
+- Demo: `python scripts/demo_api_sources.py` (fake Guardian/NewsData items join stories).
+  Catalog: `python scripts/verify_catalog.py --out catalog.md` (network) before editing
+  `config/source_catalog.yaml`.
