@@ -112,6 +112,18 @@ class SourceNames(dict[str, str]):
         self.aggregators = aggregators
         self.first_party = first_party
 
+    def get(self, key, default=None):  # type: ignore[override]
+        if key in self:
+            return super().get(key)
+        if isinstance(key, str) and key.startswith("web:"):  # enrichment: the domain
+            return key.removeprefix("web:")
+        return default
+
+    def __missing__(self, key: str) -> str:
+        if key.startswith("web:"):
+            return key.removeprefix("web:")
+        raise KeyError(key)
+
 
 def source_names(session: Session) -> SourceNames:
     rows = session.execute(
@@ -414,7 +426,8 @@ def story_item(story_id: int | None, members: Sequence[Article]) -> StoryItem:
     from app.cluster.service import doc
 
     ordered = sorted(members, key=lambda m: (m.published_at, m.id))
-    rep_id = representative([doc(m) for m in ordered]).id
+    feed = [m for m in ordered if m.origin != "enrichment"] or ordered
+    rep_id = representative([doc(m) for m in feed]).id
     return StoryItem(
         story_id=story_id,
         members=ordered,
@@ -424,10 +437,12 @@ def story_item(story_id: int | None, members: Sequence[Article]) -> StoryItem:
 
 def get_story(session: Session, story_id: int, profile: ProfileRecord | None = None):
     """A story with all its members, or only the profile's members (None if none are left)."""
-    stmt = select(Article).where(Article.story_id == story_id)
-    if profile is not None:
-        stmt = stmt.where(Article.source_id.in_([s.id for s in profile.sources]))
-    members = list(session.scalars(stmt))
+    members = list(session.scalars(select(Article).where(Article.story_id == story_id)))
+    if profile is not None:  # web-search members ride along with followed ones, never alone
+        followed = {s.id for s in profile.sources}
+        if not any(m.source_id in followed and m.origin != "enrichment" for m in members):
+            return None
+        members = [m for m in members if m.source_id in followed or m.origin == "enrichment"]
     return story_item(story_id, members) if members else None
 
 

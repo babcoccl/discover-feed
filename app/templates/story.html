@@ -16,6 +16,8 @@
 {% block content %}
 {%- set numbered = report.citations if report and report.citations else (brief.citations if brief else []) -%}
 {%- set cited_ids = numbered | map(attribute="article_id") | list -%}
+{%- set web_ids = story.members | selectattr("found_by_search") | map(attribute="id") | list -%}
+{%- macro web_badge() -%}<span class="ml-1 inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[0.7rem] font-medium text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" data-web-search title="Not one of your sources: found via web search to add independent coverage">found via web search</span>{%- endmacro -%}
 <a href="{{ back }}" class="mb-4 inline-flex items-center gap-1 text-sm font-medium text-sky-700 hover:underline dark:text-sky-400"><span aria-hidden="true">←</span> Back to feed</a>
 <h1 class="mb-1 max-w-3xl text-2xl font-bold leading-tight tracking-tight">{{ story.title }}</h1>
 <p class="mb-4 text-sm text-slate-500 dark:text-slate-400">
@@ -50,7 +52,7 @@
   <h2 id="sources-heading" class="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Sources</h2>
   <ol class="divide-y divide-slate-200 overflow-hidden rounded-xl border border-slate-200 bg-white text-sm dark:divide-slate-800 dark:border-slate-800 dark:bg-slate-900" aria-label="Cited sources">
     {% for c in numbered %}
-    <li id="source-{{ c.index }}" class="flex gap-2 p-3"><span class="shrink-0 font-semibold text-sky-700 dark:text-sky-400">[{{ c.index }}]</span><span><a href="{{ c.url }}" target="_blank" rel="noopener noreferrer" class="font-medium hover:underline">{{ c.headline }} <span aria-hidden="true" class="text-sky-700 dark:text-sky-400">↗</span></a> <span class="text-slate-500 dark:text-slate-400">· <span data-publisher>{{ c.publisher or c.source }}</span>{% if c.via %} <span class="text-xs" data-via>via {{ c.via }}</span>{% endif %}</span></span></li>
+    <li id="source-{{ c.index }}" class="flex gap-2 p-3"><span class="shrink-0 font-semibold text-sky-700 dark:text-sky-400">[{{ c.index }}]</span><span><a href="{{ c.url }}" target="_blank" rel="noopener noreferrer" class="font-medium hover:underline">{{ c.headline }} <span aria-hidden="true" class="text-sky-700 dark:text-sky-400">↗</span></a> <span class="text-slate-500 dark:text-slate-400">· <span data-publisher>{{ c.publisher or c.source }}</span>{% if c.via %} <span class="text-xs" data-via>via {{ c.via }}</span>{% endif %}{% if c.article_id in web_ids %}{{ web_badge() }}{% endif %}</span></span></li>
     {% endfor %}
   </ol>
 </section>
@@ -62,7 +64,7 @@
   {% for article in others %}
   <li class="p-4">
     <div class="mb-1 flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
-      <span class="font-medium text-slate-700 dark:text-slate-300" data-publisher>{{ article.publisher or article.source }}</span>{% if article.via %}<span data-via>via {{ article.via }}</span>{% endif %}
+      <span class="font-medium text-slate-700 dark:text-slate-300" data-publisher>{{ article.publisher or article.source }}</span>{% if article.via %}<span data-via>via {{ article.via }}</span>{% endif %}{% if article.found_by_search %}{{ web_badge() }}{% endif %}
       <span aria-hidden="true">·</span>
       <time datetime="{{ article.published_at.isoformat() }}" title="{{ article.published_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ article.published_at | reltime }}</time>
     </div>

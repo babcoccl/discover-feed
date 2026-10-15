@@ -126,10 +126,16 @@ class Member:
     words: int
     publisher: str = ""
     via: str | None = None
+    origin: str = "feed"
+    """``feed`` | ``enrichment`` (found by web search; shown with a badge)."""
 
     @property
     def label(self) -> str:
         return label(self.publisher, self.via)
+
+    @property
+    def found_by_search(self) -> bool:
+        return self.origin == "enrichment"
 
 
 @dataclass
@@ -249,13 +255,22 @@ def load(view: StoryView, source_ids: Sequence[str] | None = None) -> PublishedS
             words=m.get("words", 0),
             publisher=m.get("publisher") or publisher_of(m["url"], m["source"]),
             via=m.get("via"),
+            origin=m.get("origin") or "feed",
         )
         for m in doc.get("members", [])
     ]
-    visible = [m for m in members if source_ids is None or m.source_id in set(source_ids)]
+    followed = set(source_ids) if source_ids is not None else None
+    visible = [
+        m
+        for m in members
+        if followed is None or (not m.found_by_search and m.source_id in followed)
+    ]
+    if visible and followed is not None:  # web-search members ride along, never alone
+        visible = [m for m in members if m in visible or m.found_by_search]
     if not visible:
         return None
-    rep = next((m for m in visible if m.id == doc.get("representative_id")), visible[0])
+    lead = next((m for m in visible if not m.found_by_search), visible[0])
+    rep = next((m for m in visible if m.id == doc.get("representative_id")), lead)
     image = doc.get("image")
     if image is None:  # views written before image selection
         url = rep.image_url or next((m.image_url for m in visible if m.image_url), None)

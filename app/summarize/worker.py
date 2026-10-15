@@ -10,7 +10,7 @@ import threading
 from collections.abc import Callable, Iterable
 from datetime import datetime, timedelta
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.orm import sessionmaker
 
 from app import profiles as repo
@@ -69,6 +69,8 @@ class SummaryWorker:
         self.pause = timedelta(minutes=pause_minutes)
         self.policy = policy or Policy()
         self.backfill = timedelta(hours=backfill_hours)
+        self.enrich_wait = timedelta(0)
+        """A new story's brief waits this long for web-search enrichment (``app.enrich``)."""
         self.backfill_max = backfill_max
         self.followups = followups
         """Generate suggested questions for published stories when nothing else waits."""
@@ -177,10 +179,17 @@ class SummaryWorker:
         brief_failed = (Story.state == StoryState.CLUSTERED) & func.coalesce(
             Story.state_reason, ""
         ).startswith("brief failed")
+        enriching = and_(  # NULL-safe: a NULL status must not drop the story
+            Story.enrich_status.is_not(None),
+            Story.enrich_status == "pending",
+            Story.enrich_started_at.is_not(None),
+            Story.enrich_started_at > now - self.enrich_wait,
+        )
         stmt = select(Story.id, Story.published_version).where(
             Story.state.in_(_LIVE),
             or_(Story.state.in_(WORK_STATES), Story.id.in_(requested)),
             ~Story.id.in_(backing_off) | Story.id.in_(requested) | manual,
+            ~enriching | Story.id.in_(requested) | manual,
             ~brief_failed | Story.id.in_(select(SummaryJob.story_id)) | manual,
             or_(
                 Story.published_version.is_not(None),

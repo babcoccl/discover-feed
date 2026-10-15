@@ -465,6 +465,74 @@ class AlertsConfig(_Model):
         return self
 
 
+class SearchProviderConfig(_Model):
+    """One web-search provider used by enrichment (``enrichment.providers``)."""
+
+    name: str = Field(pattern=r"^(gdelt|searxng|guardian|newsdata|brave)$")
+    base_url: str | None = None
+    """API root (required for ``searxng``: your instance, with ``json`` in search.formats)."""
+    api_key: str | None = None
+    """Name of the environment variable holding the key (guardian / newsdata / brave)."""
+    budget_source: str | None = None
+    """Share the daily request budget recorded for this source id (e.g. a guardian feed)."""
+    daily_request_budget: int | None = Field(default=None, ge=0)
+    monthly_budget_usd: float | None = Field(default=None, ge=0)
+    cost_per_request_usd: float = Field(default=0.0, ge=0)
+    min_interval_seconds: float = Field(default=1.0, ge=0)
+    """Per-provider rate limit (GDELT asks for one request every 5 s)."""
+    max_results: int = Field(default=10, ge=1, le=50)
+    timeout_seconds: float = Field(default=15.0, gt=0)
+
+
+class QueryMode(StrEnum):
+    HEURISTIC = "heuristic"
+    LLM = "llm"
+
+
+def _default_providers() -> list[SearchProviderConfig]:
+    return [SearchProviderConfig(name="gdelt", min_interval_seconds=5.0)]
+
+
+class EnrichmentConfig(_Model):
+    """Web-search enrichment: find other publishers' coverage of single-sourced stories."""
+
+    enabled: bool = False
+    providers: list[SearchProviderConfig] = Field(default_factory=_default_providers)
+    target_sources: int = Field(default=3, ge=2, le=20)
+    """Stories with fewer distinct publishers than this are searched."""
+    max_age_hours: float = Field(default=48, gt=0)
+    max_added_sources: int = Field(default=3, ge=1, le=10)
+    wait_seconds: float = Field(default=180, ge=0)
+    """How long a new story's brief waits for enrichment before going ahead without it."""
+    concurrency: int = Field(default=2, ge=1, le=8)
+    min_snippet_similarity: float = Field(default=0.35, ge=0, le=1)
+    min_text_similarity: float = Field(default=0.45, ge=0, le=1)
+    min_shared_entities: int = Field(default=2, ge=0, le=10)
+    max_time_gap_hours: float = Field(default=72, gt=0)
+    duplicate_overlap: float = Field(default=0.6, gt=0, le=1)
+    """Shingle overlap at which a candidate counts as a copy (syndicated wire text)."""
+    deny_domains: list[str] = Field(default_factory=list)
+    reenrich_hours: float = Field(default=24, ge=0)
+    query_mode: QueryMode = QueryMode.HEURISTIC
+    resummarize_on_enrichment: bool = True
+    """Sources found after a story was published re-generate it once."""
+    cache_hours: float = Field(default=24, ge=0)
+    language: str = "en"
+    max_candidates: int = Field(default=10, ge=1, le=50)
+    """Candidates fetched per story after the snippet filters."""
+
+    @model_validator(mode="after")
+    def _check(self) -> "EnrichmentConfig":
+        names = [p.name for p in self.providers]
+        if len(names) != len(set(names)):
+            raise ValueError("duplicate enrichment providers")
+        for p in self.providers:
+            if p.name == "searxng" and not p.base_url:
+                raise ValueError("the searxng provider needs base_url")
+        self.deny_domains = [d.strip().lower().lstrip(".") for d in self.deny_domains if d]
+        return self
+
+
 class TopicConfig(_Model):
     """A feed tab: articles matching any `include` keyword and no `exclude` keyword."""
 
@@ -490,6 +558,7 @@ class Profile(_Model):
     alerts: AlertsConfig = Field(default_factory=AlertsConfig)
     llm: LLMConfig
     summaries: SummariesConfig = Field(default_factory=SummariesConfig)
+    enrichment: EnrichmentConfig = Field(default_factory=EnrichmentConfig)
 
     @model_validator(mode="after")
     def _check_references(self) -> "Profile":

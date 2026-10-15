@@ -216,6 +216,79 @@ formal FOMC statement, which shares too little wording with the press coverage o
 (cosine about 0.33). Reaching 100% recall would need a threshold of about 0.30, which leaves too
 little margin against false merges on live feeds.
 
+## Web-search enrichment (more sources per story)
+
+Most stories arrive from one or two of your feeds. When a profile turns on `enrichment`, each
+new or under-covered story (fewer than `target_sources` publishers, updated within
+`max_age_hours`) is searched for on the web, and up to `max_added_sources` independent
+publishers' pages are added to it, so briefs and reports cite several outlets.
+
+How it works (`app/search/`, `app/enrich/`):
+
+1. After clustering the story is marked `enrich_status = pending`; its brief waits up to
+   `wait_seconds` (the summary worker skips it meanwhile, never blocking on the search). A
+   background thread does the rest, `concurrency` stories at a time.
+2. Queries come from the headlines only (never article text): the lead headline without
+   stopwords plus the names the other headlines repeat, at most 10 words. `query_mode: llm`
+   asks the summarizer for up to 2 queries of 8 words or fewer, falling back to the heuristic.
+3. Each provider in `providers` is asked in order until enough sources are found. Supported:
+   `gdelt` (default, free, no key, one request per 5 s), `searxng` (your instance; `base_url`
+   and `json` in its `search.formats`), `guardian`, `newsdata` and `brave` (keys by env var
+   name). Results are cached for `cache_hours`; Retry-After and HTTP 429 are honored (short
+   waits retried once, long ones cool the provider down); `daily_request_budget` /
+   `monthly_budget_usd` are counted in `source_usage` as `search:<name>` (or `budget_source`,
+   to share an ingestion source's budget).
+4. Candidates are rejected before fetching for: same registrable domain as a member
+   (`bbc.co.uk`, `cnn.com`), social sites and aggregators, `deny_domains`, an already known
+   URL, a publication time more than `max_time_gap_hours` from the story, another language,
+   or title/snippet TF-IDF similarity below `min_snippet_similarity`. The best
+   `max_candidates` are fetched with the extractor's robots.txt rules, per-domain delay and
+   size caps, through the image fetcher's SSRF guard (http(s) only, public addresses only,
+   every redirect re-checked). Failed and paywalled (`isAccessibleForFree: false`) pages are
+   dropped; extracted text must reach `min_text_similarity`, share `min_shared_entities`
+   names with the headlines, and not be a copy (5-word shingle overlap of `duplicate_overlap`
+   with a member or an accepted page: syndicated wire copies collapse).
+5. Accepted pages become members with `origin = enrichment`, source id `web:<domain>`,
+   pinned to the story through incremental clustering, merges and `--rebuild`. They count
+   toward "N sources", are cited and numbered in briefs and reports like any member, and are
+   badged "found via web search" on the story page; the API returns `sources[].origin`
+   (`feed` | `enrichment`). They never fire alerts, never become cards of their own and
+   never make a story visible in a profile that does not follow one of its feed sources.
+6. Sources found after a story was published regenerate it once (`enrich_regens`); the
+   published version stays visible until the new one passes the publish gate. Turn that off
+   with `resummarize_on_enrichment: false`.
+
+Enable it per profile (`config/profiles.example.yaml` shows every option; the
+Settings > Pipeline checkbox overrides the YAML for an existing database):
+
+```yaml
+enrichment:
+  enabled: true
+  providers:
+    - name: gdelt
+    # - name: searxng
+    #   base_url: http://searxng:8080
+    # - name: brave
+    #   api_key: BRAVE_API_KEY        # env var name, never the key itself
+    #   daily_request_budget: 60
+```
+
+The thresholds and providers come from the summarize profile (`DISCOVER_SUMMARIZE_PROFILE`,
+else the first). Settings > Pipeline shows eligible/enriched stories, average sources added,
+rejection reasons, provider errors and today's requests, plus **Enrich now**
+(`POST /api/admin/enrich[?story_id=N]`, admin key; a story id ignores `reenrich_hours`).
+
+Diagnose and evaluate against real providers before trusting it (the defaults are tuned on
+fixtures only; real-world false-match rates are not measured yet):
+
+```bash
+python -m app.enrich.diagnose --story-id 42 --dry-run   # queries, raw responses, decisions
+python -m app.enrich.diagnose --auto                     # newest eligible story; adds pages
+python -m app.enrich.evaluate --stories 30 --markdown    # dry run over 30 recent stories
+```
+
+Windows: `.venv\Scripts\python -m app.enrich.diagnose --auto --dry-run`.
+
 ## Card images
 
 Cards show the best validated image of a story, never one repeated placeholder (`app/images/`):

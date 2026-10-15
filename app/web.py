@@ -1,5 +1,6 @@
 """Server-rendered UI: Jinja2 templates, HTMX partials, Tailwind via CDN."""
 
+import logging
 import zlib
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
@@ -47,6 +48,7 @@ def _image_style(request: Request) -> dict:
     return {"no_image_style": images.no_image_style().value}
 
 
+logger = logging.getLogger(__name__)
 router = APIRouter(include_in_schema=False)
 TEMPLATES = Jinja2Templates(
     directory=Path(__file__).parent / "templates",
@@ -464,7 +466,11 @@ def x_spend(session: Session) -> list[dict]:
 
 def _pipeline_context(request: Request, session: Session) -> dict:
     worker = getattr(request.app.state, "summaries", None)
+    enricher = _enricher(request)
+    profile_slug = request.path_params.get("slug")
+    record = session.scalar(select(ProfileRecord).where(ProfileRecord.slug == profile_slug))
     return {
+        "enrich_on": bool(enricher and record and enricher.profile_enabled(record)),
         "text_counts": text_status_counts(session),
         "runs": last_runs(session),
         "summarizer": worker.status() if worker is not None else None,
@@ -478,7 +484,24 @@ def _pipeline_context(request: Request, session: Session) -> dict:
         "x_spend": x_spend(session),
         "image_stats": image_stats(session, _image_cache(request)),
         "image_backfill": _image_backfill(request),
+        "enrichment": _enrichment_stats(request, session),
     }
+
+
+def _enricher(request: Request):
+    pipeline = getattr(request.app.state, "pipeline", None)
+    return getattr(pipeline, "enricher", None)
+
+
+def _enrichment_stats(request: Request, session: Session) -> dict | None:
+    enricher = _enricher(request)
+    if enricher is None:
+        return None
+    try:
+        return enricher.stats(session)
+    except Exception:  # the panel never fails on a metrics query
+        logger.exception("enrichment stats failed")
+        return None
 
 
 def _image_worker(request: Request) -> ImageWorker | None:
@@ -664,6 +687,28 @@ def pipeline_retry(request: Request, slug: str, story_id: int, kind: str = "both
     if not worker.retry(story_id, kind):
         raise HTTPException(status_code=404, detail=f"unknown story {story_id}")
     worker.start(story_id=story_id, manual=True)
+    return _pipeline_response(request, slug)
+
+
+@router.post("/p/{slug}/settings/pipeline/enrich")
+def pipeline_enrich(request: Request, slug: str, story_id: int | None = None) -> Response:
+    """Enrich now: every eligible story, or one story regardless of the re-enrich interval."""
+    pipeline = getattr(request.app.state, "pipeline", None)
+    if pipeline is None or pipeline.enricher is None:
+        raise HTTPException(status_code=409, detail="enrichment is not configured")
+    ids = [story_id] if story_id is not None else None
+    pipeline.enrich(ids, force=story_id is not None)
+    return _pipeline_response(request, slug)
+
+
+@router.post("/p/{slug}/settings/enrichment")
+async def settings_enrichment(request: Request, slug: str) -> Response:
+    """The per-profile web-search enrichment toggle (overrides the YAML default)."""
+    form = await request.form()
+    with _session(request) as session:
+        profile = _profile_or_404(session, slug)
+        profile.enrichment_enabled = form.get("enabled") in ("1", "on", "true")
+        session.commit()
     return _pipeline_response(request, slug)
 
 

@@ -106,6 +106,13 @@ def poll(base: str, tl: Timeline, assert_published: bool) -> None:
                 tl.mark(row, "brief")
                 if not any(e[1].startswith("first story published") for e in tl.events):
                     tl.event(f"first story published: {item['title'][:60]}")
+                if "enriched" not in row:
+                    v1 = get(base, f"/api/v1/stories/{key}") or {}
+                    web = [s for s in v1.get("sources", []) if s.get("origin") == "enrichment"]
+                    if web:
+                        tl.mark(row, "enriched", len(web))
+                        if not any(e[1].startswith("first web-search") for e in tl.events):
+                            tl.event(f"first web-search source on: {item['title'][:60]}")
             state = report_state(item.get("report"))
             if state is None and "brief" in row and "report" not in row:
                 story = get(base, f"/api/stories/{key}") or {}
@@ -118,10 +125,12 @@ def poll(base: str, tl: Timeline, assert_published: bool) -> None:
 
 
 def settled(tl: Timeline) -> bool:
-    """At least 5 published stories with a final report, and every shown card has a brief."""
+    """At least 5 published stories with a final report, every shown card has a brief, and
+    at least one story gained a web-search source (the fixture server's fake GDELT)."""
     rows = [r for r in tl.stories.values() if "clustered" in r]
     final = [r for r in rows if "report" in r]
-    return len(final) >= 5 and all("brief" in r for r in rows)
+    enriched = [r for r in rows if "enriched" in r]
+    return len(final) >= 5 and all("brief" in r for r in rows) and bool(enriched)
 
 
 def render(tl: Timeline) -> str:
@@ -133,6 +142,8 @@ def render(tl: Timeline) -> str:
     lines += [
         "",
         f"cards polled: {tl.cards}, shown without a brief: {tl.snippet_cards}",
+        f"stories with web-search (enrichment) sources: "
+        f"{sum(1 for r in tl.stories.values() if 'enriched' in r)}",
         f"publish-gate violations: {len(tl.violations)}",
     ]
     lines += [f"  - {v}" for v in tl.violations[:20]]

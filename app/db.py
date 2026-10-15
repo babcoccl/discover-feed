@@ -36,6 +36,7 @@ def init_db(engine: Engine) -> None:
     _add_alert_columns(engine)
     _add_source_management_columns(engine)
     _add_image_columns(engine)
+    _add_enrichment_columns(engine)
 
 
 def _add_article_url(engine: Engine) -> None:
@@ -233,3 +234,40 @@ def _add_image_columns(engine: Engine) -> None:
             conn.execute(
                 text(f"CREATE INDEX IF NOT EXISTS ix_articles_{name} ON articles ({name})")
             )
+
+
+_ENRICHMENT_COLUMNS = {
+    "articles": {
+        "origin": "VARCHAR(12) NOT NULL DEFAULT 'feed'",
+        "discovered_for_story_id": "INTEGER",
+        "anchor_article_id": "INTEGER",
+    },
+    "stories": {
+        "enrich_status": "VARCHAR(10)",
+        "enrich_started_at": "DATETIME",
+        "enriched_at": "DATETIME",
+        "enrich_added": "INTEGER NOT NULL DEFAULT 0",
+        "enrich_regens": "INTEGER NOT NULL DEFAULT 0",
+        "enrich_reason": "TEXT",
+    },
+    "profiles": {"enrichment_enabled": "BOOLEAN"},
+}
+
+
+def _add_enrichment_columns(engine: Engine) -> None:
+    """Pre-enrichment DBs: article origin/pinning, story enrichment state, profile toggle."""
+    with engine.begin() as conn:
+        for table, columns in _ENRICHMENT_COLUMNS.items():
+            existing = {c["name"] for c in inspect(conn).get_columns(table)}
+            for name, ddl in columns.items():
+                if name not in existing:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_articles_discovered_for_story_id "
+                "ON articles (discovered_for_story_id)"
+            )
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_stories_enrich_status ON stories (enrich_status)")
+        )

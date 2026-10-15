@@ -8,14 +8,18 @@ from datetime import datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Article, Story, StoryState, TextStatus
+from app.models import ENRICHMENT, Article, Story, StoryState, TextStatus
 
 PRE_CLUSTER = (StoryState.INGESTED, StoryState.TEXT_PENDING, StoryState.TEXT_FINAL)
 
 
 def ensure_stories(session: Session, now: datetime) -> int:
     """A one-member ``ingested`` story for every article without a story."""
-    articles = list(session.scalars(select(Article).where(Article.story_id.is_(None))))
+    articles = list(
+        session.scalars(
+            select(Article).where(Article.story_id.is_(None), Article.origin != ENRICHMENT)
+        )
+    )
     for article in articles:
         story = Story(
             title=article.title,

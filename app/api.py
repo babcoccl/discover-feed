@@ -655,6 +655,31 @@ class SummarizeOut(BaseModel):
     status: WorkerStatus
 
 
+class EnrichOut(BaseModel):
+    queued: int = Field(description="Stories marked for web-search enrichment.")
+
+
+@router.post(
+    "/admin/enrich",
+    response_model=EnrichOut,
+    tags=["admin"],
+    summary="Search the web for more coverage of eligible stories (or one story) now",
+)
+async def enrich(
+    request: Request,
+    story_id: Annotated[
+        int | None,
+        Query(description="Enrich only this story, ignoring the re-enrich interval."),
+    ] = None,
+) -> EnrichOut:
+    pipeline = request.app.state.pipeline
+    if pipeline.enricher is None:
+        raise HTTPException(status_code=409, detail="enrichment is not configured")
+    ids = [story_id] if story_id is not None else None
+    queued = await run_in_threadpool(pipeline.enrich, ids, force=story_id is not None)
+    return EnrichOut(queued=queued)
+
+
 @router.post(
     "/admin/summarize",
     response_model=SummarizeOut,

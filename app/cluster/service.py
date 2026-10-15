@@ -12,7 +12,16 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.cluster.base import ArticleDoc, Clusterer, StoryDoc, representative
 from app.events import record
 from app.lifecycle import PRE_CLUSTER, advance_text_states, ensure_stories
-from app.models import Article, Story, StoryState, StorySummary, StoryView, SummaryJob, utcnow
+from app.models import (
+    ENRICHMENT,
+    Article,
+    Story,
+    StoryState,
+    StorySummary,
+    StoryView,
+    SummaryJob,
+    utcnow,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +86,7 @@ def _run(
 ) -> ClusterRunResult:
     now = utcnow()
     if rebuild:
-        session.execute(update(Article).values(story_id=None))
+        session.execute(update(Article).values(story_id=None))  # enrichment re-pinned below
         session.execute(delete(Story))
         session.execute(delete(StoryView))
         # Story ids are reassigned: detach old summaries (still reusable by input hash).
@@ -96,7 +105,7 @@ def _run(
         session.scalars(
             select(Article)
             .join(Story, Article.story_id == Story.id)
-            .where(Story.state == StoryState.TEXT_FINAL)
+            .where(Story.state == StoryState.TEXT_FINAL, Article.origin != ENRICHMENT)
             .order_by(Article.id)
         )
     )
@@ -144,6 +153,10 @@ def _run(
         session.flush()
         refresh_stories(session, touched)
         result.story_ids = sorted(touched)
+    if rebuild:
+        repinned = _repin_enrichment(session, now)
+        refresh_stories(session, repinned)
+        result.story_ids = sorted(set(result.story_ids) | repinned)
 
     session.flush()
     clustered = Story.state.not_in([s.value for s in PRE_CLUSTER] + [StoryState.MERGED.value])
@@ -166,6 +179,11 @@ def _merge(session: Session, old_id: int | None, target_id: int) -> None:
             select(Article.source_id).where(Article.story_id.in_([old_id, target_id])).distinct()
         )
         record(session, "story.retracted", old_id, old.published_version, list(sources))
+    session.execute(  # enrichment members stay with their story
+        update(Article)
+        .where(Article.story_id == old_id, Article.origin == ENRICHMENT)
+        .values(story_id=target_id, discovered_for_story_id=target_id)
+    )
     old.state, old.merged_into = StoryState.MERGED.value, target_id
     old.article_count = old.source_count = 0
     old.published_version = None
@@ -184,6 +202,7 @@ def _candidate_stories(
             Story.last_updated_at >= earliest,
             Story.first_seen_at <= latest,
             Story.state.not_in([s.value for s in PRE_CLUSTER] + [StoryState.MERGED.value]),
+            Article.origin != ENRICHMENT,
         )
         .order_by(Article.published_at, Article.id)
     )
@@ -211,7 +230,8 @@ def refresh_stories(session: Session, story_ids: set[int]) -> None:
         if not articles:
             session.delete(story)
             continue
-        rep_id = representative([doc(a) for a in articles]).id
+        feed = [a for a in articles if a.origin != ENRICHMENT] or articles
+        rep_id = representative([doc(a) for a in feed]).id
         rep = next(a for a in articles if a.id == rep_id)
         story.representative_article_id = rep.id
         story.title = rep.title
@@ -219,6 +239,26 @@ def refresh_stories(session: Session, story_ids: set[int]) -> None:
         story.last_updated_at = max(a.published_at for a in articles)
         story.article_count = len(articles)
         story.source_count = len({a.source_id for a in articles})
+
+
+def _repin_enrichment(session: Session, now) -> set[int]:
+    """After a rebuild: every enrichment member rejoins its anchor's (new) story."""
+    session.flush()
+    stories: set[int] = set()
+    pinned = session.scalars(
+        select(Article).where(Article.origin == ENRICHMENT, Article.story_id.is_(None))
+    )
+    for article in list(pinned):
+        anchor = session.get(Article, article.anchor_article_id or 0)
+        if anchor is None or anchor.story_id is None:
+            continue  # its story is gone: stays detached (never a card of its own)
+        article.story_id = article.discovered_for_story_id = anchor.story_id
+        stories.add(anchor.story_id)
+    for story_id in stories:
+        story = session.get(Story, story_id)
+        story.enrich_status, story.enriched_at = "done", now
+    session.flush()
+    return stories
 
 
 def orphaned_story_ids(session: Session) -> list[int]:
