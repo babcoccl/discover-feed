@@ -188,6 +188,7 @@ class Pipeline:
         enricher.on_done = self._enriched
         if self.summaries is not None:
             self.summaries.enrich_wait = timedelta(seconds=enricher.config.wait_seconds)
+            enricher.backfill = self.summaries.backfill
         return enricher
 
     def _enriched(self, story_ids: list[int]) -> None:

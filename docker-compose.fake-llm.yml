@@ -21,7 +21,9 @@ services:
     image: discover-feed:local
     command: ["python", "-m", "app.fixture_server", "--port", "8081",
               "--base", "http://fixtures:8081", "--fixture-dir", "/fixtures/demo",
-              "--wire-base", "http://otherwire:8081"]
+              "--wire-base", "http://otherwire:8081",
+              # The first fake-GDELT replies fail; stories must be retried, then enriched.
+              "--gdelt-faults", "429,limit,timeout,empty,429"]
     networks:
       default:
         # A second host name: the fake web-search hits look like another publisher.

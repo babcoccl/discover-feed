@@ -701,6 +701,16 @@ def pipeline_enrich(request: Request, slug: str, story_id: int | None = None) ->
     return _pipeline_response(request, slug)
 
 
+@router.post("/p/{slug}/settings/pipeline/reenrich-errors")
+def pipeline_reenrich_errors(request: Request, slug: str) -> Response:
+    """One-time admin action: retry stories whose enrichment ended with provider errors."""
+    pipeline = getattr(request.app.state, "pipeline", None)
+    if pipeline is None or pipeline.enricher is None:
+        raise HTTPException(status_code=409, detail="enrichment is not configured")
+    pipeline.enricher.requeue_provider_errors()
+    return _pipeline_response(request, slug)
+
+
 @router.post("/p/{slug}/settings/enrichment")
 async def settings_enrichment(request: Request, slug: str) -> Response:
     """The per-profile web-search enrichment toggle (overrides the YAML default)."""

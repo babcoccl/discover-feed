@@ -3,19 +3,20 @@ daily request / monthly spend budgets (``source_usage``) and health stats."""
 
 import asyncio
 import hashlib
-import time
+import math
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 import httpx
-from sqlalchemy import delete
+from sqlalchemy import delete, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from app.config import SearchProviderConfig
 from app.ingest import USER_AGENT, usage_periods
-from app.models import SearchCacheEntry, SourceUsage, utcnow
-from app.search.base import SearchHit, SearchProvider, create_provider
+from app.models import SearchCacheEntry, SearchProviderState, SourceUsage, utcnow
+from app.search.base import SearchHit, SearchProvider, create_provider, is_timeout
 from app.sources.api import scrub
 from app.sources.base import FetchError, Quota, QuotaExhausted, RateLimited
 
@@ -32,15 +33,29 @@ class SearchOutcome:
     cached: bool = False
     error: str | None = None
     raw: str = ""
+    skipped: str | None = None
+    """``cooldown`` | ``budget``: no request was sent."""
+    cooldown_seconds: float = 0.0
+    """How long the provider is cooling down after this search (0: not)."""
+
+    @property
+    def ok(self) -> bool:
+        """The provider answered (a cached answer counts)."""
+        return self.error is None
 
 
 @dataclass
 class ProviderHealth:
+    """Per-process counters (since start) for the Pipeline panel."""
+
     requests: int = 0
+    successes: int = 0
     cached: int = 0
     hits: int = 0
     errors: int = 0
     rate_limited: int = 0
+    timeouts: int = 0
+    cooldown_skips: int = 0
     budget_skips: int = 0
     last_ok_at: datetime | None = None
     last_error_at: datetime | None = None
@@ -64,23 +79,22 @@ def cache_key(name: str, query: str, language: str | None) -> str:
 
 
 class SearchService:
+    """Pacing (``min_interval_seconds``) and cooldowns live in ``search_provider_state``, so
+    every process using the same database (the app, ``diagnose``, ``evaluate``) shares them."""
+
     def __init__(
         self,
         session_factory: sessionmaker,
         *,
         transport: httpx.AsyncBaseTransport | None = None,
         now: Callable[[], datetime] = utcnow,
-        monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self.session_factory = session_factory
         self.transport = transport
         self.now = now
-        self.monotonic = monotonic
         self.sleep = sleep
         self.health: dict[str, ProviderHealth] = {}
-        self._last_request: dict[str, float] = {}
-        self._cooldown_until: dict[str, float] = {}
         self._locks: dict[tuple[str, int], asyncio.Lock] = {}
 
     def _lock(self, name: str) -> asyncio.Lock:
@@ -93,6 +107,76 @@ class SearchService:
     def _health(self, name: str) -> ProviderHealth:
         return self.health.setdefault(name, ProviderHealth())
 
+    # --- shared provider state ----------------------------------------------------------
+
+    def _with_state(self, name: str, change: Callable[[SearchProviderState], object]):
+        """Run ``change`` on the provider's row inside one write transaction (the no-op
+        UPDATE takes SQLite's write lock first, so two processes cannot interleave)."""
+        for attempt in range(2):
+            try:
+                with self.session_factory() as session:
+                    session.execute(
+                        update(SearchProviderState)
+                        .where(SearchProviderState.provider == name)
+                        .values(provider=name)
+                    )
+                    row = session.get(SearchProviderState, name)
+                    if row is None:
+                        row = SearchProviderState(provider=name, consecutive_errors=0)
+                        session.add(row)
+                    out = change(row)
+                    row.updated_at = self.now()
+                    session.commit()
+                    return out
+            except IntegrityError:  # another process inserted the row first
+                if attempt:
+                    raise
+        return None  # pragma: no cover
+
+    def state(self, name: str) -> SearchProviderState | None:
+        with self.session_factory() as session:
+            return session.get(SearchProviderState, name)
+
+    def cooldown_remaining(self, name: str) -> float:
+        row = self.state(name)
+        if row is None or row.cooldown_until is None:
+            return 0.0
+        return max(0.0, (row.cooldown_until - self.now()).total_seconds())
+
+    def _reserve_slot(self, name: str, interval: float) -> float:
+        """Claim the next request slot; returns how long to wait for it."""
+        now = self.now()
+
+        def claim(row: SearchProviderState) -> float:
+            slot = now
+            if row.last_request_at is not None and interval > 0:
+                slot = max(now, row.last_request_at + timedelta(seconds=interval))
+            row.last_request_at = slot
+            return (slot - now).total_seconds()
+
+        return float(self._with_state(name, claim) or 0.0)
+
+    def _cool_down(self, name: str, seconds: float) -> None:
+        until = self.now() + timedelta(seconds=seconds)
+
+        def set_until(row: SearchProviderState) -> None:
+            if row.cooldown_until is None or row.cooldown_until < until:
+                row.cooldown_until = until
+
+        self._with_state(name, set_until)
+
+    def _record(self, name: str, error: str | None) -> None:
+        def change(row: SearchProviderState) -> None:
+            if error is None:
+                row.consecutive_errors = 0
+            else:
+                row.consecutive_errors = (row.consecutive_errors or 0) + 1
+                row.last_error = error[:500]
+
+        self._with_state(name, change)
+
+    # --- searching ----------------------------------------------------------------------
+
     async def search(
         self,
         config: SearchProviderConfig,
@@ -102,18 +186,27 @@ class SearchService:
         language: str | None,
         limit: int | None = None,
         cache_hours: float = 24,
+        empty_cache_minutes: float = 10,
+        store: bool = True,
     ) -> SearchOutcome:
+        """One query. ``store=False`` (dry runs) reads the cache but never writes it."""
         name = config.name
         limit = limit or config.max_results
         outcome = SearchOutcome(provider=name, query=query)
         health = self._health(name)
         key = cache_key(name, query, language)
         if cache_hours > 0:
-            hits = self._cached(key, cache_hours)
+            hits = self._cached(key, cache_hours, empty_cache_minutes)
             if hits is not None:
                 health.cached += 1
                 outcome.hits, outcome.cached = hits[:limit], True
                 return outcome
+        cooling = self.cooldown_remaining(name)
+        if cooling > 0:  # wait for the provider: not an error, no request
+            health.cooldown_skips += 1
+            outcome.skipped, outcome.cooldown_seconds = "cooldown", cooling
+            outcome.error = f"{name}: rate limited, cooling down for {math.ceil(cooling)} s"
+            return outcome
         async with (
             self._lock(name),
             httpx.AsyncClient(
@@ -130,15 +223,24 @@ class SearchService:
                 outcome.error = message
                 if isinstance(exc, QuotaExhausted):
                     health.budget_skips += 1
+                    outcome.skipped = "budget"
                 else:
-                    health.errors += 1
+                    if isinstance(exc, RateLimited):
+                        outcome.cooldown_seconds = self.cooldown_remaining(name)
+                    elif is_timeout(exc):
+                        health.timeouts += 1
+                    else:
+                        health.errors += 1
                     health.last_error, health.last_error_at = message[:500], self.now()
+                    self._record(name, message)
                 outcome.raw = scrub(provider.last_raw, *provider.secrets())
                 return outcome
             outcome.raw = scrub(provider.last_raw, *provider.secrets())
+        health.successes += 1
         health.hits += len(outcome.hits)
         health.last_ok_at = self.now()
-        if cache_hours > 0:
+        self._record(name, None)
+        if store and cache_hours > 0 and (outcome.hits or empty_cache_minutes > 0):
             self._store(key, name, query, outcome.hits)
         return outcome
 
@@ -153,25 +255,26 @@ class SearchService:
         config = provider.config
         name = config.name
         health = self._health(name)
-        cooldown = self._cooldown_until.get(name, 0.0) - self.monotonic()
-        if cooldown > 0:
-            raise FetchError(f"{name}: rate limited, cooling down for {int(cooldown) + 1} s")
         for attempt in range(2):
             quota = self._quota(config)
             if config.cost_per_request_usd and quota.reads_allowed() < 1:
                 raise QuotaExhausted(f"{name}: monthly spend cap reached")
-            await self._wait_turn(name, config.min_interval_seconds)
+            if quota.daily_request_budget is not None and (
+                quota.requests_today >= quota.daily_request_budget
+            ):
+                raise QuotaExhausted(f"{name}: daily request budget reached")
+            wait = self._reserve_slot(name, config.min_interval_seconds or 0.0)
+            if wait > 0:
+                await self.sleep(wait)
             try:
                 return await provider.search(query, since, language, limit, quota)
             except RateLimited as exc:
                 health.rate_limited += 1
-                wait = exc.retry_after
-                if attempt == 0 and wait is not None and wait <= RETRY_INLINE_SECONDS:
-                    await self.sleep(wait)
+                retry = exc.retry_after
+                if attempt == 0 and retry is not None and retry <= RETRY_INLINE_SECONDS:
+                    await self.sleep(retry)
                     continue
-                self._cooldown_until[name] = self.monotonic() + (
-                    wait if wait is not None else DEFAULT_COOLDOWN_SECONDS
-                )
+                self._cool_down(name, retry if retry is not None else DEFAULT_COOLDOWN_SECONDS)
                 raise
             finally:
                 health.requests += quota.new_requests
@@ -179,14 +282,6 @@ class SearchService:
                     quota.record_reads(quota.new_requests)
                 self._save_usage(usage_id(config), quota)
         raise FetchError(f"{name}: rate limited")  # pragma: no cover
-
-    async def _wait_turn(self, name: str, interval: float) -> None:
-        last = self._last_request.get(name)
-        if last is not None and interval > 0:
-            wait = last + interval - self.monotonic()
-            if wait > 0:
-                await self.sleep(wait)
-        self._last_request[name] = self.monotonic()
 
     def _quota(self, config: SearchProviderConfig) -> Quota:
         day, month = usage_periods(self.now())
@@ -219,10 +314,17 @@ class SearchService:
         quota.new_requests = quota.new_reads = 0
         quota.new_spend_usd = 0.0
 
-    def _cached(self, key: str, cache_hours: float) -> list[SearchHit] | None:
+    def _cached(
+        self, key: str, cache_hours: float, empty_cache_minutes: float = 10
+    ) -> list[SearchHit] | None:
         with self.session_factory() as session:
             row = session.get(SearchCacheEntry, key)
-            if row is None or row.created_at < self.now() - timedelta(hours=cache_hours):
+            if row is None:
+                return None
+            max_age = timedelta(hours=cache_hours)
+            if not row.hits:  # an empty answer is only trusted briefly
+                max_age = min(max_age, timedelta(minutes=empty_cache_minutes))
+            if max_age <= timedelta(0) or row.created_at < self.now() - max_age:
                 return None
             return [SearchHit.from_dict(h) for h in row.hits or []]
 

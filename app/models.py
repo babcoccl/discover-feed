@@ -170,8 +170,18 @@ class Story(Base):
     image_source: Mapped[str | None] = mapped_column(String(10))
     """``ImageSource`` of the newest view's image (Pipeline stats)."""
     enrich_status: Mapped[str | None] = mapped_column(String(10), index=True)
-    """Web-search enrichment: NULL (never) | ``pending`` | ``done`` | ``failed``."""
+    """Web-search enrichment: NULL (never) | ``pending`` | ``retry`` (no provider answered;
+    due at ``enrich_next_attempt_at``) | ``done`` | ``failed``."""
     enrich_started_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    enrich_next_attempt_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    enrich_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    """Failed passes in a row (retry backoff: 2 min doubling to 60 min)."""
+    enrich_wait_until: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    """The brief waits for enrichment until then (set once, when first admitted)."""
+    enrich_passes: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    """Completed passes (the second pass runs ``second_pass_hours`` after the first)."""
+    enrich_regen_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    """When late sources last re-generated this story (``late_regen_max_per_hour``)."""
     enriched_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     enrich_added: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     enrich_regens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
@@ -662,6 +672,9 @@ class EnrichmentCandidate(Base):
     """``accepted`` | ``rejected``."""
     reason: Mapped[str] = mapped_column(String(40), default="")
     similarity: Mapped[float | None] = mapped_column(Float)
+    """Title + snippet vs. headlines (NULL when the hit had no snippet)."""
+    title_similarity: Mapped[float | None] = mapped_column(Float)
+    shared_entities: Mapped[int | None] = mapped_column(Integer)
     text_similarity: Mapped[float | None] = mapped_column(Float)
     article_id: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
@@ -677,3 +690,18 @@ class SearchCacheEntry(Base):
     query: Mapped[str] = mapped_column(Text, default="")
     hits: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
+
+
+class SearchProviderState(Base):
+    """Per-provider pacing and cooldown shared by every process (the app and the CLI tools),
+    so a ``diagnose`` run cannot trigger a 429 the app then pays for."""
+
+    __tablename__ = "search_provider_state"
+
+    provider: Mapped[str] = mapped_column(String(30), primary_key=True)
+    last_request_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    """The latest reserved request slot (may be slightly in the future)."""
+    cooldown_until: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    consecutive_errors: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    last_error: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[datetime | None] = mapped_column(UTCDateTime)

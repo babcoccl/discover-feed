@@ -218,17 +218,30 @@ update it when fixtures or defaults change. README "Tuning clustering" has the f
   cache in `search_cache`, budgets in `source_usage` as `search:<name>`, in-memory health and
   cooldown), `app/enrich/` (`query`, `filters`, `fetch` = Extractor + SSRF `Guard`,
   `service.Enricher`). Pipeline: `Pipeline.cluster()` calls `enrich()` before queuing
-  summaries; the worker skips `enrich_status = pending` stories for `wait_seconds`.
+  summaries; the worker skips `enrich_status = pending|retry` stories until
+  `enrich_wait_until` (first admission + `wait_seconds`). `schedule()` admits only what
+  the first provider can serve in `wait_seconds`; no provider answering means
+  `enrich_status = retry` + `enrich_next_attempt_at` (2 min doubling to 60), never `done`.
+- Provider pacing/cooldown is shared DB state (`search_provider_state`): tests that expect
+  a fresh provider after a 429 must delete that row (or use a new DB). GDELT
+  `min_interval_seconds` is floored at 5, so fake-GDELT tests pass `sleep=no_sleep` (and a
+  `now=` clock to step through cooldowns/backoffs).
 - Enrichment members: `Article.origin = "enrichment"`, `source_id = web:<domain>` (no
   `sources` row; `SourceNames.get` falls back to the domain), `anchor_article_id` re-pins
   them after `--rebuild`. Queries over members that feed alerts, cards or profile visibility
   must filter `origin != "enrichment"`.
 - Debug: `python -m app.enrich.diagnose --auto|--story-id N [--dry-run]`,
-  `python -m app.enrich.evaluate --stories 30 --markdown` (Windows:
+  `python -m app.enrich.evaluate --stories 30 --markdown [--provider gdelt] [--wait]`, in
+  Docker `docker exec discover-feed python -m app.enrich.evaluate ...` (both read-only;
+  exit 3 during a provider cooldown) (Windows:
   `.venv\Scripts\python -m app.enrich.diagnose ...`). Admin: `POST /api/admin/enrich`.
 - Tests: `tests/test_enrich.py` (fake GDELT/SearXNG via `httpx.MockTransport`, a fake page
   transport + `Guard(resolver)` for SSRF; never call real providers). Docker E2E serves a
   GDELT-shaped `/gdelt` from the fixture server (`DISCOVER_E2E_ENRICH=1` profile).
+  The fixture server's `--gdelt-faults 429,limit,timeout,empty,429` serves those failure
+  modes first; `scripts/docker_e2e.py` requires all of them served (`/gdelt-stats` on
+  :8081) and stories still enriched afterwards. Expect a longer run (5 s GDELT pacing, 2 min
+  first retry).
 - Real-provider relevance is unverified until someone runs `diagnose`/`evaluate` on live data.
 
 ## Card images
