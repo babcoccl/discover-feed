@@ -51,7 +51,7 @@ class GdeltProvider(SearchProvider):
         try:
             response = await self.client.get(self.config.base_url or GDELT_API, params=params)
         except httpx.TimeoutException as exc:
-            raise ProviderTimeout(f"GDELT request failed: {type(exc).__name__}: {exc}") from None
+            raise ProviderTimeout(f"GDELT request timed out ({type(exc).__name__})") from None
         except Exception as exc:
             raise FetchError(f"GDELT request failed: {type(exc).__name__}: {exc}") from None
         self.last_raw = response.text[:4000]
@@ -109,7 +109,7 @@ class SearxngProvider(SearchProvider):
         try:
             response = await self.client.get(f"{base}/search", params=params)
         except httpx.TimeoutException as exc:
-            raise ProviderTimeout(f"SearXNG request failed: {type(exc).__name__}: {exc}") from None
+            raise ProviderTimeout(f"SearXNG request timed out ({type(exc).__name__})") from None
         except Exception as exc:
             raise FetchError(f"SearXNG request failed: {type(exc).__name__}: {exc}") from None
         self.last_raw = response.text[:4000]
