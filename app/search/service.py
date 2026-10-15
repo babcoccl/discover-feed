@@ -16,13 +16,22 @@ from sqlalchemy.orm import sessionmaker
 from app.config import SearchProviderConfig
 from app.ingest import USER_AGENT, usage_periods
 from app.models import SearchCacheEntry, SearchProviderState, SourceUsage, utcnow
-from app.search.base import SearchHit, SearchProvider, create_provider, is_timeout
+from app.search.base import (
+    NotAuthorized,
+    QueryRejected,
+    SearchHit,
+    SearchProvider,
+    TransientError,
+    create_provider,
+    is_timeout,
+)
 from app.sources.api import scrub
 from app.sources.base import FetchError, Quota, QuotaExhausted, RateLimited
 
 RETRY_INLINE_SECONDS = 10.0
 """A Retry-After this short is waited out once; longer ones put the provider on cooldown."""
 DEFAULT_COOLDOWN_SECONDS = 60.0
+TRANSIENT_RETRY_SECONDS = 2.0
 
 
 @dataclass
@@ -37,6 +46,11 @@ class SearchOutcome:
     """``cooldown`` | ``budget``: no request was sent."""
     cooldown_seconds: float = 0.0
     """How long the provider is cooling down after this search (0: not)."""
+    kind: str | None = None
+    """Error class: ``rate_limited`` | ``timeout`` | ``transient`` | ``query_rejected`` |
+    ``auth`` | ``budget`` | ``cooldown`` | ``error``."""
+    requests: int = 0
+    """HTTP requests actually sent for this search (0: cached or skipped)."""
 
     @property
     def ok(self) -> bool:
@@ -55,6 +69,8 @@ class ProviderHealth:
     errors: int = 0
     rate_limited: int = 0
     timeouts: int = 0
+    transient_errors: int = 0
+    query_rejected: int = 0
     cooldown_skips: int = 0
     budget_skips: int = 0
     last_ok_at: datetime | None = None
@@ -205,6 +221,7 @@ class SearchService:
         if cooling > 0:  # wait for the provider: not an error, no request
             health.cooldown_skips += 1
             outcome.skipped, outcome.cooldown_seconds = "cooldown", cooling
+            outcome.kind = "cooldown"
             outcome.error = f"{name}: rate limited, cooling down for {math.ceil(cooling)} s"
             return outcome
         async with (
@@ -216,26 +233,43 @@ class SearchService:
             ) as client,
         ):
             provider = create_provider(config, client)
+            sent_before = health.requests
             try:
                 outcome.hits = await self._call(provider, query, since, language, limit)
             except FetchError as exc:
+                outcome.requests = health.requests - sent_before
                 message = scrub(str(exc), *provider.secrets())
                 outcome.error = message
                 if isinstance(exc, QuotaExhausted):
                     health.budget_skips += 1
-                    outcome.skipped = "budget"
+                    outcome.skipped = outcome.kind = "budget"
                 else:
                     if isinstance(exc, RateLimited):
+                        outcome.kind = "rate_limited"
                         outcome.cooldown_seconds = self.cooldown_remaining(name)
                     elif is_timeout(exc):
+                        outcome.kind = "timeout"
                         health.timeouts += 1
+                    elif isinstance(exc, NotAuthorized):
+                        outcome.kind = "auth"
+                        health.errors += 1
+                        self._cool_down(name, exc.retry_after)
+                        outcome.cooldown_seconds = self.cooldown_remaining(name)
+                    elif isinstance(exc, QueryRejected):
+                        outcome.kind = "query_rejected"
+                        health.query_rejected += 1
+                    elif isinstance(exc, TransientError):
+                        outcome.kind = "transient"
+                        health.transient_errors += 1
                     else:
+                        outcome.kind = "error"
                         health.errors += 1
                     health.last_error, health.last_error_at = message[:500], self.now()
                     self._record(name, message)
                 outcome.raw = scrub(provider.last_raw, *provider.secrets())
                 return outcome
             outcome.raw = scrub(provider.last_raw, *provider.secrets())
+            outcome.requests = health.requests - sent_before
         health.successes += 1
         health.hits += len(outcome.hits)
         health.last_ok_at = self.now()
@@ -275,6 +309,11 @@ class SearchService:
                     await self.sleep(retry)
                     continue
                 self._cool_down(name, retry if retry is not None else DEFAULT_COOLDOWN_SECONDS)
+                raise
+            except TransientError:
+                if attempt == 0:  # empty body / malformed JSON: once more, never a cooldown
+                    await self.sleep(TRANSIENT_RETRY_SECONDS)
+                    continue
                 raise
             finally:
                 health.requests += quota.new_requests

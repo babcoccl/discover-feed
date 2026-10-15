@@ -1,6 +1,7 @@
 """Built-in search providers: GDELT (default, no key), SearXNG, Guardian, NewsData, Brave."""
 
 import json
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
@@ -9,8 +10,10 @@ import httpx
 from app.search.base import (
     LANGUAGE_NAMES,
     ProviderTimeout,
+    QueryRejected,
     SearchHit,
     SearchProvider,
+    TransientError,
     language_code,
     register,
 )
@@ -18,6 +21,8 @@ from app.sources.api import parse_datetime, retry_after_seconds, scrub
 from app.sources.base import FetchError, Quota, RateLimited
 from app.sources.guardian import GUARDIAN_API, GuardianAdapter
 from app.sources.newsdata import NEWSDATA_API, NewsDataAdapter
+
+logger = logging.getLogger(__name__)
 
 GDELT_API = "https://api.gdeltproject.org/api/v2/doc/doc"
 BRAVE_API = "https://api.search.brave.com/res/v1/news/search"
@@ -60,14 +65,18 @@ class GdeltProvider(SearchProvider):
         if response.status_code >= 400:
             raise FetchError(f"GDELT HTTP {response.status_code}")
         if not response.content.strip():  # transient: never cached as "no results"
-            raise FetchError("GDELT returned an empty body")
+            raise TransientError("GDELT returned an empty body")
         try:
             body = response.json()
         except (json.JSONDecodeError, UnicodeDecodeError):
             text = response.text.strip()
-            if "limit requests" in text.lower():  # GDELT answers 200 + plain text
+            lower = text.lower()
+            if "limit requests" in lower:  # GDELT answers 200 + plain text
                 raise RateLimited(f"GDELT rate limit: {text[:200]}", 5.0) from None
-            raise FetchError(f"GDELT error: {text[:200] or 'not JSON'}") from None
+            if "too short" in lower or "too long" in lower or "too common" in lower:
+                raise QueryRejected(f"GDELT rejected the query: {text[:200]}") from None
+            logger.warning("GDELT answered plain text for %r: %s", query, text[:2000])
+            raise TransientError(f"GDELT error: {text[:200] or 'not JSON'}") from None
         articles = body.get("articles", []) if isinstance(body, dict) else None
         if not isinstance(articles, list):
             raise FetchError("GDELT returned an unexpected JSON shape")

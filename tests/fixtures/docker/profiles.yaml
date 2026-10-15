@@ -6,11 +6,16 @@ profiles:
 - id: personal-reader
   name: Personal Reader
   description: Long-form tech, science and culture reading, summarised daily.
-  # Web-search enrichment against the fixture server's fake GDELT (/gdelt). Fixture
-  # articles have fixed past dates, hence the wide age / time-gap windows.
+  # Web-search enrichment against the fixture server's fake TinyFish (/tinyfish, keyless:
+  # the fake needs no key) with its fake GDELT (/gdelt) as the fallback. Fixture articles
+  # have fixed past dates, hence the wide age / time-gap windows.
   enrichment:
     enabled: true
     providers:
+    - name: tinyfish
+      base_url: http://otherwire:8081/tinyfish
+      min_interval_seconds: 2
+      timeout_seconds: 3
     - name: gdelt
       base_url: http://otherwire:8081/gdelt
       min_interval_seconds: 5

@@ -10,6 +10,7 @@ profile by themselves (see ``story_views.load`` / ``profiles.get_story``).
 
 import asyncio
 import logging
+import re
 import threading
 import uuid
 from collections import Counter
@@ -24,7 +25,13 @@ from app.config import AppConfig, EnrichmentConfig, LLMRole
 from app.enrich.domains import registrable_domain
 from app.enrich.fetch import CandidateFetcher, FetchedPage
 from app.enrich.filters import StoryContext, pre_filter, snippet_check, text_check, title_check
-from app.enrich.query import build_queries, provider_queries
+from app.enrich.query import (
+    build_queries,
+    drop_short_terms,
+    provider_queries,
+    signal_tokens,
+    strip_boilerplate,
+)
 from app.lifecycle import PRE_CLUSTER
 from app.models import (
     ENRICHMENT,
@@ -50,6 +57,10 @@ BATCH = 20
 RETRY_FIRST = timedelta(minutes=2)
 RETRY_MAX = timedelta(minutes=60)
 UNAVAILABLE = "provider_unavailable"
+SKIPPED = "skipped:"
+"""``enrich_reason`` prefix of stories not searched: ``skipped:pattern`` (the headline
+matches ``skip_title_patterns``) or ``skipped:no_signal`` (too few names / numbers)."""
+QUERY_TOO_SHORT = "query_too_short"
 RECOVERED = "recovered"
 
 
@@ -235,6 +246,37 @@ class Enricher:
         last = story.enriched_at or story.enrich_started_at
         return last is None or last < now - timedelta(hours=self.config.reenrich_hours)
 
+    def skip_reason(self, headlines: list[str]) -> str | None:
+        """``skipped:pattern`` / ``skipped:no_signal`` for stories other outlets are
+        unlikely to cover (Show HN posts, opinion, vague headlines); None to search."""
+        if not headlines:
+            return None
+        cfg = self.config
+        main = headlines[0].strip()
+        if any(re.search(p, main, re.IGNORECASE) for p in cfg.skip_title_patterns):
+            return f"{SKIPPED}pattern"
+        if cfg.min_signal_tokens and max(len(signal_tokens(h)) for h in headlines) < (
+            cfg.min_signal_tokens
+        ):
+            return f"{SKIPPED}no_signal"
+        return None
+
+    def _skip_unsearchable(self, session: Session, ids: list[int], now: datetime) -> list[int]:
+        """Mark stories not worth a search ``done`` (with the skip reason) right away, so
+        their briefs never wait; the rest are returned."""
+        keep = []
+        for sid in ids:
+            found = self.context(session, sid)
+            reason = self.skip_reason(found[0].headlines) if found else None
+            if reason is None:
+                keep.append(sid)
+                continue
+            story = session.get(Story, sid)
+            story.enrich_status, story.enrich_reason = "done", reason
+            story.enriched_at, story.enrich_next_attempt_at = now, None
+            story.enrich_passes = (story.enrich_passes or 0) + 1
+        return keep
+
     @staticmethod
     def publishers(session: Session, story_id: int) -> int:
         urls = session.scalars(select(Article.url).where(Article.story_id == story_id))
@@ -257,7 +299,7 @@ class Enricher:
                     and story.state != StoryState.MERGED
                 ]
             else:
-                ids = self.eligible(session, story_ids)
+                ids = self._skip_unsearchable(session, self.eligible(session, story_ids), now)
                 ids = ids[: self.capacity(session)]
             wait = timedelta(seconds=self.config.wait_seconds)
             for sid in ids:
@@ -274,17 +316,18 @@ class Enricher:
         return len(ids)
 
     def capacity(self, session: Session) -> int:
-        """Stories the first provider can serve within ``wait_seconds`` (its
-        ``min_interval_seconds`` x ``max_queries_per_story``, minus a cooldown), less those
-        already waiting."""
+        """Stories the first provider not cooling down can serve within ``wait_seconds``
+        (its ``min_interval_seconds`` x ``max_queries_per_story``, minus a cooldown if all
+        are cooling), less those already waiting."""
         cfg = self.config
         if not cfg.providers:
             return 0
-        primary = cfg.providers[0]
+        cooling = {p.name: self.search.cooldown_remaining(p.name) for p in cfg.providers}
+        primary = next((p for p in cfg.providers if cooling[p.name] <= 0), cfg.providers[0])
         per_story = (primary.min_interval_seconds or 0.0) * cfg.max_queries_per_story
         if per_story <= 0:
             return 10**6
-        available = cfg.wait_seconds - self.search.cooldown_remaining(primary.name)
+        available = cfg.wait_seconds - min(cooling.values())
         queued = session.scalar(
             select(func.count()).select_from(Story).where(Story.enrich_status == "pending")
         )
@@ -471,11 +514,18 @@ class Enricher:
                 self._finish(result)
             return
         story, anchor = found
+        skip = self.skip_reason(story.headlines)
+        if skip:
+            result.answered, result.reason = True, skip
+            if not dry_run:
+                self._finish(result)
+            return
+        headlines = [strip_boilerplate(h, cfg.strip_title_prefixes) for h in story.headlines]
         need = max(0, min(cfg.max_added_sources, cfg.target_sources - result.publishers_before))
         if dry_run:
             need = need or cfg.max_added_sources
         base, result.query_mode = await build_queries(
-            story.headlines,
+            headlines,
             mode=cfg.query_mode.value,
             role=self.llm_role,
             transport=self.llm_transport,
@@ -483,7 +533,11 @@ class Enricher:
         llm = base if result.query_mode == "llm" else None
         plans = {
             p.name: provider_queries(
-                p.name, story.headlines, llm=llm, max_queries=cfg.max_queries_per_story
+                p.name,
+                headlines,
+                llm=llm,
+                max_queries=cfg.max_queries_per_story,
+                strip_prefixes=cfg.strip_title_prefixes,
             )
             for p in cfg.providers
         }
@@ -502,27 +556,15 @@ class Enricher:
                 break
             fresh: list[Candidate] = []
             for query in plans[provider.name]:  # a looser query only after 0 hits
-                outcome = await self.search.search(
-                    provider,
-                    query,
-                    since=since,
-                    language=cfg.language,
-                    cache_hours=cfg.cache_hours,
-                    empty_cache_minutes=cfg.empty_cache_minutes,
-                    store=not dry_run,
-                )
-                result.searches.append(
-                    {
-                        "provider": provider.name,
-                        "query": query,
-                        "hits": len(outcome.hits),
-                        "cached": outcome.cached,
-                        "error": outcome.error,
-                        "skipped": outcome.skipped,
-                        "cooldown_seconds": round(outcome.cooldown_seconds, 1),
-                        "raw": outcome.raw[:600],
-                    }
-                )
+                outcome = await self._search(provider, query, since, dry_run, result)
+                if outcome.kind == "query_rejected":
+                    rebuilt = drop_short_terms(provider.name, query)
+                    if rebuilt:  # rebuilt once without the short keywords
+                        query = rebuilt
+                        outcome = await self._search(provider, query, since, dry_run, result)
+                    if outcome.kind == "query_rejected":
+                        result.searches[-1]["skipped"] = QUERY_TOO_SHORT
+                        continue  # the looser query may be valid; never a cooldown
                 if not outcome.ok:
                     break
                 result.answered = True
@@ -536,12 +578,45 @@ class Enricher:
                     break
             await self._judge(fresh, story, need - len(result.accepted), accepted_texts)
             result.candidates += fresh
+        failures = [s for s in result.searches if s.get("error")]
+        if (
+            not result.answered
+            and failures
+            and all(s.get("kind") == "query_rejected" for s in failures)
+        ):
+            result.answered, result.reason = True, QUERY_TOO_SHORT  # retrying cannot help
         if not result.answered:
-            failures = [s for s in result.searches if s.get("error")]
             last = failures[-1]["error"] if failures else "no provider answered"
             result.status, result.reason = "retry", f"{UNAVAILABLE}: {last}"[:500]
         if not dry_run:
             self._finish(result, anchor_id=anchor.id)
+
+    async def _search(self, provider, query: str, since: datetime, dry_run: bool, result):
+        cfg = self.config
+        outcome = await self.search.search(
+            provider,
+            query,
+            since=since,
+            language=cfg.language,
+            cache_hours=cfg.cache_hours,
+            empty_cache_minutes=cfg.empty_cache_minutes,
+            store=not dry_run,
+        )
+        result.searches.append(
+            {
+                "provider": provider.name,
+                "query": query,
+                "hits": len(outcome.hits),
+                "cached": outcome.cached,
+                "error": outcome.error,
+                "kind": outcome.kind,
+                "requests": outcome.requests,
+                "skipped": outcome.skipped,
+                "cooldown_seconds": round(outcome.cooldown_seconds, 1),
+                "raw": outcome.raw[:600],
+            }
+        )
+        return outcome
 
     async def _judge(
         self, candidates: list[Candidate], story: StoryContext, need: int, accepted_texts: list
@@ -679,10 +754,10 @@ class Enricher:
 
     def _schedule_retry(self, story: Story, result: StoryEnrichment, now: datetime) -> None:
         """No provider answered: not done (``enriched_at`` stays unset); retry after a
-        backoff, or when the provider's cooldown ends if that was the only reason."""
+        backoff, or when the first provider's cooldown ends if that was the only reason."""
         tried = [s for s in result.searches if s.get("error")]
         cooling = [c for s in tried if (c := s.get("cooldown_seconds") or 0.0) > 0]
-        wait_out = timedelta(seconds=max(cooling) + 1) if cooling else timedelta(0)
+        wait_out = timedelta(seconds=min(cooling) + 1) if cooling else timedelta(0)
         if tried and all(s.get("skipped") == "cooldown" for s in tried):
             delay = wait_out or RETRY_FIRST  # waiting for a cooldown is not a failed attempt
         else:
@@ -781,6 +856,13 @@ class Enricher:
             .select_from(Story)
             .where(Story.enriched_at >= since, Story.enrich_reason.like(f"{RECOVERED}%"))
         )
+        skipped = dict(
+            session.execute(
+                select(Story.enrich_reason, func.count())
+                .where(Story.enriched_at >= since, Story.enrich_reason.like(f"{SKIPPED}%"))
+                .group_by(Story.enrich_reason)
+            ).all()
+        )
         waiting = (pending or 0) + (retry or 0)
         providers = []
         for row in budget_use(session, self.config.providers, self.now()):
@@ -810,6 +892,7 @@ class Enricher:
             ),
             "waiting": waiting,
             "recovered": recovered or 0,
+            "skipped": {k.removeprefix(SKIPPED): v for k, v in sorted(skipped.items())},
             "cooling": [
                 {"provider": p["provider"], "seconds": p["cooldown_seconds"], "waiting": waiting}
                 for p in providers
@@ -833,6 +916,13 @@ def summarize_run(results: list[StoryEnrichment]) -> dict:
         "candidates": sum(len(r.candidates) for r in results),
         "reject_reasons": dict(reasons.most_common(8)),
         "provider_errors": len(errors),
+        "skipped": dict(
+            Counter(
+                r.reason.removeprefix(SKIPPED)
+                for r in results
+                if r.reason and r.reason.startswith(SKIPPED)
+            )
+        ),
     }
 
 

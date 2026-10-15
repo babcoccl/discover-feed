@@ -214,7 +214,12 @@ update it when fixtures or defaults change. README "Tuning clustering" has the f
 
 ## Web-search enrichment
 
-- Code: `app/search/` (providers `gdelt|searxng|guardian|newsdata|brave`, `SearchService`:
+- Code: `app/search/` (providers `tinyfish` (`app/search/tinyfish.py`, default primary,
+  `TINYFISH_API_KEY`) then `gdelt` (fallback), plus `searxng|guardian|newsdata|brave`;
+  errors: `RateLimited` cools down, `TransientError` (empty / malformed / unknown text) is
+  retried once and never cools down, `QueryRejected` (GDELT "too short") makes the enricher
+  rebuild the query once via `query.drop_short_terms`, `NotAuthorized` (401) rests the
+  provider 1 h; `SearchOutcome.kind` / `.requests` feed diagnose/evaluate; `SearchService`:
   cache in `search_cache`, budgets in `source_usage` as `search:<name>`, in-memory health and
   cooldown), `app/enrich/` (`query`, `filters`, `fetch` = Extractor + SSRF `Guard`,
   `service.Enricher`). Pipeline: `Pipeline.cluster()` calls `enrich()` before queuing
@@ -224,8 +229,12 @@ update it when fixtures or defaults change. README "Tuning clustering" has the f
   `enrich_status = retry` + `enrich_next_attempt_at` (2 min doubling to 60), never `done`.
 - Provider pacing/cooldown is shared DB state (`search_provider_state`): tests that expect
   a fresh provider after a 429 must delete that row (or use a new DB). GDELT
-  `min_interval_seconds` is floored at 5, so fake-GDELT tests pass `sleep=no_sleep` (and a
-  `now=` clock to step through cooldowns/backoffs).
+  `min_interval_seconds` is floored at 5 (tinyfish at 2), so fake-provider tests pass
+  `sleep=no_sleep` (and a `now=` clock to step through cooldowns/backoffs).
+- Skips: `Enricher.skip_reason` (`skip_title_patterns`, `min_signal_tokens` via
+  `query.signal_tokens`) marks stories `done` with `skipped:pattern|no_signal` in
+  `schedule()`. Test headlines need 2+ names/numbers (capitalized words count, the first
+  word too) or they are skipped, e.g. "Fresno council backs new water plant" is skipped.
 - Enrichment members: `Article.origin = "enrichment"`, `source_id = web:<domain>` (no
   `sources` row; `SourceNames.get` falls back to the domain), `anchor_article_id` re-pins
   them after `--rebuild`. Queries over members that feed alerts, cards or profile visibility
@@ -235,9 +244,16 @@ update it when fixtures or defaults change. README "Tuning clustering" has the f
   Docker `docker exec discover-feed python -m app.enrich.evaluate ...` (both read-only;
   exit 3 during a provider cooldown) (Windows:
   `.venv\Scripts\python -m app.enrich.diagnose ...`). Admin: `POST /api/admin/enrich`.
-- Tests: `tests/test_enrich.py` (fake GDELT/SearXNG via `httpx.MockTransport`, a fake page
+- Tests: `tests/test_tinyfish.py` (TinyFish provider, fallback to GDELT, real-headline
+  queries, skips, GDELT too-short; its `Router` sends `*tinyfish*` hosts to a fake TinyFish
+  and the rest to `FakeSearch`). `tests/test_enrich.py` (fake GDELT/SearXNG/TinyFish via `httpx.MockTransport`, a fake page
   transport + `Guard(resolver)` for SSRF; never call real providers). Docker E2E serves a
-  GDELT-shaped `/gdelt` from the fixture server (`DISCOVER_E2E_ENRICH=1` profile).
+  TinyFish-shaped `/tinyfish` (primary, keyless, hits on host `tinywire`) and a
+  GDELT-shaped `/gdelt` (fallback, hits on `otherwire`) from the fixture server
+  (`tests/fixtures/docker/profiles.yaml`). `--tinyfish-faults
+  malformed,malformed,empty,empty,429` (transient ones twice: the client retries once)
+  pushes the first stories to GDELT; `/tinyfish-stats` must show all served and `ok > 0`, and
+  at least one story must get a `tinywire` source.
   The fixture server's `--gdelt-faults 429,limit,timeout,empty,429` serves those failure
   modes first; `scripts/docker_e2e.py` requires all of them served (`/gdelt-stats` on
   :8081) and stories still enriched afterwards. Expect a longer run (5 s GDELT pacing, 2 min

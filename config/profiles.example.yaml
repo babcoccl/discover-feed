@@ -11,9 +11,11 @@ profiles:
     enrichment:
       enabled: false
       providers:
-        - name: gdelt               # free, no key
+        - name: tinyfish            # primary: titles + snippets; key in TINYFISH_API_KEY
+          min_interval_seconds: 2   # 30 requests / minute (lower is raised to 2)
+        - name: gdelt               # free fallback, no key; tried when tinyfish fails or finds nothing
           min_interval_seconds: 6   # GDELT allows one request per 5 s (lower is raised to 5)
-        # A second provider is tried when gdelt fails or finds too little:
+        # More providers are tried when those fail or find too little:
         # - name: guardian
         #   api_key: GUARDIAN_API_KEY  # env var name, never the key
         #   daily_request_budget: 200
@@ -26,6 +28,9 @@ profiles:
       max_added_sources: 3
       wait_seconds: 180
       deny_domains: []
+      # Not searched (rarely covered elsewhere); regexes on the headline:
+      # skip_title_patterns: ["^Show HN", "^Ask HN", "^Tell HN", "^Opinion", "^Letters"]
+      # min_signal_tokens: 2    # skip headlines with fewer distinct names / numbers
     # Topics become feed tabs. Keywords are whole-word and case-insensitive; an empty
     # include list means "every article from the topic's sources".
     topics:

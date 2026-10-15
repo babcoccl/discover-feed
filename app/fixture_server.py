@@ -11,7 +11,11 @@ fixture article (each sentence's words reversed: same vocabulary, no shared phra
 ``--gdelt-faults 429,limit,timeout,empty`` answers the first ``/gdelt`` requests with those
 failure modes (HTTP 429 + Retry-After, GDELT's plain-text 200 "limit requests" reply, a
 reply slower than the client timeout, an empty 200 body) before answering normally;
-``/gdelt-stats`` counts what was served.
+``/gdelt-stats`` counts what was served. A TinyFish-shaped ``/tinyfish`` (the primary
+provider) answers the same matches as structured JSON with snippets, its hits on
+``<tinyfish-wire-base>/wire/<id>`` (a third host name); ``--tinyfish-faults
+empty,malformed,429`` serves those failures first (each transient one twice, as the
+client retries it once) so stories fall back to ``/gdelt``; ``/tinyfish-stats`` counts.
 """
 
 import argparse
@@ -44,8 +48,7 @@ def _page_parts(fixture_dir: Path, article_id: str) -> tuple[str, list[str]] | N
     return title, [p for p in paras if p]
 
 
-def gdelt_json(fixture_dir: Path, query: str, wire_base: str) -> bytes:
-    """Fixture pages whose titles share 2+ words with ``query``, best first (max 3)."""
+def _matches(fixture_dir: Path, query: str) -> list[tuple[int, str, str]]:
     words = set(_WORD.findall(query.split(" sourcelang:")[0].lower()))
     scored = []
     for path in sorted((fixture_dir / "pages").glob("*.html")):
@@ -55,6 +58,11 @@ def gdelt_json(fixture_dir: Path, query: str, wire_base: str) -> bytes:
         shared = len(words & set(_WORD.findall(parts[0].lower())))
         if shared >= 2:
             scored.append((-shared, path.stem, parts[0]))
+    return sorted(scored)[:3]
+
+
+def gdelt_json(fixture_dir: Path, query: str, wire_base: str) -> bytes:
+    """Fixture pages whose titles share 2+ words with ``query``, best first (max 3)."""
     articles = [
         {
             "url": f"{wire_base.rstrip('/')}/wire/{stem}",
@@ -63,9 +71,30 @@ def gdelt_json(fixture_dir: Path, query: str, wire_base: str) -> bytes:
             "language": "English",
             "socialimage": "",
         }
-        for _, stem, title in sorted(scored)[:3]
+        for _, stem, title in _matches(fixture_dir, query)
     ]
     return json.dumps({"articles": articles}).encode()
+
+
+def tinyfish_json(fixture_dir: Path, query: str, wire_base: str) -> bytes:
+    """The same matches in the TinyFish Search API shape, with a snippet (the reworded
+    first paragraph) and the site name."""
+    results = []
+    for n, (_, stem, title) in enumerate(_matches(fixture_dir, query), start=1):
+        parts = _page_parts(fixture_dir, stem)
+        first = parts[1][0] if parts and parts[1] else title
+        snippet = " ".join(reversed(first.rstrip(".!?").split()))[:300]
+        results.append(
+            {
+                "position": n,
+                "site_name": urlsplit(wire_base).hostname or "tinywire",
+                "title": title,
+                "snippet": snippet,
+                "url": f"{wire_base.rstrip('/')}/wire/{stem}",
+            }
+        )
+    body = {"query": query, "results": results, "total_results": len(results), "page": 0}
+    return json.dumps(body).encode()
 
 
 def wire_html(fixture_dir: Path, article_id: str) -> bytes | None:
@@ -88,6 +117,7 @@ def wire_html(fixture_dir: Path, article_id: str) -> bytes | None:
 
 
 FAULTS = ("429", "limit", "timeout", "empty")
+TINYFISH_FAULTS = ("429", "empty", "malformed")
 RETRY_AFTER = 15
 SLOW_SECONDS = 8.0
 
@@ -95,12 +125,12 @@ SLOW_SECONDS = 8.0
 class GdeltFaults:
     """The failure modes to serve first, in order, and counters for ``/gdelt-stats``."""
 
-    def __init__(self, faults: list[str]) -> None:
-        unknown = [f for f in faults if f not in FAULTS]
+    def __init__(self, faults: list[str], known=FAULTS, flag: str = "--gdelt-faults") -> None:
+        unknown = [f for f in faults if f not in known]
         if unknown:
-            raise SystemExit(f"unknown --gdelt-faults {unknown}; choose from {FAULTS}")
+            raise SystemExit(f"unknown {flag} {unknown}; choose from {known}")
         self.queue = list(faults)
-        self.served: dict[str, int] = {"ok": 0, **{f: 0 for f in FAULTS}}
+        self.served: dict[str, int] = {"ok": 0, **{f: 0 for f in known}}
         self.lock = threading.Lock()
 
     def next(self) -> str:
@@ -115,8 +145,11 @@ def make_handler(
     base: str,
     wire_base: str | None = None,
     faults: GdeltFaults | None = None,
+    tinyfish_base: str | None = None,
+    tinyfish_faults: GdeltFaults | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     faults = faults or GdeltFaults([])
+    tf_faults = tinyfish_faults or GdeltFaults([], TINYFISH_FAULTS, "--tinyfish-faults")
 
     class Handler(BaseHTTPRequestHandler):
         def _send(self, status: int, body: bytes, ctype: str, headers=None) -> None:
@@ -144,10 +177,27 @@ def make_handler(
                 self._send(200, b"", "application/json")
             return fault != "ok"
 
+        def _tinyfish_fault(self) -> bool:
+            fault = tf_faults.next()
+            if fault == "429":
+                self._send(
+                    429,
+                    b'{"error":{"code":"RATE_LIMITED","message":"Too many requests"}}',
+                    "application/json",
+                    {"Retry-After": str(RETRY_AFTER)},
+                )
+            elif fault == "empty":
+                self._send(200, b"", "application/json")
+            elif fault == "malformed":
+                self._send(200, b'{"results": [', "application/json")
+            return fault != "ok"
+
         def do_GET(self) -> None:
             path = self.path.split("?", 1)[0]
             body, ctype = None, "text/html; charset=utf-8"
             if wire_base and path == "/gdelt" and self._gdelt_fault():
+                return
+            if wire_base and path == "/tinyfish" and self._tinyfish_fault():
                 return
             if path == "/robots.txt":
                 body, ctype = robots_txt(fixture_dir).encode(), "text/plain"
@@ -161,9 +211,14 @@ def make_handler(
             elif wire_base and path == "/gdelt":
                 query = parse_qs(urlsplit(self.path).query).get("query", [""])[0]
                 body, ctype = gdelt_json(fixture_dir, query, wire_base), "application/json"
-            elif wire_base and path == "/gdelt-stats":
-                with faults.lock:
-                    stats = {**faults.served, "pending_faults": list(faults.queue)}
+            elif wire_base and path == "/tinyfish":
+                query = parse_qs(urlsplit(self.path).query).get("query", [""])[0]
+                hits_base = tinyfish_base or wire_base
+                body, ctype = tinyfish_json(fixture_dir, query, hits_base), "application/json"
+            elif wire_base and path in ("/gdelt-stats", "/tinyfish-stats"):
+                counter = faults if path == "/gdelt-stats" else tf_faults
+                with counter.lock:
+                    stats = {**counter.served, "pending_faults": list(counter.queue)}
                 body, ctype = json.dumps(stats).encode(), "application/json"
             elif wire_base and path.startswith("/wire/"):
                 body = wire_html(fixture_dir, path.removeprefix("/wire/"))
@@ -185,13 +240,24 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8081)
     parser.add_argument("--base", default="http://localhost:8081", help="public URL of this server")
     parser.add_argument("--fixture-dir", type=Path, default=FIXTURE_DIR)
-    parser.add_argument("--wire-base", help="serve /gdelt + /wire/<id> (enrichment E2E)")
+    parser.add_argument("--wire-base", help="serve /gdelt, /tinyfish + /wire/<id> (enrichment E2E)")
+    parser.add_argument("--tinyfish-wire-base", help="host of /tinyfish hits (default: wire)")
+    parser.add_argument(
+        "--tinyfish-faults",
+        default="",
+        help=f"comma-separated, served first: {', '.join(TINYFISH_FAULTS)}",
+    )
     parser.add_argument(
         "--gdelt-faults", default="", help=f"comma-separated, served first: {', '.join(FAULTS)}"
     )
     args = parser.parse_args()
     faults = GdeltFaults([f for f in args.gdelt_faults.split(",") if f])
-    handler = make_handler(args.fixture_dir, args.base, args.wire_base, faults)
+    tf_faults = GdeltFaults(
+        [f for f in args.tinyfish_faults.split(",") if f], TINYFISH_FAULTS, "--tinyfish-faults"
+    )
+    handler = make_handler(
+        args.fixture_dir, args.base, args.wire_base, faults, args.tinyfish_wire_base, tf_faults
+    )
     server = ThreadingHTTPServer((args.host, args.port), handler)
     print(f"fixture feeds from {args.fixture_dir} on :{args.port} as {args.base}", flush=True)
     server.serve_forever()

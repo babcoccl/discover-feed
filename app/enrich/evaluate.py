@@ -7,9 +7,10 @@ accepted page so a person can spot false matches.
     docker exec discover-feed python -m app.enrich.evaluate --stories 20 --markdown
 
 Writes nothing (no status, candidates or search-cache entries); only the shared provider
-pacing / cooldown state and request counts are updated. Refuses during a provider
-cooldown (exit 3) unless ``--wait``. Expect ~``min_interval_seconds`` per query (GDELT:
-5 s or more, up to ``max_queries_per_story`` queries per story).
+pacing / cooldown state and request counts are updated. Refuses while every provider is
+cooling down (exit 3) unless ``--wait``, which also waits whenever a provider starts
+cooling down mid-run ("waiting for gdelt (cooling down)"). Expect ~``min_interval_seconds``
+per query (tinyfish 2 s, GDELT 5 s or more; up to ``max_queries_per_story`` per provider).
 """
 
 import argparse
@@ -19,8 +20,8 @@ from collections import Counter
 
 from sqlalchemy import select
 
-from app.enrich.cli import build, only_providers, respect_cooldowns
-from app.enrich.service import Candidate, StoryEnrichment
+from app.enrich.cli import build, only_providers, respect_cooldowns, wait_for_cooldowns
+from app.enrich.service import SKIPPED, Candidate, StoryEnrichment
 from app.lifecycle import PRE_CLUSTER
 from app.models import Story, StoryState
 
@@ -56,8 +57,16 @@ def summary(results: list[tuple[str, StoryEnrichment]], *, markdown: bool) -> st
             if c.decision != "accepted":
                 rejected.setdefault(c.reason or "unknown", []).append(c)
     searches = [s for _, r in results for s in r.searches]
-    errors = Counter(s["provider"] for s in searches if s.get("error") and not s.get("skipped"))
     skipped = Counter(s["skipped"] for s in searches if s.get("skipped"))
+    errors: dict[tuple[str, str], list[str]] = {}
+    for s in searches:
+        if s.get("error") and not s.get("skipped"):
+            errors.setdefault((s["provider"], s["error"]), []).append(s["query"])
+    story_skips = Counter(
+        r.reason.removeprefix(SKIPPED)
+        for _, r in results
+        if r.reason and r.reason.startswith(SKIPPED)
+    )
     h = "## " if markdown else ""
     lines = [f"{h}Enrichment evaluation ({len(results)} stories, dry run)", ""]
     lines.append(f"- stories with >=1 accepted source: {len(gained)} ({len(gained) / n:.0%})")
@@ -68,10 +77,27 @@ def summary(results: list[tuple[str, StoryEnrichment]], *, markdown: bool) -> st
     accepted = sum(len(r.accepted) for _, r in results)
     lines.append(f"- candidates judged: {judged}, accepted: {accepted}")
     lines.append(
+        f"- stories not searched: {dict(sorted(story_skips.items())) or 'none'}"
+        " (skip_title_patterns / min_signal_tokens)"
+    )
+    lines.append(
         f"- searches: {len(searches)} ({sum(1 for s in searches if s['cached'])} cached, "
         f"{sum(1 for s in searches if not s['hits'] and not s.get('error'))} with 0 hits)"
     )
-    lines.append(f"- provider errors: {dict(errors) or 'none'}; skipped: {dict(skipped) or 'none'}")
+    providers = list(dict.fromkeys(s["provider"] for s in searches))
+    for name in providers:
+        mine = [s for s in searches if s["provider"] == name]
+        lines.append(
+            f"- {name}: {sum(s.get('requests') or 0 for s in mine)} request(s) sent, "
+            f"{sum(1 for s in mine if s.get('ok', not s.get('error')))} answered, "
+            f"{sum(1 for s in mine if s.get('skipped') == 'cooldown')} cooldown skip(s), "
+            f"{sum(1 for s in mine if s.get('error') and not s.get('skipped'))} error(s), "
+            f"{sum(s['hits'] for s in mine)} hit(s)"
+        )
+    lines.append(f"- skipped searches: {dict(skipped) or 'none'}")
+    lines.append(f"- provider errors: {'none' if not errors else ''}")
+    for (provider, error), queries in sorted(errors.items(), key=lambda kv: -len(kv[1])):
+        lines.append(f"  - {provider} x{len(queries)}: {error} (e.g. query {queries[0]!r})")
     retry = [r.story_id for _, r in results if r.status == "retry"]
     if retry:
         lines.append(f"- no provider answered (would retry): {len(retry)} stories")
@@ -109,19 +135,37 @@ def summary(results: list[tuple[str, StoryEnrichment]], *, markdown: bool) -> st
     for title, r in results:
         found = "; ".join(
             f"{s['provider']} {s['query']!r}: "
-            + (s["error"] if s.get("error") else f"{s['hits']} hit(s)")
+            + (
+                f"{s['skipped']}"
+                if s.get("skipped")
+                else s["error"]
+                if s.get("error")
+                else f"{s['hits']} hit(s)" + (" (cached)" if s["cached"] else "")
+            )
             for s in r.searches
+        )
+        top = sorted((c for c in r.candidates if c.decision != "accepted"), key=lambda c: -c.score)[
+            :3
+        ]
+        rejected_top = "; ".join(
+            f"{c.hit.domain or '?'} {c.reason} {_f(c.similarity)}/{_f(c.title_similarity)}"
+            for c in top
         )
         rows.append(
             [
                 f"{r.story_id}: {title[:50]}",
                 str(r.publishers_before),
-                found or "-",
+                found or (r.reason or "-"),
                 str(len(r.candidates)),
                 str(len(r.accepted)),
+                rejected_top or "-",
             ]
         )
-    lines += _table(["story", "publishers", "searches", "candidates", "accepted"], rows, markdown)
+    lines += _table(
+        ["story", "publishers", "searches", "candidates", "accepted", "top rejected"],
+        rows,
+        markdown,
+    )
     return "\n".join(lines)
 
 
@@ -130,7 +174,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--stories", type=int, default=30)
     parser.add_argument("--markdown", action="store_true")
     parser.add_argument("--provider", action="append", help="only this provider (repeatable)")
-    parser.add_argument("--wait", action="store_true", help="wait out a provider cooldown")
+    parser.add_argument(
+        "--wait", action="store_true", help="wait out provider cooldowns (also mid-run)"
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=True,
+        help="always on: evaluate never writes status, candidates or cache entries",
+    )
     args = parser.parse_args(argv)
     factory, enricher = build()
     only_providers(enricher, args.provider)
@@ -148,7 +200,12 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     async def run() -> list[tuple[str, StoryEnrichment]]:
-        return [(t or "", await enricher.enrich_story(i, dry_run=True)) for i, t in rows]
+        out = []
+        for story_id, title in rows:
+            if args.wait:
+                await asyncio.to_thread(wait_for_cooldowns, enricher)
+            out.append((title or "", await enricher.enrich_story(story_id, dry_run=True)))
+        return out
 
     print(summary(asyncio.run(run()), markdown=args.markdown))
     return 0
