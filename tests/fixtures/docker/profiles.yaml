@@ -13,7 +13,8 @@ profiles:
     providers:
     - name: gdelt
       base_url: http://otherwire:8081/gdelt
-      min_interval_seconds: 0
+      min_interval_seconds: 5
+      timeout_seconds: 3
     max_age_hours: 1000000
     max_time_gap_hours: 1000000
     wait_seconds: 60

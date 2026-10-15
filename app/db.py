@@ -249,7 +249,13 @@ _ENRICHMENT_COLUMNS = {
         "enrich_added": "INTEGER NOT NULL DEFAULT 0",
         "enrich_regens": "INTEGER NOT NULL DEFAULT 0",
         "enrich_reason": "TEXT",
+        "enrich_next_attempt_at": "DATETIME",
+        "enrich_attempts": "INTEGER NOT NULL DEFAULT 0",
+        "enrich_wait_until": "DATETIME",
+        "enrich_passes": "INTEGER NOT NULL DEFAULT 0",
+        "enrich_regen_at": "DATETIME",
     },
+    "enrichment_candidates": {"title_similarity": "FLOAT", "shared_entities": "INTEGER"},
     "profiles": {"enrichment_enabled": "BOOLEAN"},
 }
 

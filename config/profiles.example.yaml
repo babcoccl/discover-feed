@@ -12,6 +12,11 @@ profiles:
       enabled: false
       providers:
         - name: gdelt               # free, no key
+          min_interval_seconds: 6   # GDELT allows one request per 5 s (lower is raised to 5)
+        # A second provider is tried when gdelt fails or finds too little:
+        # - name: guardian
+        #   api_key: GUARDIAN_API_KEY  # env var name, never the key
+        #   daily_request_budget: 200
         # - name: searxng
         #   base_url: http://searxng:8080
         # - name: brave

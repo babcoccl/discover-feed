@@ -6,6 +6,7 @@ for one feed. Values in the YAML file may reference environment variables with
 never need to live in the file.
 """
 
+import logging
 import os
 import re
 from enum import StrEnum
@@ -21,6 +22,8 @@ from pydantic import (
     SecretStr,
     model_validator,
 )
+
+logger = logging.getLogger(__name__)
 
 _SLUG = r"^[a-z0-9][a-z0-9_-]*$"
 _ENV_VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
@@ -465,6 +468,10 @@ class AlertsConfig(_Model):
         return self
 
 
+GDELT_MIN_INTERVAL = 5.0
+"""GDELT DOC 2.0 asks for at most one request every 5 seconds."""
+
+
 class SearchProviderConfig(_Model):
     """One web-search provider used by enrichment (``enrichment.providers``)."""
 
@@ -478,10 +485,27 @@ class SearchProviderConfig(_Model):
     daily_request_budget: int | None = Field(default=None, ge=0)
     monthly_budget_usd: float | None = Field(default=None, ge=0)
     cost_per_request_usd: float = Field(default=0.0, ge=0)
-    min_interval_seconds: float = Field(default=1.0, ge=0)
-    """Per-provider rate limit (GDELT asks for one request every 5 s)."""
+    min_interval_seconds: float | None = Field(default=None, ge=0)
+    """Seconds between requests, shared by the app and the CLI tools. Unset: 5 for gdelt
+    (it answers 429 "one every 5 seconds"; lower values are raised to 5), 1 otherwise."""
     max_results: int = Field(default=10, ge=1, le=50)
     timeout_seconds: float = Field(default=15.0, gt=0)
+
+    @model_validator(mode="after")
+    def _interval(self) -> "SearchProviderConfig":
+        if self.name == "gdelt":
+            low = self.min_interval_seconds
+            if low is not None and low < GDELT_MIN_INTERVAL:
+                logger.warning(
+                    "enrichment provider gdelt: min_interval_seconds %s is below GDELT's limit; "
+                    "using %s",
+                    low,
+                    GDELT_MIN_INTERVAL,
+                )
+            self.min_interval_seconds = max(self.min_interval_seconds or 0.0, GDELT_MIN_INTERVAL)
+        elif self.min_interval_seconds is None:
+            self.min_interval_seconds = 1.0
+        return self
 
 
 class QueryMode(StrEnum):
@@ -490,7 +514,7 @@ class QueryMode(StrEnum):
 
 
 def _default_providers() -> list[SearchProviderConfig]:
-    return [SearchProviderConfig(name="gdelt", min_interval_seconds=5.0)]
+    return [SearchProviderConfig(name="gdelt")]
 
 
 class EnrichmentConfig(_Model):
@@ -520,6 +544,18 @@ class EnrichmentConfig(_Model):
     language: str = "en"
     max_candidates: int = Field(default=10, ge=1, le=50)
     """Candidates fetched per story after the snippet filters."""
+    max_queries_per_story: int = Field(default=2, ge=1, le=4)
+    """Requests per provider per story: the strict query, then a looser one on 0 hits."""
+    min_title_similarity: float = Field(default=0.30, ge=0, le=1)
+    """Hits without a snippet (GDELT): title vs. story headlines, plus a shared entity."""
+    empty_cache_minutes: float = Field(default=10, ge=0)
+    """Empty results are cached this long at most (0: not cached)."""
+    second_pass_hours: float = Field(default=3, ge=0)
+    """Stories still under ``target_sources`` are searched once more this long after the
+    first pass (0: off)."""
+    late_regen_max_per_hour: int = Field(default=6, ge=0)
+    """Published stories re-generated because of late sources, at most this many per hour
+    (the rest keep their new sources for their next regeneration)."""
 
     @model_validator(mode="after")
     def _check(self) -> "EnrichmentConfig":

@@ -17,20 +17,21 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import AppConfig, EnrichmentConfig, LLMRole
 from app.enrich.domains import registrable_domain
 from app.enrich.fetch import CandidateFetcher, FetchedPage
-from app.enrich.filters import StoryContext, pre_filter, snippet_check, text_check
-from app.enrich.query import build_queries
+from app.enrich.filters import StoryContext, pre_filter, snippet_check, text_check, title_check
+from app.enrich.query import build_queries, provider_queries
 from app.lifecycle import PRE_CLUSTER
 from app.models import (
     ENRICHMENT,
     Article,
     EnrichmentCandidate,
     ProfileRecord,
+    SearchProviderState,
     Story,
     StoryState,
     TextStatus,
@@ -46,6 +47,15 @@ logger = logging.getLogger(__name__)
 STALE_PENDING = timedelta(hours=1)
 """A ``pending`` mark older than this (the process died mid-run) is picked up again."""
 BATCH = 20
+RETRY_FIRST = timedelta(minutes=2)
+RETRY_MAX = timedelta(minutes=60)
+UNAVAILABLE = "provider_unavailable"
+RECOVERED = "recovered"
+
+
+def retry_delay(attempts: int) -> timedelta:
+    """Backoff after ``attempts`` failed passes in a row: 2 min doubling to 60 min."""
+    return min(RETRY_MAX, RETRY_FIRST * 2 ** max(0, attempts - 1))
 
 
 def web_source_id(url: str) -> str:
@@ -60,6 +70,8 @@ class Candidate:
     decision: str = "rejected"
     reason: str = ""
     similarity: float | None = None
+    title_similarity: float | None = None
+    shared_entities: int | None = None
     text_similarity: float | None = None
     page: FetchedPage | None = None
     article_id: int | None = None
@@ -73,8 +85,14 @@ class Candidate:
             "decision": self.decision,
             "reason": self.reason,
             "similarity": self.similarity,
+            "title_similarity": self.title_similarity,
+            "shared_entities": self.shared_entities,
             "text_similarity": self.text_similarity,
         }
+
+    @property
+    def score(self) -> float:
+        return self.similarity if self.similarity is not None else self.title_similarity or 0.0
 
 
 @dataclass
@@ -88,6 +106,9 @@ class StoryEnrichment:
     added: int = 0
     status: str = "done"
     reason: str | None = None
+    answered: bool = False
+    """At least one provider answered (hits or none); otherwise the story is retried."""
+    retry_at: datetime | None = None
 
     @property
     def accepted(self) -> list[Candidate]:
@@ -122,6 +143,8 @@ class Enricher:
         self._thread: threading.Thread | None = None
         self._again = False
         self.last_run: dict | None = None
+        self.backfill: timedelta | None = None
+        """The summarizer's backfill window: older never-enriched stories are skipped."""
 
     # --- eligibility ------------------------------------------------------------------
 
@@ -175,6 +198,13 @@ class Enricher:
         for story in session.scalars(stmt.order_by(Story.last_updated_at.desc())):
             if not self._due(story, now):
                 continue
+            if (
+                not story.enrich_passes
+                and story.enrich_status is None
+                and self.backfill is not None
+                and story.last_updated_at < now - self.backfill
+            ):
+                continue  # backlog catch-up: too old to hold a brief for
             if story.published_version is not None and (
                 not cfg.resummarize_on_enrichment or story.enrich_regens >= 1
             ):
@@ -189,6 +219,17 @@ class Enricher:
             return True
         if story.enrich_status == "pending":
             return (story.enrich_started_at or now) < now - STALE_PENDING
+        if story.enrich_status == "retry":
+            return False  # run_pending picks it up at enrich_next_attempt_at
+        second = self.config.second_pass_hours
+        if (
+            second
+            and story.enrich_status == "done"
+            and story.enrich_passes == 1
+            and story.enriched_at is not None
+            and story.enriched_at <= now - timedelta(hours=second)
+        ):
+            return True  # one more search for stories still under target_sources
         if not self.config.reenrich_hours:
             return False
         last = story.enriched_at or story.enrich_started_at
@@ -203,7 +244,9 @@ class Enricher:
 
     def schedule(self, story_ids: list[int] | None = None, *, force: bool = False) -> int:
         """Mark eligible stories ``pending`` (their briefs wait) and start the background
-        run. ``force``: the admin "Enrich now" (ignores the re-enrich interval)."""
+        run. Only as many as the providers can serve within ``wait_seconds`` are admitted
+        (newest first); the rest are admitted on a later sweep. ``force``: the admin
+        "Enrich now" (ignores the re-enrich interval and the admission limit)."""
         now = self.now()
         with self.session_factory() as session:
             if force and story_ids:
@@ -215,14 +258,89 @@ class Enricher:
                 ]
             else:
                 ids = self.eligible(session, story_ids)
+                ids = ids[: self.capacity(session)]
+            wait = timedelta(seconds=self.config.wait_seconds)
             for sid in ids:
                 story = session.get(Story, sid)
                 story.enrich_status, story.enrich_started_at = "pending", now
-                story.enrich_reason = None
+                story.enrich_reason, story.enrich_next_attempt_at = None, None
+                if story.enrich_wait_until is None:  # only the first pass holds the brief
+                    first = not story.enrich_passes and story.published_version is None
+                    story.enrich_wait_until = now + wait if first else now
             session.commit()
-        if ids:
+            due = self.retries_due(session)
+        if ids or due:
             self.start()
         return len(ids)
+
+    def capacity(self, session: Session) -> int:
+        """Stories the first provider can serve within ``wait_seconds`` (its
+        ``min_interval_seconds`` x ``max_queries_per_story``, minus a cooldown), less those
+        already waiting."""
+        cfg = self.config
+        if not cfg.providers:
+            return 0
+        primary = cfg.providers[0]
+        per_story = (primary.min_interval_seconds or 0.0) * cfg.max_queries_per_story
+        if per_story <= 0:
+            return 10**6
+        available = cfg.wait_seconds - self.search.cooldown_remaining(primary.name)
+        queued = session.scalar(
+            select(func.count()).select_from(Story).where(Story.enrich_status == "pending")
+        )
+        return max(0, int(available // per_story) - (queued or 0))
+
+    def retries_due(self, session: Session) -> int:
+        return (
+            session.scalar(
+                select(func.count()).select_from(Story).where(self._retry_due(self.now()))
+            )
+            or 0
+        )
+
+    @staticmethod
+    def _retry_due(now: datetime):
+        return and_(
+            Story.enrich_status.is_not(None),
+            Story.enrich_status == "retry",
+            or_(Story.enrich_next_attempt_at.is_(None), Story.enrich_next_attempt_at <= now),
+        )
+
+    def requeue_provider_errors(self) -> int:
+        """One-time admin action: stories whose enrichment ended with provider errors
+        (``failed``, waiting to retry, or ``done`` by the old code with nothing found and no
+        candidate recorded) are retried now, at the providers' pace. Briefs do not wait."""
+        now = self.now()
+        cutoff = now - timedelta(hours=self.config.max_age_hours)
+        has_candidates = (
+            select(EnrichmentCandidate.id).where(EnrichmentCandidate.story_id == Story.id).exists()
+        )
+        with self.session_factory() as session:
+            stories = session.scalars(
+                select(Story).where(
+                    Story.enrich_status.is_not(None),
+                    Story.state != StoryState.MERGED.value,
+                    Story.last_updated_at >= cutoff,
+                    or_(
+                        Story.enrich_status.in_(["failed", "retry"]),
+                        and_(
+                            Story.enrich_status == "done",
+                            func.coalesce(Story.enrich_added, 0) == 0,
+                            ~has_candidates,
+                        ),
+                    ),
+                )
+            ).all()
+            for story in stories:
+                story.enrich_status, story.enrich_next_attempt_at = "retry", now
+                story.enrich_attempts = 0
+                story.enrich_reason = f"{UNAVAILABLE}: re-enrich requested"
+                if story.enrich_wait_until is None:
+                    story.enrich_wait_until = now
+            session.commit()
+        if stories:
+            self.start()
+        return len(stories)
 
     def start(self) -> bool:
         with self._lock:
@@ -249,9 +367,15 @@ class Enricher:
                 self._again = False
 
     def pending(self, session: Session) -> list[int]:
+        """Admitted stories, then retries that came due (newest first)."""
         stmt = (
             select(Story.id)
-            .where(Story.enrich_status == "pending")
+            .where(
+                or_(
+                    and_(Story.enrich_status.is_not(None), Story.enrich_status == "pending"),
+                    self._retry_due(self.now()),
+                )
+            )
             .order_by(Story.priority.desc(), Story.last_updated_at.desc())
             .limit(BATCH)
         )
@@ -350,13 +474,22 @@ class Enricher:
         need = max(0, min(cfg.max_added_sources, cfg.target_sources - result.publishers_before))
         if dry_run:
             need = need or cfg.max_added_sources
-        result.queries, result.query_mode = await build_queries(
+        base, result.query_mode = await build_queries(
             story.headlines,
             mode=cfg.query_mode.value,
             role=self.llm_role,
             transport=self.llm_transport,
         )
+        llm = base if result.query_mode == "llm" else None
+        plans = {
+            p.name: provider_queries(
+                p.name, story.headlines, llm=llm, max_queries=cfg.max_queries_per_story
+            )
+            for p in cfg.providers
+        }
+        result.queries = list(dict.fromkeys(q for qs in plans.values() for q in qs))
         if not result.queries or need == 0:
+            result.answered = True
             result.reason = "no query" if not result.queries else "enough sources"
             if not dry_run:
                 self._finish(result)
@@ -368,13 +501,15 @@ class Enricher:
             if len(result.accepted) >= need:
                 break
             fresh: list[Candidate] = []
-            for query in result.queries:
+            for query in plans[provider.name]:  # a looser query only after 0 hits
                 outcome = await self.search.search(
                     provider,
                     query,
                     since=since,
                     language=cfg.language,
                     cache_hours=cfg.cache_hours,
+                    empty_cache_minutes=cfg.empty_cache_minutes,
+                    store=not dry_run,
                 )
                 result.searches.append(
                     {
@@ -383,17 +518,28 @@ class Enricher:
                         "hits": len(outcome.hits),
                         "cached": outcome.cached,
                         "error": outcome.error,
+                        "skipped": outcome.skipped,
+                        "cooldown_seconds": round(outcome.cooldown_seconds, 1),
                         "raw": outcome.raw[:600],
                     }
                 )
+                if not outcome.ok:
+                    break
+                result.answered = True
                 for hit in outcome.hits:
                     key = canonicalize_url(hit.url) if hit.url.startswith("http") else hit.url
                     if key in seen:
                         continue
                     seen.add(key)
                     fresh.append(Candidate(hit=hit, provider=provider.name, query=query))
+                if outcome.hits:
+                    break
             await self._judge(fresh, story, need - len(result.accepted), accepted_texts)
             result.candidates += fresh
+        if not result.answered:
+            failures = [s for s in result.searches if s.get("error")]
+            last = failures[-1]["error"] if failures else "no provider answered"
+            result.status, result.reason = "retry", f"{UNAVAILABLE}: {last}"[:500]
         if not dry_run:
             self._finish(result, anchor_id=anchor.id)
 
@@ -419,12 +565,17 @@ class Enricher:
                     c.reason = "already_ingested"
                 if c.reason:
                     continue
-                reason, c.similarity = snippet_check(c.hit, story, cfg.min_snippet_similarity)
+                if c.hit.snippet.strip():
+                    reason, c.similarity = snippet_check(c.hit, story, cfg.min_snippet_similarity)
+                else:
+                    reason, c.title_similarity, c.shared_entities = title_check(
+                        c.hit, story, cfg.min_title_similarity
+                    )
                 if reason:
                     c.reason = reason
                     continue
                 keep.append(c)
-        keep.sort(key=lambda c: -(c.similarity or 0))
+        keep.sort(key=lambda c: -c.score)
         for i, c in enumerate(keep):
             if need <= 0 or i >= cfg.max_candidates:
                 c.reason = "not_needed" if need <= 0 else "over_candidate_limit"
@@ -466,6 +617,10 @@ class Enricher:
             if story is None or story.state == StoryState.MERGED:
                 result.status, result.reason = "failed", "story gone"
                 return
+            if result.status == "retry":
+                self._schedule_retry(story, result, now)
+                session.commit()
+                return
             accepted = result.accepted
             late = story.published_version is not None
             if (
@@ -476,9 +631,10 @@ class Enricher:
                 for c in accepted:
                     c.decision, c.reason = "rejected", "late"
                 accepted = []
+            regenerate = late and accepted and self._regen_allowed(session, now)
             for c in accepted:
                 c.article_id = self._add_member(session, story, c, anchor_id, now)
-            result.added = len(accepted)
+            result.added = sum(1 for c in accepted if c.article_id is not None)
             for c in result.candidates:
                 session.add(
                     EnrichmentCandidate(
@@ -492,25 +648,64 @@ class Enricher:
                         decision=c.decision,
                         reason=c.reason[:40],
                         similarity=c.similarity,
+                        title_similarity=c.title_similarity,
+                        shared_entities=c.shared_entities,
                         text_similarity=c.text_similarity,
                         article_id=c.article_id,
                         created_at=now,
                     )
                 )
+            if result.status != "failed" and story.enrich_attempts and not result.reason:
+                result.reason = f"{RECOVERED} after {story.enrich_attempts} failed attempt(s)"
             story.enrich_status = result.status if result.status == "failed" else "done"
             story.enriched_at = now
+            story.enrich_passes = (story.enrich_passes or 0) + 1
+            story.enrich_attempts, story.enrich_next_attempt_at = 0, None
+            if result.added and late and not regenerate:
+                result.reason = "late_regen_deferred"  # kept for the next regeneration
             story.enrich_reason = result.reason
             if result.added:
                 from app.cluster.service import refresh_stories
 
                 story.enrich_added = (story.enrich_added or 0) + result.added
-                if late:
+                if late and regenerate:
                     story.enrich_regens = (story.enrich_regens or 0) + 1
-                if story.state not in PRE_CLUSTER:
+                    story.enrich_regen_at = now
+                if story.state not in PRE_CLUSTER and (not late or regenerate):
                     story.state = StoryState.CLUSTERED.value  # regenerate; published stays
                 session.flush()
                 refresh_stories(session, {story.id})
             session.commit()
+
+    def _schedule_retry(self, story: Story, result: StoryEnrichment, now: datetime) -> None:
+        """No provider answered: not done (``enriched_at`` stays unset); retry after a
+        backoff, or when the provider's cooldown ends if that was the only reason."""
+        tried = [s for s in result.searches if s.get("error")]
+        cooling = [c for s in tried if (c := s.get("cooldown_seconds") or 0.0) > 0]
+        wait_out = timedelta(seconds=max(cooling) + 1) if cooling else timedelta(0)
+        if tried and all(s.get("skipped") == "cooldown" for s in tried):
+            delay = wait_out or RETRY_FIRST  # waiting for a cooldown is not a failed attempt
+        else:
+            story.enrich_attempts = (story.enrich_attempts or 0) + 1
+            delay = max(retry_delay(story.enrich_attempts), wait_out)
+        result.retry_at = now + delay
+        story.enrich_status, story.enrich_next_attempt_at = "retry", result.retry_at
+        story.enrich_reason = result.reason
+
+    def _regen_allowed(self, session: Session, now: datetime) -> bool:
+        """Late sources may re-generate at most ``late_regen_max_per_hour`` stories."""
+        cfg = self.config
+        if not cfg.resummarize_on_enrichment:
+            return False
+        recent = session.scalar(
+            select(func.count())
+            .select_from(Story)
+            .where(
+                Story.enrich_regen_at.is_not(None),
+                Story.enrich_regen_at >= now - timedelta(hours=1),
+            )
+        )
+        return (recent or 0) < cfg.late_regen_max_per_hour
 
     def _add_member(
         self, session: Session, story: Story, c: Candidate, anchor_id: int | None, now
@@ -575,6 +770,31 @@ class Enricher:
         pending = session.scalar(
             select(func.count()).select_from(Story).where(Story.enrich_status == "pending")
         )
+        retry = session.scalar(
+            select(func.count()).select_from(Story).where(Story.enrich_status == "retry")
+        )
+        next_retry = session.scalar(
+            select(func.min(Story.enrich_next_attempt_at)).where(Story.enrich_status == "retry")
+        )
+        recovered = session.scalar(
+            select(func.count())
+            .select_from(Story)
+            .where(Story.enriched_at >= since, Story.enrich_reason.like(f"{RECOVERED}%"))
+        )
+        waiting = (pending or 0) + (retry or 0)
+        providers = []
+        for row in budget_use(session, self.config.providers, self.now()):
+            state = session.get(SearchProviderState, row["provider"])
+            cooling = self.search.cooldown_remaining(row["provider"])
+            providers.append(
+                {
+                    **row,
+                    **self.search._health(row["provider"]).as_dict(),
+                    "cooldown_seconds": int(cooling + 0.999) if cooling > 0 else 0,
+                    "consecutive_errors": state.consecutive_errors if state else 0,
+                    "state_error": state.last_error if state else None,
+                }
+            )
         return {
             "enabled": bool(self.enabled_profiles(session)),
             "running": self.running,
@@ -583,14 +803,20 @@ class Enricher:
             "attempted": attempted or 0,
             "enriched": enriched or 0,
             "avg_added": round(float(added or 0), 2),
-            "reject_reasons": reasons.most_common(8),
-            "providers": [
-                {
-                    **row,
-                    **self.search._health(row["provider"]).as_dict(),
-                }
-                for row in budget_use(session, self.config.providers, self.now())
+            "retry": retry or 0,
+            "next_retry_at": next_retry.isoformat() if next_retry else None,
+            "next_retry_seconds": (
+                max(0, int((next_retry - self.now()).total_seconds())) if next_retry else None
+            ),
+            "waiting": waiting,
+            "recovered": recovered or 0,
+            "cooling": [
+                {"provider": p["provider"], "seconds": p["cooldown_seconds"], "waiting": waiting}
+                for p in providers
+                if p["cooldown_seconds"]
             ],
+            "reject_reasons": reasons.most_common(8),
+            "providers": providers,
             "days": days,
         }
 
@@ -603,6 +829,7 @@ def summarize_run(results: list[StoryEnrichment]) -> dict:
         "enriched": sum(1 for r in results if r.added),
         "added": sum(r.added for r in results),
         "failed": sum(1 for r in results if r.status == "failed"),
+        "retry": sum(1 for r in results if r.status == "retry"),
         "candidates": sum(len(r.candidates) for r in results),
         "reject_reasons": dict(reasons.most_common(8)),
         "provider_errors": len(errors),

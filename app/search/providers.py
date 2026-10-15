@@ -4,8 +4,11 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
+import httpx
+
 from app.search.base import (
     LANGUAGE_NAMES,
+    ProviderTimeout,
     SearchHit,
     SearchProvider,
     language_code,
@@ -47,6 +50,8 @@ class GdeltProvider(SearchProvider):
         quota.before_request()
         try:
             response = await self.client.get(self.config.base_url or GDELT_API, params=params)
+        except httpx.TimeoutException as exc:
+            raise ProviderTimeout(f"GDELT request timed out ({type(exc).__name__})") from None
         except Exception as exc:
             raise FetchError(f"GDELT request failed: {type(exc).__name__}: {exc}") from None
         self.last_raw = response.text[:4000]
@@ -54,8 +59,10 @@ class GdeltProvider(SearchProvider):
             raise RateLimited("GDELT rate limit (HTTP 429)", retry_after_seconds(response))
         if response.status_code >= 400:
             raise FetchError(f"GDELT HTTP {response.status_code}")
+        if not response.content.strip():  # transient: never cached as "no results"
+            raise FetchError("GDELT returned an empty body")
         try:
-            body = response.json() if response.content.strip() else {}
+            body = response.json()
         except (json.JSONDecodeError, UnicodeDecodeError):
             text = response.text.strip()
             if "limit requests" in text.lower():  # GDELT answers 200 + plain text
@@ -101,6 +108,8 @@ class SearxngProvider(SearchProvider):
         quota.before_request()
         try:
             response = await self.client.get(f"{base}/search", params=params)
+        except httpx.TimeoutException as exc:
+            raise ProviderTimeout(f"SearXNG request timed out ({type(exc).__name__})") from None
         except Exception as exc:
             raise FetchError(f"SearXNG request failed: {type(exc).__name__}: {exc}") from None
         self.last_raw = response.text[:4000]

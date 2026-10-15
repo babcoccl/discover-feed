@@ -81,13 +81,16 @@
         <label class="flex items-center gap-2"><input type="checkbox" name="enabled" value="1" data-enrich-toggle {% if enrich_on %}checked{% endif %} class="rounded border-slate-300"> Search the web for more sources for this profile's stories</label>
       </form>
       <button type="button" hx-post="/p/{{ profile.slug }}/settings/pipeline/enrich" hx-target="#pipeline" data-enrich-now class="rounded-md border border-slate-300 px-3 py-1 text-xs font-medium hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">Enrich now</button>
+      <button type="button" hx-post="/p/{{ profile.slug }}/settings/pipeline/reenrich-errors" hx-target="#pipeline" hx-confirm="Retry every recent story whose enrichment ended with provider errors?" data-reenrich-errors class="rounded-md border border-slate-300 px-3 py-1 text-xs font-medium hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">Re-enrich stories that ended with provider errors</button>
     </div>
     {% endif %}
   </div>
-  <dl class="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-5">
+  {% for c in en.cooling %}<p class="mb-2 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200" data-enrich-cooling="{{ c.provider }}">{{ c.provider }} cooling down for {{ c.seconds }} s, {{ c.waiting }} stor{{ "y" if c.waiting == 1 else "ies" }} waiting</p>{% endfor %}
+  <dl class="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-6">
     <div><dt class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Eligible now</dt><dd class="text-xl font-semibold" data-enrich-eligible>{{ en.eligible }}</dd></div>
-    <div><dt class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Waiting</dt><dd class="text-xl font-semibold">{{ en.pending }}</dd></div>
-    <div><dt class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Enriched</dt><dd class="text-xl font-semibold" data-enrich-enriched>{{ en.enriched }} <span class="text-sm font-normal text-slate-500">of {{ en.attempted }}</span></dd></div>
+    <div><dt class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Waiting</dt><dd class="text-xl font-semibold" data-enrich-pending>{{ en.pending }}</dd></div>
+    <div><dt class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Retry queue</dt><dd class="text-xl font-semibold" data-enrich-retry>{{ en.retry }}{% if en.retry and en.next_retry_seconds is not none %} <span class="text-sm font-normal text-slate-500">{% if en.next_retry_seconds > 0 %}next in {{ en.next_retry_seconds }} s{% else %}due now{% endif %}</span>{% endif %}</dd></div>
+    <div><dt class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Enriched</dt><dd class="text-xl font-semibold" data-enrich-enriched>{{ en.enriched }} <span class="text-sm font-normal text-slate-500">of {{ en.attempted }}{% if en.recovered %}, {{ en.recovered }} after retry{% endif %}</span></dd></div>
     <div><dt class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Avg sources added</dt><dd class="text-xl font-semibold">{{ en.avg_added }}</dd></div>
     <div><dt class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Status</dt><dd class="text-xl font-semibold">{{ "on" if en.enabled else "off" }}</dd></div>
   </dl>
@@ -101,7 +104,8 @@
     <div>
       <h4 class="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Search providers (today)</h4>
       <ul class="space-y-1 text-sm" data-enrich-providers>
-        {% for p in en.providers %}<li data-provider="{{ p.provider }}"><span class="font-medium">{{ p.provider }}</span>: {{ p.requests_today }}{% if p.daily_budget %} of {{ p.daily_budget }}{% endif %} requests{% if p.errors %}, <span class="text-rose-700 dark:text-rose-400">{{ p.errors }} error(s)</span>{% endif %}{% if p.rate_limited %}, {{ p.rate_limited }} rate-limited{% endif %}{% if p.budget_skips %}, {{ p.budget_skips }} over budget{% endif %}{% if p.last_error %}<br><span class="text-xs text-rose-700 dark:text-rose-400">{{ p.last_error | snippet(160) }}</span>{% endif %}</li>{% endfor %}
+        {% for p in en.providers %}<li data-provider="{{ p.provider }}"><span class="font-medium">{{ p.provider }}</span>: {{ p.requests_today }}{% if p.daily_budget %} of {{ p.daily_budget }}{% endif %} requests today{% if p.cooldown_seconds %} · <span class="text-amber-700 dark:text-amber-400">cooling down {{ p.cooldown_seconds }} s</span>{% endif %}
+          <span class="block text-xs text-slate-500 dark:text-slate-400" data-provider-health>since start: {{ p.requests }} requests, {{ p.successes }} ok, {{ p.rate_limited }} rate limits, {{ p.timeouts }} timeouts, {{ p.cooldown_skips }} cooldown skips{% if p.errors %}, <span class="text-rose-700 dark:text-rose-400">{{ p.errors }} error(s)</span>{% endif %}{% if p.budget_skips %}, {{ p.budget_skips }} over budget{% endif %}{% if p.cached %}, {{ p.cached }} cached{% endif %}{% if p.consecutive_errors %} · {{ p.consecutive_errors }} failure(s) in a row{% endif %}</span>{% if p.last_error and (p.consecutive_errors or p.cooldown_seconds) %}<span class="block text-xs text-rose-700 dark:text-rose-400">{{ p.last_error | snippet(160) }}</span>{% endif %}</li>{% endfor %}
       </ul>
     </div>
   </div>

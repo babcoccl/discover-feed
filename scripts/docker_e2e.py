@@ -47,6 +47,8 @@ def get(base: str, path: str) -> dict | list | None:
 
 class Timeline:
     def __init__(self) -> None:
+        self.gdelt: dict = {}
+        """``/gdelt-stats`` of the fixture server (failure modes served)."""
         self.t0 = time.monotonic()
         self.events: list[tuple[float, str]] = []
         self.stories: dict[str, dict] = {}
@@ -126,11 +128,14 @@ def poll(base: str, tl: Timeline, assert_published: bool) -> None:
 
 def settled(tl: Timeline) -> bool:
     """At least 5 published stories with a final report, every shown card has a brief, and
-    at least one story gained a web-search source (the fixture server's fake GDELT)."""
+    at least one story gained a web-search source from the fixture server's fake GDELT after
+    it served its failure modes (so failed stories were retried, then enriched)."""
     rows = [r for r in tl.stories.values() if "clustered" in r]
     final = [r for r in rows if "report" in r]
     enriched = [r for r in rows if "enriched" in r]
-    return len(final) >= 5 and all("brief" in r for r in rows) and bool(enriched)
+    return (
+        len(final) >= 5 and all("brief" in r for r in rows) and bool(enriched) and faults_served(tl)
+    )
 
 
 def render(tl: Timeline) -> str:
@@ -150,6 +155,25 @@ def render(tl: Timeline) -> str:
     return "\n".join(lines)
 
 
+def gdelt_stats(fixtures: str = "http://localhost:8081") -> dict:
+    try:
+        with urllib.request.urlopen(f"{fixtures}/gdelt-stats", timeout=5) as r:
+            return json.loads(r.read())
+    except Exception:
+        return {}
+
+
+def faults_served(tl: Timeline) -> bool:
+    """The fake GDELT served every failure mode (429, plain-text limit, timeout, empty body)
+    and still answered normally afterwards: failed stories were retried and enriched."""
+    stats = tl.gdelt or {}
+    return (
+        not stats.get("pending_faults")
+        and all(stats.get(k) for k in ("429", "limit", "timeout", "empty"))
+        and stats.get("ok", 0) > 0
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--base", default="http://localhost:8000")
@@ -166,6 +190,7 @@ def main() -> int:
         tl.event("stack healthy")
         while tl.now() < args.timeout:
             poll(args.base, tl, not args.no_assert)
+            tl.gdelt = gdelt_stats()
             if settled(tl):
                 done = sum("report" in r for r in tl.stories.values())
                 tl.event(f"settled: {done} stories published with a final report")
@@ -173,6 +198,8 @@ def main() -> int:
             time.sleep(1)
         else:
             tl.event(f"timed out after {args.timeout:.0f}s")
+        tl.gdelt = gdelt_stats()
+        tl.event(f"fake GDELT replies: {tl.gdelt}")
     finally:
         text = render(tl)
         print("\n" + text)
@@ -183,6 +210,8 @@ def main() -> int:
             compose("down", "-v", "--remove-orphans", check=False)
     if args.no_assert:
         return 0
+    if not faults_served(tl):
+        print(f"fake GDELT failure modes not all served / recovered from: {tl.gdelt}")
     ok = settled(tl) and not tl.violations
     print("PASS" if ok else "FAIL")
     return 0 if ok else 1

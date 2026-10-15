@@ -86,6 +86,15 @@ class SearchHit:
         )
 
 
+class ProviderTimeout(FetchError):
+    """The provider did not answer within ``timeout_seconds``."""
+
+
+def is_timeout(exc: Exception) -> bool:
+    """Timeouts from our providers or from ``JsonApiAdapter.get_json`` (``ReadTimeout`` ...)."""
+    return isinstance(exc, ProviderTimeout) or "Timeout:" in str(exc)
+
+
 class _JsonClient(JsonApiAdapter):
     """``JsonApiAdapter.get_json`` (429/Retry-After, key scrubbing, quota errors) for a
     search API that is not a feed source."""

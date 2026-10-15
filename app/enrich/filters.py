@@ -82,6 +82,21 @@ def snippet_check(
     return ("low_similarity" if score < threshold else None), round(score, 4)
 
 
+def title_check(
+    hit: SearchHit, story: StoryContext, threshold: float, min_entities: int = 1
+) -> tuple[str | None, float, int]:
+    """Hits without a snippet (GDELT returns titles only): the title must share an entity
+    with the story and be similar enough to its headlines. The text check after extraction
+    has the final say. Returns ``(reason, title_similarity, shared_entities)``."""
+    score = round(similarity(hit.title, " ".join(story.headlines)), 4)
+    entities = shared_entities(hit.title, story)
+    if entities < min_entities:
+        return "no_shared_entity", score, entities
+    if score < threshold:
+        return "low_title_similarity", score, entities
+    return None, score, entities
+
+
 def shared_entities(text: str, story: StoryContext) -> int:
     return len(significant_tokens(text) & story.tokens)
 

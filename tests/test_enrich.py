@@ -4,11 +4,12 @@ visibility, the brief wait and the one late regeneration."""
 import asyncio
 import hashlib
 import json
+import re
 from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 
 from app.cluster import TfidfClusterer
 from app.cluster.service import run_clustering
@@ -26,6 +27,8 @@ from app.models import (
     Article,
     EnrichmentCandidate,
     ProfileRecord,
+    SearchCacheEntry,
+    SearchProviderState,
     SourceRecord,
     SourceUsage,
     Story,
@@ -355,6 +358,9 @@ def test_rate_limits_retry_once_then_cool_down(session_factory):
     out = asyncio.run(service.search(gdelt, "q3", since=NOW, language=None, cache_hours=0))
     assert "cooling down" in out.error and len(fake.requests) == 3  # no request sent
 
+    with session_factory() as session:  # the cooldown is shared state: clear it
+        session.execute(delete(SearchProviderState))
+        session.commit()
     plain = FakeSearch(text="Please limit requests to one every 5 seconds")
     service = SearchService(session_factory, transport=plain.transport(), sleep=no_sleep)
     out = asyncio.run(service.search(gdelt, "q4", since=NOW, language=None, cache_hours=0))
@@ -430,7 +436,7 @@ def test_enrichment_adds_pinned_members_and_records_decisions(session_factory):
     assert reasons["https://syndicated.example/copy"] == "near_duplicate"
     assert reasons["https://paywall.example/buses"] == "paywalled"
     assert reasons["https://redirect.example/go"] == "blocked_url"
-    assert reasons["https://elsewhere.example/a"] == "low_similarity"
+    assert reasons["https://elsewhere.example/a"] == "no_shared_entity"  # title-only hit
     stats = enricher.stats(session_factory())
     assert stats["enriched"] == 1 and dict(stats["reject_reasons"])["same_domain"] == 1
 
@@ -512,12 +518,14 @@ def test_brief_waits_for_enrichment_then_goes_ahead(session_factory):
         assert story_id in worker.candidates(session)
 
 
-def test_search_failure_still_finishes_the_story(session_factory):
+def test_search_failure_is_retried_not_done(session_factory):
     story_id = seed(session_factory)
     summary = run(make_enricher(session_factory, FakeSearch(status=500, text="down")), story_id)
-    assert summary["added"] == 0 and summary["provider_errors"] >= 1
+    assert summary["added"] == 0 and summary["provider_errors"] >= 1 and summary["retry"] == 1
     with session_factory() as session:
-        assert session.get(Story, story_id).enrich_status == "done"
+        story = session.get(Story, story_id)
+        assert story.enrich_status == "retry" and story.enriched_at is None
+        assert story.enrich_reason.startswith("provider_unavailable: ")
 
 
 def test_late_sources_regenerate_a_published_story_once(session_factory):
@@ -556,3 +564,490 @@ def test_enrich_now_requires_the_admin_key(settings):
         slug = client.app.state.config.profiles[0].id
         page = client.post(f"/p/{slug}/settings/pipeline/enrich", follow_redirects=False)
         assert page.status_code in (302, 303, 401)
+
+
+# --- hardening: pacing, cooldowns, retries ----------------------------------------------
+
+
+class Clock:
+    def __init__(self, now: datetime = NOW) -> None:
+        self.now = now
+
+    def __call__(self) -> datetime:
+        return self.now
+
+    def advance(self, **kw) -> None:
+        self.now += timedelta(**kw)
+
+
+def clocked_enricher(factory, fake, cfg=None, clock=None, sleep=no_sleep):
+    clock = clock or Clock()
+    fetcher = CandidateFetcher(
+        factory, guard=Guard(resolver), domain_delay=0, transport=page_transport()
+    )
+    search = SearchService(factory, transport=fake.transport(), sleep=sleep, now=clock)
+    return Enricher(factory, cfg or config(), search=search, fetcher=fetcher, now=clock), clock
+
+
+def test_gdelt_interval_defaults_to_5_and_is_floored(caplog):
+    assert SearchProviderConfig(name="gdelt").min_interval_seconds == 5.0
+    assert SearchProviderConfig(name="gdelt", min_interval_seconds=6).min_interval_seconds == 6
+    with caplog.at_level("WARNING"):
+        assert SearchProviderConfig(name="gdelt", min_interval_seconds=1).min_interval_seconds == 5
+    assert "below GDELT's limit" in caplog.text
+    assert SearchProviderConfig(name="guardian").min_interval_seconds == 1.0
+    assert SearchProviderConfig(name="newsdata", min_interval_seconds=0).min_interval_seconds == 0
+    cfg = EnrichmentConfig.model_validate({"providers": [{"name": "gdelt"}]})
+    assert cfg.providers[0].min_interval_seconds == 5.0
+    assert cfg.max_queries_per_story == 2 and cfg.min_title_similarity == 0.30
+    assert cfg.empty_cache_minutes == 10 and cfg.second_pass_hours == 3
+    assert cfg.late_regen_max_per_hour == 6
+
+
+def test_cooldown_skip_is_not_an_error_or_a_request(session_factory):
+    fake = FakeSearch()
+    fake.responses = [httpx.Response(429, headers={"Retry-After": "600"})]
+    service = SearchService(session_factory, transport=fake.transport(), sleep=no_sleep)
+    gdelt = SearchProviderConfig(name="gdelt")
+    first = asyncio.run(service.search(gdelt, "a b", since=NOW, language=None, cache_hours=0))
+    assert first.error and first.cooldown_seconds > 500 and not first.skipped
+    out = asyncio.run(service.search(gdelt, "c d", since=NOW, language=None, cache_hours=0))
+    health = service.health["gdelt"]
+    assert out.skipped == "cooldown" and not out.ok and len(fake.requests) == 1
+    assert health.cooldown_skips == 1 and health.errors == 0 and health.requests == 1
+    assert health.rate_limited == 1 and health.successes == 0
+
+
+def test_provider_state_is_shared_across_services(session_factory):
+    fake = FakeSearch()
+    slept: list[float] = []
+
+    async def sleep(seconds):
+        slept.append(seconds)
+
+    clock = Clock()
+    gdelt = SearchProviderConfig(name="gdelt")
+    one = SearchService(session_factory, transport=fake.transport(), sleep=sleep, now=clock)
+    two = SearchService(session_factory, transport=fake.transport(), sleep=sleep, now=clock)
+    asyncio.run(one.search(gdelt, "q1", since=NOW, language=None, cache_hours=0))
+    asyncio.run(two.search(gdelt, "q2", since=NOW, language=None, cache_hours=0))
+    assert slept == [5.0]  # the second process waits for the first one's slot
+    fake.responses = [httpx.Response(429, headers={"Retry-After": "300"})]
+    clock.advance(seconds=10)
+    asyncio.run(one.search(gdelt, "q3", since=NOW, language=None, cache_hours=0))
+    out = asyncio.run(two.search(gdelt, "q4", since=NOW, language=None, cache_hours=0))
+    assert out.skipped == "cooldown" and len(fake.requests) == 3
+    assert 299 <= two.cooldown_remaining("gdelt") <= 300
+    with session_factory() as session:
+        state = session.get(SearchProviderState, "gdelt")
+        assert state.consecutive_errors == 1 and state.cooldown_until is not None
+
+
+def test_timeouts_are_counted_separately(session_factory):
+    def handle(request):
+        raise httpx.ReadTimeout("slow", request=request)
+
+    service = SearchService(session_factory, transport=httpx.MockTransport(handle), sleep=no_sleep)
+    out = asyncio.run(
+        service.search(SearchProviderConfig(name="gdelt"), "q", since=NOW, language=None)
+    )
+    health = service.health["gdelt"]
+    assert out.error and health.timeouts == 1 and health.errors == 0
+    with session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(SearchCacheEntry)) == 0
+
+
+def test_empty_results_are_cached_briefly_and_empty_bodies_never(session_factory):
+    fake = FakeSearch(hits=[])
+    clock = Clock()
+    service = SearchService(session_factory, transport=fake.transport(), sleep=no_sleep, now=clock)
+    gdelt = SearchProviderConfig(name="gdelt")
+
+    def search(q, **kw):
+        return asyncio.run(service.search(gdelt, q, since=NOW, language=None, **kw))
+
+    assert search("empty").hits == [] and len(fake.requests) == 1
+    assert search("empty").cached  # within empty_cache_minutes
+    clock.advance(minutes=11)
+    assert not search("empty").cached and len(fake.requests) == 2
+    search("never", empty_cache_minutes=0)
+    assert not search("never", empty_cache_minutes=0).cached
+    for body in ("", "  ", "<html>Oops</html>"):
+        fake.responses = [httpx.Response(200, text=body)]
+        clock.advance(seconds=10)
+        assert search(f"bad {body!r}").error
+    with session_factory() as session:
+        queries = set(session.scalars(select(SearchCacheEntry.query)))
+    assert queries == {"empty"}
+
+
+def test_story_retries_after_backoff_then_recovers(session_factory):
+    story_id = seed(session_factory)
+    fake = FakeSearch(status=500, text="down")
+    enricher, clock = clocked_enricher(session_factory, fake)
+    worker = SummaryWorker(session_factory, None, clock=clock)
+    run(enricher, story_id)
+    with session_factory() as session:
+        story = session.get(Story, story_id)
+        assert story.enrich_status == "retry" and story.enriched_at is None
+        assert story.enrich_next_attempt_at == NOW + timedelta(minutes=2)
+        assert story.enrich_reason == "provider_unavailable: GDELT HTTP 500: down" or (
+            story.enrich_reason.startswith("provider_unavailable: ")
+        )
+        assert story_id not in worker.candidates(session)  # within wait_seconds
+    assert asyncio.run(enricher.run_pending()) == []  # not due yet
+    clock.advance(minutes=2)
+    asyncio.run(enricher.run_pending())
+    with session_factory() as session:
+        story = session.get(Story, story_id)
+        assert story.enrich_attempts == 2
+        assert story.enrich_next_attempt_at == clock.now + timedelta(minutes=4)
+    clock.advance(seconds=enricher.config.wait_seconds)
+    with session_factory() as session:
+        assert story_id in worker.candidates(session)  # the brief waits wait_seconds at most
+    clock.advance(seconds=-enricher.config.wait_seconds)
+    for minutes in (4, 8, 16, 32):
+        clock.advance(minutes=minutes)
+        asyncio.run(enricher.run_pending())
+    with session_factory() as session:
+        story = session.get(Story, story_id)
+        assert story.enrich_next_attempt_at == clock.now + timedelta(minutes=60)  # capped
+    fake.status, fake.text = 200, None
+    clock.advance(minutes=60)
+    asyncio.run(enricher.run_pending())
+    with session_factory() as session:
+        story = session.get(Story, story_id)
+        assert story.enrich_status == "done" and story.enrich_added == 1
+        assert story.enriched_at == clock.now and story.enrich_reason.startswith("recovered")
+        assert enricher.stats(session)["recovered"] == 1
+
+
+def test_retry_waits_for_the_cooldown_without_errors(session_factory):
+    story_id = seed(session_factory)
+    fake = FakeSearch()
+    fake.responses = [httpx.Response(429, headers={"Retry-After": "120"})]
+    enricher, clock = clocked_enricher(session_factory, fake)
+    run(enricher, story_id)
+    with session_factory() as session:
+        story = session.get(Story, story_id)
+        assert story.enrich_status == "retry" and story.enrich_attempts == 1
+        assert story.enrich_next_attempt_at >= NOW + timedelta(minutes=2)
+        stats = enricher.stats(session)
+        assert stats["cooling"][0]["provider"] == "gdelt" and stats["cooling"][0]["waiting"] == 1
+        story.enrich_next_attempt_at = NOW  # due while gdelt still cools down
+        session.commit()
+    asyncio.run(enricher.run_pending())
+    health = enricher.search.health["gdelt"]
+    assert len(fake.requests) == 1 and health.cooldown_skips == 1 and health.errors == 0
+    with session_factory() as session:
+        story = session.get(Story, story_id)
+        assert story.enrich_attempts == 1  # waiting for a cooldown is not an attempt
+        assert story.enrich_next_attempt_at == NOW + timedelta(seconds=121)
+    clock.advance(seconds=121)
+    asyncio.run(enricher.run_pending())
+    with session_factory() as session:
+        assert session.get(Story, story_id).enrich_status == "done"
+
+
+def test_falls_back_to_a_second_provider(session_factory):
+    story_id = seed(session_factory)
+    fake = FakeSearch()
+    fake.responses = [httpx.Response(500, text="gdelt down")]
+    cfg = config(
+        providers=[
+            SearchProviderConfig(name="gdelt"),
+            SearchProviderConfig(name="searxng", base_url="https://searx.example"),
+        ]
+    )
+    summary = run(make_enricher(session_factory, fake, cfg), story_id)
+    assert summary["added"] >= 1 and summary["provider_errors"] == 1
+    assert fake.requests[1].url.path.endswith("/search")
+    with session_factory() as session:
+        assert session.get(Story, story_id).enrich_status == "done"
+
+
+def test_looser_query_only_after_zero_hits(session_factory):
+    story_id = seed(session_factory)
+    fake = FakeSearch()
+    run(make_enricher(session_factory, fake), story_id)
+    assert len(fake.requests) == 1  # the strict query found hits
+    other = seed_more(session_factory, ["Fresno council backs new water treatment plant"])[0]
+    empty = FakeSearch(hits=[])
+    run(make_enricher(session_factory, empty), other)
+    queries = [r.url.params["query"] for r in empty.requests]
+    assert len(queries) == 2 and " OR " in queries[1] and "(" in queries[1]
+
+
+def test_cli_refuses_during_a_cooldown(session_factory):
+    import io
+
+    from app.enrich.cli import respect_cooldowns
+
+    enricher, _ = clocked_enricher(session_factory, FakeSearch())
+    out = io.StringIO()
+    assert respect_cooldowns(enricher, wait=False, out=out)
+    enricher.search._cool_down("gdelt", 90)
+    assert not respect_cooldowns(enricher, wait=False, out=out)
+    assert "gdelt is cooling down for 90 s" in out.getvalue() and "--wait" in out.getvalue()
+
+
+def test_evaluate_and_diagnose_dry_run_write_nothing(session_factory, monkeypatch, capsys):
+    from app.enrich import diagnose, evaluate
+
+    story_id = seed(session_factory)
+    fake = FakeSearch()
+    enricher = make_enricher(session_factory, fake)
+    monkeypatch.setattr(evaluate, "build", lambda: (session_factory, enricher))
+    monkeypatch.setattr(diagnose, "build", lambda: (session_factory, enricher))
+    assert evaluate.main(["--stories", "5", "--provider", "gdelt"]) == 0
+    assert diagnose.main(["--story-id", str(story_id), "--dry-run"]) == 0
+    printed = capsys.readouterr().out
+    assert "Accepted (check each for false matches)" in printed and "Rejected by reason" in printed
+    assert "wire.example" in printed and "near_duplicate" in printed
+    assert len(fake.requests) >= 2  # really searched
+    with session_factory() as session:
+        story = session.get(Story, story_id)
+        assert story.enrich_status is None and story.enriched_at is None
+        assert session.scalar(select(func.count()).select_from(EnrichmentCandidate)) == 0
+        assert session.scalar(select(func.count()).select_from(SearchCacheEntry)) == 0
+        assert (
+            session.scalar(
+                select(func.count()).select_from(Article).where(Article.origin == ENRICHMENT)
+            )
+            == 0
+        )
+    with pytest.raises(SystemExit):
+        evaluate.main(["--provider", "brave"])
+    enricher.search._cool_down("gdelt", 60)
+    assert evaluate.main(["--stories", "5"]) == 3
+
+
+# --- queries per provider -----------------------------------------------------------------
+
+REAL = [
+    [
+        "Federal Reserve holds interest rates steady, signals two cuts in 2025",
+        "Fed leaves rates unchanged as Powell cites inflation progress",
+        "Powell says Federal Reserve in no hurry to cut",
+    ],
+    [
+        "Magnitude 6.1 earthquake strikes off coast of Japan's Hokkaido",
+        "Strong quake hits northern Japan; no tsunami warning",
+    ],
+    [
+        "Springfield council approves 40 electric buses",
+        "Mayor Ortiz backs Springfield bus plan",
+        "Ortiz: electric buses arrive in 2027",
+    ],
+    [
+        "UK Prime Minister Keir Starmer announces sweeping overhaul of immigration rules "
+        "for skilled workers, students and care staff amid record net migration figures",
+    ],
+]
+
+
+def test_gdelt_queries_are_short_and_quote_names():
+    from app.enrich.query import provider_queries
+
+    fed = provider_queries("gdelt", REAL[0])
+    assert fed[0].startswith('"Federal Reserve"') and "Powell" in fed[0]
+    for headlines in REAL:
+        strict, loose = provider_queries("gdelt", headlines)
+        terms = re.findall(r'"[^"]+"|\S+', strict)
+        assert 3 <= len(terms) <= 5, strict
+        assert all(len(t.strip('"')) >= 3 for t in terms)  # GDELT: no too-short keywords
+        term = r'(?:"[^"]+"|\S+)'
+        assert re.search(rf"\(({term} OR )+{term}\)$", loose), loose  # OR group in parens
+    quake = provider_queries("gdelt", REAL[1])[0]
+    assert "6.1" in quake and "Hokkaido" in quake and '"Japan Hokkaido"' not in quake
+    assert len(provider_queries("gdelt", REAL[0], max_queries=1)) == 1
+
+
+def test_guardian_and_newsdata_limits_and_llm_mode():
+    from app.enrich.query import provider_queries
+
+    for headlines in REAL:
+        guardian = provider_queries("guardian", headlines)
+        assert len(re.findall(r'"[^"]+"|\S+', guardian[0])) <= 4
+        assert all(len(q) <= 100 for q in provider_queries("newsdata", headlines))
+    starmer = provider_queries("newsdata", REAL[3])[0]
+    assert "Starmer" in starmer
+    llm = ["Keir Starmer immigration overhaul skilled workers students care staff net migration"]
+    gdelt = provider_queries("gdelt", REAL[3], llm=llm)
+    assert len(gdelt[0].split()) <= 4 and gdelt[0].startswith("Keir Starmer")
+    long_llm = ["x" * 30 + " " + "y" * 30 + " " + "z" * 30 + " " + "w" * 30]
+    assert len(provider_queries("newsdata", REAL[3], llm=long_llm)[0]) <= 100
+
+
+# --- title-only relevance -------------------------------------------------------------------
+
+
+def test_title_only_hits_need_an_entity_and_similarity():
+    from app.enrich.filters import title_check
+
+    story = story_ctx()
+
+    def hit(title):
+        return SearchHit(url="https://x.example/a", title=title, domain="x.example")
+
+    reason, score, entities = title_check(hit("Springfield electric buses win vote"), story, 0.3)
+    assert reason is None and score >= 0.3 and entities >= 2
+    assert title_check(hit("Cooking with garlic tonight"), story, 0.3)[0] == "no_shared_entity"
+    reason, score, _ = title_check(hit("Springfield weather: sunny week ahead"), story, 0.3)
+    assert reason == "low_title_similarity" and score < 0.3
+
+
+def test_title_and_text_scores_are_recorded(session_factory):
+    story_id = seed(session_factory)
+    run(make_enricher(session_factory, FakeSearch()), story_id)
+    with session_factory() as session:
+        wire = session.scalar(
+            select(EnrichmentCandidate).where(EnrichmentCandidate.decision == "accepted")
+        )
+    assert wire.similarity is None  # GDELT hits have no snippet
+    assert wire.title_similarity >= 0.3 and wire.text_similarity and wire.shared_entities
+
+
+# --- second pass, admission, late regenerations -------------------------------------------
+
+
+def seed_more(factory, titles: list[str], *, hours_ago: float = 1) -> list[int]:
+    """More single-article stories from source ``a`` (``seed`` must have run)."""
+    with factory() as session:
+        for n, title in enumerate(titles):
+            url = f"https://news.example/more/{hashlib.sha256(title.encode()).hexdigest()[:10]}"
+            session.add(
+                Article(
+                    source_id="a",
+                    url=url,
+                    canonical_url=url,
+                    title=title,
+                    summary_raw=title,
+                    published_at=NOW - timedelta(hours=hours_ago, minutes=n),
+                    fetched_at=NOW,
+                    content_hash=hashlib.sha256(title.encode()).hexdigest(),
+                    text=f"{title}. " * 30,
+                    text_status="ok",
+                    word_count=200,
+                )
+            )
+        session.flush()
+        ensure_stories(session, NOW)
+        session.commit()
+    run_clustering(factory, TfidfClusterer())
+    with factory() as session:
+        return [
+            session.scalar(select(Article.story_id).where(Article.title == title))
+            for title in titles
+        ]
+
+
+TOPICS = [
+    "Volcano erupts near Reykjavik airport",
+    "Chess grandmaster wins blitz title",
+    "Bakery chain recalls almond croissants",
+    "Satellite launch delayed by solar storm",
+    "Orchestra unveils Mahler symphony cycle",
+    "Glacier retreat measured in Patagonia",
+    "Marathon record falls in Berlin",
+    "Rare orchid blooms in Kew Gardens",
+    "Submarine cable cut off Taiwan coast",
+]
+
+
+def test_second_pass_after_second_pass_hours(session_factory):
+    story_id = seed(session_factory)
+    enricher, clock = clocked_enricher(session_factory, FakeSearch(hits=[]))
+    run(enricher, story_id)
+    with session_factory() as session:
+        story = session.get(Story, story_id)
+        assert story.enrich_status == "done" and story.enrich_passes == 1
+        clock.advance(hours=2, minutes=59)
+        assert enricher.eligible(session) == []
+        clock.advance(minutes=2)
+        assert enricher.eligible(session) == [story_id]
+        enricher.config = enricher.config.model_copy(update={"second_pass_hours": 0})
+        assert enricher.eligible(session) == []
+    enricher.config = enricher.config.model_copy(update={"second_pass_hours": 3})
+    run(enricher, story_id)
+    with session_factory() as session:
+        story = session.get(Story, story_id)
+        assert story.enrich_passes == 2
+        first_wait = NOW + timedelta(seconds=enricher.config.wait_seconds)
+        assert story.enrich_wait_until == first_wait  # no second brief wait
+        clock.advance(hours=10)
+        assert enricher.eligible(session) == []  # only one second pass
+
+
+def test_admission_is_limited_by_provider_capacity(session_factory):
+    seed(session_factory)
+    ids = seed_more(session_factory, TOPICS)
+    enricher, _ = clocked_enricher(session_factory, FakeSearch(), config(wait_seconds=60))
+    enricher.start = lambda: True  # only look at what gets admitted
+    # gdelt: 5 s x 2 queries per story -> 6 stories within wait_seconds = 60
+    assert enricher.schedule() == 6
+    with session_factory() as session:
+        pending = set(session.scalars(select(Story.id).where(Story.enrich_status == "pending")))
+        newest = set(
+            session.scalars(
+                select(Story.id)
+                .where(Story.state != "merged")
+                .order_by(Story.last_updated_at.desc())
+                .limit(6)
+            )
+        )
+        assert pending == newest
+        assert enricher.schedule() == 0  # full until those are served
+        session.execute(
+            Story.__table__.update().where(Story.id.in_(pending)).values(enrich_status="done")
+        )
+        session.commit()
+    assert enricher.schedule() == 4  # the rest are admitted later
+    assert len(ids) == len(TOPICS)
+
+
+def test_backlog_catch_up_skips_stories_older_than_backfill(session_factory):
+    seed(session_factory)
+    old = seed_more(session_factory, ["Volcano erupts near Reykjavik airport"], hours_ago=30)[0]
+    enricher, _ = clocked_enricher(session_factory, FakeSearch())
+    enricher.backfill = timedelta(hours=24)
+    with session_factory() as session:
+        assert old not in enricher.eligible(session)
+        enricher.backfill = None
+        assert old in enricher.eligible(session)
+
+
+def test_late_regenerations_are_rate_limited(session_factory):
+    story_id = seed(session_factory)
+    with session_factory() as session:
+        story = session.get(Story, story_id)
+        story.state, story.published_version = StoryState.PUBLISHED.value, 1
+        session.commit()
+    enricher = make_enricher(session_factory, FakeSearch(), config(late_regen_max_per_hour=0))
+    run(enricher, story_id)
+    with session_factory() as session:
+        story = session.get(Story, story_id)
+        assert story.enrich_added == 1 and story.enrich_reason == "late_regen_deferred"
+        assert story.state == StoryState.PUBLISHED and story.enrich_regens == 0
+        assert (
+            session.scalar(
+                select(func.count()).select_from(Article).where(Article.origin == ENRICHMENT)
+            )
+            == 1
+        )  # kept for the next regeneration
+
+
+def test_reenrich_stories_that_ended_with_provider_errors(session_factory):
+    story_id = seed(session_factory)
+    fake = FakeSearch(status=500, text="down")
+    enricher = make_enricher(session_factory, fake)
+    with session_factory() as session:  # what the old code left behind
+        story = session.get(Story, story_id)
+        story.enrich_status, story.enriched_at = "done", NOW
+        session.commit()
+    enricher.start = lambda: True
+    assert enricher.requeue_provider_errors() == 1
+    with session_factory() as session:
+        story = session.get(Story, story_id)
+        assert story.enrich_status == "retry" and story.enrich_next_attempt_at is not None
+        assert story_id in enricher.pending(session)

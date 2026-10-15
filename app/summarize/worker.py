@@ -181,9 +181,16 @@ class SummaryWorker:
         ).startswith("brief failed")
         enriching = and_(  # NULL-safe: a NULL status must not drop the story
             Story.enrich_status.is_not(None),
-            Story.enrich_status == "pending",
-            Story.enrich_started_at.is_not(None),
-            Story.enrich_started_at > now - self.enrich_wait,
+            Story.enrich_status.in_(["pending", "retry"]),
+            or_(  # held at most wait_seconds from the first admission, retries included
+                and_(Story.enrich_wait_until.is_not(None), Story.enrich_wait_until > now),
+                and_(
+                    Story.enrich_wait_until.is_(None),
+                    Story.enrich_status == "pending",
+                    Story.enrich_started_at.is_not(None),
+                    Story.enrich_started_at > now - self.enrich_wait,
+                ),
+            ),
         )
         stmt = select(Story.id, Story.published_version).where(
             Story.state.in_(_LIVE),

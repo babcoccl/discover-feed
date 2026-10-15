@@ -226,36 +226,69 @@ publishers' pages are added to it, so briefs and reports cite several outlets.
 How it works (`app/search/`, `app/enrich/`):
 
 1. After clustering the story is marked `enrich_status = pending`; its brief waits up to
-   `wait_seconds` (the summary worker skips it meanwhile, never blocking on the search). A
-   background thread does the rest, `concurrency` stories at a time.
-2. Queries come from the headlines only (never article text): the lead headline without
-   stopwords plus the names the other headlines repeat, at most 10 words. `query_mode: llm`
-   asks the summarizer for up to 2 queries of 8 words or fewer, falling back to the heuristic.
-3. Each provider in `providers` is asked in order until enough sources are found. Supported:
-   `gdelt` (default, free, no key, one request per 5 s), `searxng` (your instance; `base_url`
-   and `json` in its `search.formats`), `guardian`, `newsdata` and `brave` (keys by env var
-   name). Results are cached for `cache_hours`; Retry-After and HTTP 429 are honored (short
-   waits retried once, long ones cool the provider down); `daily_request_budget` /
-   `monthly_budget_usd` are counted in `source_usage` as `search:<name>` (or `budget_source`,
-   to share an ingestion source's budget).
-4. Candidates are rejected before fetching for: same registrable domain as a member
+   `wait_seconds` from that first admission (the summary worker skips it meanwhile, never
+   blocking on the search; retries and second passes never hold it again). A background
+   thread does the rest, `concurrency` stories at a time. **Admission control:** only as
+   many stories are marked as the first provider can serve within `wait_seconds`
+   (`wait_seconds / (min_interval_seconds x max_queries_per_story)`, minus a running
+   cooldown and the stories already waiting), newest first; the rest stay unmarked and are
+   admitted on a later pipeline sweep (every minute). During backlog catch-up, stories older
+   than the summarizer's `summarize_backfill_hours` are not enriched.
+2. Queries come from the headlines only (never article text), built per provider. The
+   heuristic ranks terms: quoted multi-word names (`"Federal Reserve"`), other names,
+   numbers, then distinctive words, boosted when other member headlines repeat them. GDELT
+   and the Guardian AND every term, so their first query has 3-5 terms; NewsData's `q` stays
+   within 100 characters; SearXNG/Brave get up to 6 terms. Only when that query returns 0
+   hits is a looser one sent (`"Federal Reserve" (Powell OR 2025 OR rates)`), at most
+   `max_queries_per_story` (default 2) requests per provider and story. `query_mode: llm`
+   asks the summarizer for up to 2 queries, trimmed to the same per-provider limits, falling
+   back to the heuristic.
+3. Each provider in `providers` is asked in order until enough sources are found (a failing
+   provider falls through to the next). Supported: `gdelt` (default, free, no key),
+   `searxng` (your instance; `base_url` and `json` in its `search.formats`), `guardian`,
+   `newsdata` and `brave` (keys by env var name). `min_interval_seconds` defaults to 5 for
+   gdelt (lower values are raised to 5 with a warning; GDELT answers 429 otherwise) and 1 for
+   the others. Pacing and cooldowns are stored per provider in `search_provider_state`
+   (`last_request_at`, `cooldown_until`, `consecutive_errors`) and shared by the app and the
+   CLI tools. Retry-After / HTTP 429 and GDELT's plain-text "limit requests" reply are
+   honored: waits of 10 s or less are retried once, longer ones cool the provider down;
+   during a cooldown no request is sent (counted as a *cooldown skip*, not an error). Results
+   with hits are cached for `cache_hours`, empty results for at most `empty_cache_minutes`
+   (default 10; 0 = never); an empty or non-JSON body is an error and never cached.
+   `daily_request_budget` / `monthly_budget_usd` are counted in `source_usage` as
+   `search:<name>` (or `budget_source`, to share an ingestion source's budget).
+4. **Provider failure is not completion.** If no provider answered for a story (errors,
+   timeouts, rate limits, cooldowns, budgets), it is not marked done and `enriched_at` stays
+   unset: `enrich_status = retry`, `enrich_next_attempt_at` after a backoff of 2 minutes
+   doubling to 60 (`enrich_reason = "provider_unavailable: <error>"`). While a provider only
+   cools down, the story waits for the cooldown end without counting a failed attempt.
+   A story that later succeeds records `recovered after N failed attempt(s)`.
+5. **Second pass:** stories still under `target_sources` are searched once more
+   `second_pass_hours` (default 3; 0 = off) after the first pass.
+6. Candidates are rejected before fetching for: same registrable domain as a member
    (`bbc.co.uk`, `cnn.com`), social sites and aggregators, `deny_domains`, an already known
    URL, a publication time more than `max_time_gap_hours` from the story, another language,
-   or title/snippet TF-IDF similarity below `min_snippet_similarity`. The best
+   or title/snippet TF-IDF similarity below `min_snippet_similarity`. Hits without a snippet
+   (GDELT returns titles only) must share an entity with the headlines and reach
+   `min_title_similarity` (default 0.30); both scores are stored in `enrichment_candidates`
+   and the text check below has the final say. The best
    `max_candidates` are fetched with the extractor's robots.txt rules, per-domain delay and
    size caps, through the image fetcher's SSRF guard (http(s) only, public addresses only,
    every redirect re-checked). Failed and paywalled (`isAccessibleForFree: false`) pages are
    dropped; extracted text must reach `min_text_similarity`, share `min_shared_entities`
    names with the headlines, and not be a copy (5-word shingle overlap of `duplicate_overlap`
    with a member or an accepted page: syndicated wire copies collapse).
-5. Accepted pages become members with `origin = enrichment`, source id `web:<domain>`,
+7. Accepted pages become members with `origin = enrichment`, source id `web:<domain>`,
    pinned to the story through incremental clustering, merges and `--rebuild`. They count
    toward "N sources", are cited and numbered in briefs and reports like any member, and are
    badged "found via web search" on the story page; the API returns `sources[].origin`
    (`feed` | `enrichment`). They never fire alerts, never become cards of their own and
    never make a story visible in a profile that does not follow one of its feed sources.
-6. Sources found after a story was published regenerate it once (`enrich_regens`); the
-   published version stays visible until the new one passes the publish gate. Turn that off
+8. Sources found after a story was published regenerate it once (`enrich_regens`); the
+   published version stays visible until the new one passes the publish gate. At most
+   `late_regen_max_per_hour` (default 6) stories are regenerated that way per hour, so
+   enrichment cannot swamp the LLM; excess late sources are kept and used the next time the
+   story is regenerated (`enrich_reason = late_regen_deferred`). Turn late regenerations off
    with `resummarize_on_enrichment: false`.
 
 Enable it per profile (`config/profiles.example.yaml` shows every option; the
@@ -266,6 +299,9 @@ enrichment:
   enabled: true
   providers:
     - name: gdelt
+      min_interval_seconds: 6       # never below 5
+    # - name: guardian              # a second provider, tried when gdelt fails
+    #   api_key: GUARDIAN_API_KEY
     # - name: searxng
     #   base_url: http://searxng:8080
     # - name: brave
@@ -274,9 +310,14 @@ enrichment:
 ```
 
 The thresholds and providers come from the summarize profile (`DISCOVER_SUMMARIZE_PROFILE`,
-else the first). Settings > Pipeline shows eligible/enriched stories, average sources added,
-rejection reasons, provider errors and today's requests, plus **Enrich now**
-(`POST /api/admin/enrich[?story_id=N]`, admin key; a story id ignores `reenrich_hours`).
+else the first). Settings > Pipeline shows eligible / waiting / enriched stories, the retry
+queue (and when the next retry is due), "gdelt cooling down for N s, M stories waiting",
+average sources added, rejection reasons and, per provider, requests, successes, rate
+limits, timeouts, cooldown skips and errors since start, plus **Enrich now**
+(`POST /api/admin/enrich[?story_id=N]`, admin key; a story id ignores `reenrich_hours`) and
+the one-time **Re-enrich stories that ended with provider errors** (stories that failed,
+are waiting to retry, or were marked done by older versions with nothing found and no
+candidate recorded; they are retried at the providers' pace, briefs do not wait).
 
 Diagnose and evaluate against real providers before trusting it (the defaults are tuned on
 fixtures only; real-world false-match rates are not measured yet):
@@ -285,9 +326,21 @@ fixtures only; real-world false-match rates are not measured yet):
 python -m app.enrich.diagnose --story-id 42 --dry-run   # queries, raw responses, decisions
 python -m app.enrich.diagnose --auto                     # newest eligible story; adds pages
 python -m app.enrich.evaluate --stories 30 --markdown    # dry run over 30 recent stories
+python -m app.enrich.evaluate --stories 20 --provider gdelt
+# in the Docker container (same database, so the same pacing and cooldowns as the app):
+docker exec discover-feed python -m app.enrich.evaluate --stories 20 --markdown
+docker exec discover-feed python -m app.enrich.diagnose --story-id 42 --dry-run
 ```
 
-Windows: `.venv\Scripts\python -m app.enrich.diagnose --auto --dry-run`.
+Windows: `.venv\Scripts\python -m app.enrich.diagnose --auto --dry-run` (PowerShell:
+`docker exec discover-feed python -m app.enrich.evaluate --stories 20`).
+
+`evaluate` and `diagnose --dry-run` write nothing (no `enrich_status`, no candidates, no
+search-cache entries; only the shared pacing/cooldown state and request counts). `evaluate`
+prints every accepted page with its snippet / title / text scores (check them for false
+matches), rejections by reason with average scores, and each story's searches. Both refuse
+with a clear message (exit 3) while a provider cools down; `--wait` waits it out instead.
+GDELT runs take at least `min_interval_seconds` per query.
 
 ## Card images
 
