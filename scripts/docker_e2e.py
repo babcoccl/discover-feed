@@ -49,6 +49,8 @@ class Timeline:
     def __init__(self) -> None:
         self.gdelt: dict = {}
         """``/gdelt-stats`` of the fixture server (failure modes served)."""
+        self.tinyfish: dict = {}
+        """``/tinyfish-stats``: the primary provider's replies (failures, then normal)."""
         self.t0 = time.monotonic()
         self.events: list[tuple[float, str]] = []
         self.stories: dict[str, dict] = {}
@@ -113,6 +115,8 @@ def poll(base: str, tl: Timeline, assert_published: bool) -> None:
                     web = [s for s in v1.get("sources", []) if s.get("origin") == "enrichment"]
                     if web:
                         tl.mark(row, "enriched", len(web))
+                        if any("tinywire" in json.dumps(s) for s in web):
+                            tl.mark(row, "tinyfish", 1)
                         if not any(e[1].startswith("first web-search") for e in tl.events):
                             tl.event(f"first web-search source on: {item['title'][:60]}")
             state = report_state(item.get("report"))
@@ -128,13 +132,17 @@ def poll(base: str, tl: Timeline, assert_published: bool) -> None:
 
 def settled(tl: Timeline) -> bool:
     """At least 5 published stories with a final report, every shown card has a brief, and
-    at least one story gained a web-search source from the fixture server's fake GDELT after
-    it served its failure modes (so failed stories were retried, then enriched)."""
+    at least one story gained a web-search source from the fake TinyFish (the primary), and
+    both fakes served their failure modes and then answered (TinyFish failures fell back to
+    GDELT; GDELT failures were retried)."""
     rows = [r for r in tl.stories.values() if "clustered" in r]
     final = [r for r in rows if "report" in r]
-    enriched = [r for r in rows if "enriched" in r]
+    from_tinyfish = [r for r in rows if "tinyfish" in r]
     return (
-        len(final) >= 5 and all("brief" in r for r in rows) and bool(enriched) and faults_served(tl)
+        len(final) >= 5
+        and all("brief" in r for r in rows)
+        and bool(from_tinyfish)
+        and faults_served(tl)
     )
 
 
@@ -148,16 +156,17 @@ def render(tl: Timeline) -> str:
         "",
         f"cards polled: {tl.cards}, shown without a brief: {tl.snippet_cards}",
         f"stories with web-search (enrichment) sources: "
-        f"{sum(1 for r in tl.stories.values() if 'enriched' in r)}",
+        f"{sum(1 for r in tl.stories.values() if 'enriched' in r)} "
+        f"({sum(1 for r in tl.stories.values() if 'tinyfish' in r)} from the fake TinyFish)",
         f"publish-gate violations: {len(tl.violations)}",
     ]
     lines += [f"  - {v}" for v in tl.violations[:20]]
     return "\n".join(lines)
 
 
-def gdelt_stats(fixtures: str = "http://localhost:8081") -> dict:
+def gdelt_stats(fixtures: str = "http://localhost:8081", name: str = "gdelt") -> dict:
     try:
-        with urllib.request.urlopen(f"{fixtures}/gdelt-stats", timeout=5) as r:
+        with urllib.request.urlopen(f"{fixtures}/{name}-stats", timeout=5) as r:
             return json.loads(r.read())
     except Exception:
         return {}
@@ -165,12 +174,16 @@ def gdelt_stats(fixtures: str = "http://localhost:8081") -> dict:
 
 def faults_served(tl: Timeline) -> bool:
     """The fake GDELT served every failure mode (429, plain-text limit, timeout, empty body)
-    and still answered normally afterwards: failed stories were retried and enriched."""
-    stats = tl.gdelt or {}
+    and the fake TinyFish its own (malformed JSON, empty body, 429), and both still answered
+    normally afterwards: failed stories fell back / were retried and enriched."""
+    gdelt, tinyfish = tl.gdelt or {}, tl.tinyfish or {}
     return (
-        not stats.get("pending_faults")
-        and all(stats.get(k) for k in ("429", "limit", "timeout", "empty"))
-        and stats.get("ok", 0) > 0
+        not gdelt.get("pending_faults")
+        and all(gdelt.get(k) for k in ("429", "limit", "timeout", "empty"))
+        and gdelt.get("ok", 0) > 0
+        and not tinyfish.get("pending_faults")
+        and all(tinyfish.get(k) for k in ("malformed", "empty", "429"))
+        and tinyfish.get("ok", 0) > 0
     )
 
 
@@ -190,7 +203,7 @@ def main() -> int:
         tl.event("stack healthy")
         while tl.now() < args.timeout:
             poll(args.base, tl, not args.no_assert)
-            tl.gdelt = gdelt_stats()
+            tl.gdelt, tl.tinyfish = gdelt_stats(), gdelt_stats(name="tinyfish")
             if settled(tl):
                 done = sum("report" in r for r in tl.stories.values())
                 tl.event(f"settled: {done} stories published with a final report")
@@ -198,7 +211,8 @@ def main() -> int:
             time.sleep(1)
         else:
             tl.event(f"timed out after {args.timeout:.0f}s")
-        tl.gdelt = gdelt_stats()
+        tl.gdelt, tl.tinyfish = gdelt_stats(), gdelt_stats(name="tinyfish")
+        tl.event(f"fake TinyFish replies: {tl.tinyfish}")
         tl.event(f"fake GDELT replies: {tl.gdelt}")
     finally:
         text = render(tl)
@@ -211,7 +225,10 @@ def main() -> int:
     if args.no_assert:
         return 0
     if not faults_served(tl):
-        print(f"fake GDELT failure modes not all served / recovered from: {tl.gdelt}")
+        print(
+            "fake provider failure modes not all served / recovered from: "
+            f"tinyfish {tl.tinyfish}, gdelt {tl.gdelt}"
+        )
     ok = settled(tl) and not tl.violations
     print("PASS" if ok else "FAIL")
     return 0 if ok else 1

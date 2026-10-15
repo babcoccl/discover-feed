@@ -6,8 +6,9 @@ response, and every candidate's decision, reason and similarity.
     docker exec discover-feed python -m app.enrich.diagnose --story-id 42 --dry-run
 
 ``--dry-run`` writes nothing (no status, candidates or search-cache entries); only the
-shared provider pacing / cooldown state and request counts are updated. During a provider
-cooldown it refuses (exit 3) unless ``--wait``.
+shared provider pacing / cooldown state and request counts are updated. A cooling-down
+provider's searches are skipped (its fallback answers); with every provider cooling down
+it refuses (exit 3) unless ``--wait``.
 """
 
 import argparse
@@ -26,11 +27,16 @@ def report(result: StoryEnrichment, title: str = "") -> str:
     lines.append(f"publishers before: {result.publishers_before}")
     lines.append(f"queries ({result.query_mode}):")
     lines += [f"  - {q}" for q in result.queries]
+    if not result.searches and result.reason:
+        lines.append(f"not searched: {result.reason}")
     for s in result.searches:
         state = "cached" if s["cached"] else ("error: " + s["error"] if s["error"] else "ok")
+        if s.get("kind") and s.get("error") and not s.get("skipped"):
+            state = f"{s['kind']} error: {s['error']}"
         if s.get("skipped"):
             state = f"skipped ({s['skipped']}): {s['error']}"
-        lines.append(f"\n## {s['provider']} · {s['query']!r} · {s['hits']} hit(s) · {state}")
+        sent = f" · {s['requests']} request(s)" if s.get("requests") else ""
+        lines.append(f"\n## {s['provider']} · {s['query']!r} · {s['hits']} hit(s){sent} · {state}")
         if s["raw"]:
             lines.append("raw: " + s["raw"].replace("\n", " ")[:600])
     lines.append("\n## Candidates")
@@ -44,6 +50,11 @@ def report(result: StoryEnrichment, title: str = "") -> str:
         )
     if not result.candidates:
         lines.append("(none)")
+    top = sorted((c for c in result.candidates if c.decision != "accepted"), key=lambda c: -c.score)
+    if top:
+        lines.append("\n## Top rejected")
+        for c in top[:3]:
+            lines.append(f"- {c.score:.2f} {c.reason} · {c.hit.domain or '?'} · {c.hit.title[:90]}")
     lines.append(
         f"\nresult: {result.status}, {len(result.accepted)} accepted"
         + (f", {result.added} added" if result.added else "")

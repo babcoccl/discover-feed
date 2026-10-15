@@ -234,27 +234,48 @@ How it works (`app/search/`, `app/enrich/`):
    cooldown and the stories already waiting), newest first; the rest stay unmarked and are
    admitted on a later pipeline sweep (every minute). During backlog catch-up, stories older
    than the summarizer's `summarize_backfill_hours` are not enriched.
-2. Queries come from the headlines only (never article text), built per provider. The
-   heuristic ranks terms: quoted multi-word names (`"Federal Reserve"`), other names,
-   numbers, then distinctive words, boosted when other member headlines repeat them. GDELT
-   and the Guardian AND every term, so their first query has 3-5 terms; NewsData's `q` stays
-   within 100 characters; SearXNG/Brave get up to 6 terms. Only when that query returns 0
+2. Stories other outlets are unlikely to cover are not searched: headlines matching
+   `skip_title_patterns` (default `^Show HN`, `^Ask HN`, `^Tell HN`, `^Opinion`, `^Letters`;
+   `enrich_reason = skipped:pattern`) and headlines with fewer than `min_signal_tokens`
+   (default 2) distinct names / numbers ("The cost of getting a job today", "AI was great
+   until it was not": `skipped:no_signal`). They are marked done at once (briefs never wait)
+   and counted separately in Settings > Pipeline and `evaluate`.
+   Queries come from the headlines only (never article text), built per provider, after
+   removing boilerplate labels (`strip_title_prefixes`: `Show HN:`, `Exclusive:`,
+   `Analysis -`, `Live:` ...). The heuristic ranks terms: quoted multi-word names (`"Federal Reserve"`), other names,
+   names with a version or number (`"Ubuntu 26.10"`), numbers and percentages (`0.1%`), then
+   distinctive words, boosted when other member headlines repeat them; lone digits are
+   dropped. TinyFish gets up to 5 terms, GDELT and the Guardian (which AND every term) 3-4;
+   NewsData's `q` stays within 100 characters; SearXNG/Brave get up to 6 terms. GDELT never
+   gets a keyword under 3 characters (it splits on punctuation, so `U.S.` and `0.1%` count):
+   `AI`, `US`, `UK`, `EU`, `UN` are spelled out (`"artificial intelligence"`), other short
+   words dropped; a quoted name keeps a short word (`"Gen Z"`). If GDELT still answers
+   "keyword that was too short", the query is rebuilt once without any short part and sent
+   again (no cooldown); if that is rejected too the search is skipped (`query_too_short`). Only when that query returns 0
    hits is a looser one sent (`"Federal Reserve" (Powell OR 2025 OR rates)`), at most
    `max_queries_per_story` (default 2) requests per provider and story. `query_mode: llm`
    asks the summarizer for up to 2 queries, trimmed to the same per-provider limits, falling
    back to the heuristic.
 3. Each provider in `providers` is asked in order until enough sources are found (a failing
-   provider falls through to the next). Supported: `gdelt` (default, free, no key),
-   `searxng` (your instance; `base_url` and `json` in its `search.formats`), `guardian`,
-   `newsdata` and `brave` (keys by env var name). `min_interval_seconds` defaults to 5 for
-   gdelt (lower values are raised to 5 with a warning; GDELT answers 429 otherwise) and 1 for
-   the others. Pacing and cooldowns are stored per provider in `search_provider_state`
+   or empty provider falls through to the next). The default is `tinyfish` then `gdelt`.
+   Supported: `tinyfish` ([TinyFish Search API](https://docs.tinyfish.ai/search-api/reference):
+   titles, snippets and dates; key in `TINYFISH_API_KEY`, free up to 12,000 requests a day,
+   `search_type: news|web`), `gdelt` (free, no key, titles only), `searxng` (your instance;
+   `base_url` and `json` in its `search.formats`), `guardian`, `newsdata` and `brave` (keys by
+   env var name). Without `TINYFISH_API_KEY` TinyFish is asked keyless (no `X-API-Key`
+   header; works through a keyless proxy `base_url`); the real API answers 401 then, which
+   rests TinyFish for an hour (GDELT serves meanwhile) instead of failing every story.
+   `min_interval_seconds` defaults to 2 for tinyfish (30 requests / minute; lower values are
+   raised to 2 unless `override_min_interval: true`), 5 for gdelt (lower values are raised to
+   5 with a warning; GDELT answers 429 otherwise) and 1 for the others. Pacing and cooldowns are stored per provider in `search_provider_state`
    (`last_request_at`, `cooldown_until`, `consecutive_errors`) and shared by the app and the
    CLI tools. Retry-After / HTTP 429 and GDELT's plain-text "limit requests" reply are
    honored: waits of 10 s or less are retried once, longer ones cool the provider down;
    during a cooldown no request is sent (counted as a *cooldown skip*, not an error). Results
    with hits are cached for `cache_hours`, empty results for at most `empty_cache_minutes`
-   (default 10; 0 = never); an empty or non-JSON body is an error and never cached.
+   (default 10; 0 = never). An empty body, malformed JSON or an unknown plain-text reply
+   (GDELT's is logged in full) is *transient*: retried once after 2 s, never cached, no
+   cooldown.
    `daily_request_budget` / `monthly_budget_usd` are counted in `source_usage` as
    `search:<name>` (or `budget_source`, to share an ingestion source's budget).
 4. **Provider failure is not completion.** If no provider answered for a story (errors,
@@ -298,9 +319,11 @@ Settings > Pipeline checkbox overrides the YAML for an existing database):
 enrichment:
   enabled: true
   providers:
-    - name: gdelt
+    - name: tinyfish                # primary; key in TINYFISH_API_KEY (.env)
+      min_interval_seconds: 2       # never below 2 (30 requests / minute)
+    - name: gdelt                   # free fallback when tinyfish fails or finds nothing
       min_interval_seconds: 6       # never below 5
-    # - name: guardian              # a second provider, tried when gdelt fails
+    # - name: guardian              # a third provider
     #   api_key: GUARDIAN_API_KEY
     # - name: searxng
     #   base_url: http://searxng:8080
@@ -312,8 +335,10 @@ enrichment:
 The thresholds and providers come from the summarize profile (`DISCOVER_SUMMARIZE_PROFILE`,
 else the first). Settings > Pipeline shows eligible / waiting / enriched stories, the retry
 queue (and when the next retry is due), "gdelt cooling down for N s, M stories waiting",
-average sources added, rejection reasons and, per provider, requests, successes, rate
-limits, timeouts, cooldown skips and errors since start, plus **Enrich now**
+average sources added, rejection reasons, stories not searched (`pattern` / `no_signal`)
+and, separately for each provider, requests today, then requests, successes, rate limits,
+timeouts, cooldown skips, transient (empty / malformed) replies, rejected queries and errors
+since start, the current cooldown and failures in a row, plus **Enrich now**
 (`POST /api/admin/enrich[?story_id=N]`, admin key; a story id ignores `reenrich_hours`) and
 the one-time **Re-enrich stories that ended with provider errors** (stories that failed,
 are waiting to retry, or were marked done by older versions with nothing found and no
@@ -326,7 +351,8 @@ fixtures only; real-world false-match rates are not measured yet):
 python -m app.enrich.diagnose --story-id 42 --dry-run   # queries, raw responses, decisions
 python -m app.enrich.diagnose --auto                     # newest eligible story; adds pages
 python -m app.enrich.evaluate --stories 30 --markdown    # dry run over 30 recent stories
-python -m app.enrich.evaluate --stories 20 --provider gdelt
+python -m app.enrich.evaluate --stories 20 --provider gdelt   # only the fallback
+python -m app.enrich.evaluate --stories 20 --wait             # wait out cooldowns
 # in the Docker container (same database, so the same pacing and cooldowns as the app):
 docker exec discover-feed python -m app.enrich.evaluate --stories 20 --markdown
 docker exec discover-feed python -m app.enrich.diagnose --story-id 42 --dry-run
@@ -338,9 +364,14 @@ Windows: `.venv\Scripts\python -m app.enrich.diagnose --auto --dry-run` (PowerSh
 `evaluate` and `diagnose --dry-run` write nothing (no `enrich_status`, no candidates, no
 search-cache entries; only the shared pacing/cooldown state and request counts). `evaluate`
 prints every accepted page with its snippet / title / text scores (check them for false
-matches), rejections by reason with average scores, and each story's searches. Both refuse
-with a clear message (exit 3) while a provider cools down; `--wait` waits it out instead.
-GDELT runs take at least `min_interval_seconds` per query.
+matches), rejections by reason with average scores, stories not searched, per provider the
+requests actually sent vs cooldown skips and errors grouped by exact text (count and an
+example query), and per story the queries sent, hits per query and the top three rejected
+candidates with scores and reasons. A provider that is cooling down (shared with the app)
+is skipped and its fallback answers; with every provider cooling down both refuse (exit 3).
+`--wait` waits instead, and `evaluate --wait` also waits whenever a provider starts cooling
+down mid-run ("waiting for gdelt (cooling down)"). Runs take at least
+`min_interval_seconds` per query (tinyfish 2 s, GDELT 5 s).
 
 ## Card images
 

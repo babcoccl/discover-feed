@@ -10,7 +10,7 @@ services:
       DISCOVER_EXTRACT_DOMAIN_DELAY_SECONDS: "0.2"
       DISCOVER_EXTRACT_MAX_ARTICLES: "100"
       # The fixture service is on the private compose network; the image SSRF guard allows it.
-      DISCOVER_IMAGES_ALLOW_HOSTS: fixtures,otherwire
+      DISCOVER_IMAGES_ALLOW_HOSTS: fixtures,otherwire,tinywire
     volumes:
       - ./tests/fixtures:/fixtures:ro
     depends_on:
@@ -22,12 +22,16 @@ services:
     command: ["python", "-m", "app.fixture_server", "--port", "8081",
               "--base", "http://fixtures:8081", "--fixture-dir", "/fixtures/demo",
               "--wire-base", "http://otherwire:8081",
-              # The first fake-GDELT replies fail; stories must be retried, then enriched.
+              "--tinyfish-wire-base", "http://tinywire:8081",
+              # The first fake-TinyFish replies fail (each transient one twice: the client
+              # retries it once), so those stories fall back to the fake GDELT, whose first
+              # replies fail too; stories must be retried, then enriched.
+              "--tinyfish-faults", "malformed,malformed,empty,empty,429",
               "--gdelt-faults", "429,limit,timeout,empty,429"]
     networks:
       default:
-        # A second host name: the fake web-search hits look like another publisher.
-        aliases: [otherwire]
+        # More host names: the fake web-search hits look like other publishers.
+        aliases: [otherwire, tinywire]
     volumes:
       - ./tests/fixtures:/fixtures:ro
     ports:

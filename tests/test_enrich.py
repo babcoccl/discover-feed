@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 from datetime import UTC, datetime, timedelta
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -137,7 +138,24 @@ class FakeSearch:
             return self.responses.pop(0)
         if self.text is not None:
             return httpx.Response(self.status, text=self.text, headers=self.headers)
-        if request.url.path.endswith("/search"):  # SearXNG
+        if "tinyfish" in request.url.host:
+            body = {
+                "query": request.url.params.get("query"),
+                "results": [
+                    {
+                        "position": n,
+                        "site_name": urlsplit(u).hostname,
+                        "title": t,
+                        "snippet": t,
+                        "url": u,
+                        "date": NOW.isoformat(),
+                    }
+                    for n, (u, t) in enumerate(self.hits, start=1)
+                ],
+                "total_results": len(self.hits),
+                "page": 0,
+            }
+        elif request.url.path.endswith("/search"):  # SearXNG
             body = {
                 "results": [
                     {"url": u, "title": t, "content": t, "publishedDate": NOW.isoformat()}
@@ -673,9 +691,9 @@ def test_empty_results_are_cached_briefly_and_empty_bodies_never(session_factory
     search("never", empty_cache_minutes=0)
     assert not search("never", empty_cache_minutes=0).cached
     for body in ("", "  ", "<html>Oops</html>"):
-        fake.responses = [httpx.Response(200, text=body)]
+        fake.responses = [httpx.Response(200, text=body), httpx.Response(200, text=body)]
         clock.advance(seconds=10)
-        assert search(f"bad {body!r}").error
+        assert search(f"bad {body!r}").error  # retried once (transient), then an error
     with session_factory() as session:
         queries = set(session.scalars(select(SearchCacheEntry.query)))
     assert queries == {"empty"}
@@ -771,7 +789,7 @@ def test_looser_query_only_after_zero_hits(session_factory):
     fake = FakeSearch()
     run(make_enricher(session_factory, fake), story_id)
     assert len(fake.requests) == 1  # the strict query found hits
-    other = seed_more(session_factory, ["Fresno council backs new water treatment plant"])[0]
+    other = seed_more(session_factory, ["Fresno council backs Kings River water plant"])[0]
     empty = FakeSearch(hits=[])
     run(make_enricher(session_factory, empty), other)
     queries = [r.url.params["query"] for r in empty.requests]
@@ -944,9 +962,9 @@ def seed_more(factory, titles: list[str], *, hours_ago: float = 1) -> list[int]:
 
 TOPICS = [
     "Volcano erupts near Reykjavik airport",
-    "Chess grandmaster wins blitz title",
-    "Bakery chain recalls almond croissants",
-    "Satellite launch delayed by solar storm",
+    "Chess grandmaster Carlsen wins blitz title",
+    "Bakery chain Greggs recalls almond croissants",
+    "NASA satellite launch delayed by Florida solar storm",
     "Orchestra unveils Mahler symphony cycle",
     "Glacier retreat measured in Patagonia",
     "Marathon record falls in Berlin",

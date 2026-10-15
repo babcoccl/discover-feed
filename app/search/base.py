@@ -90,6 +90,25 @@ class ProviderTimeout(FetchError):
     """The provider did not answer within ``timeout_seconds``."""
 
 
+class TransientError(FetchError):
+    """An empty body, malformed JSON or an unknown reply: retried once after a short
+    backoff, never a cooldown."""
+
+
+class NotAuthorized(FetchError):
+    """Missing or rejected API key: the provider rests for ``retry_after`` seconds (the
+    next provider serves meanwhile) instead of failing every story."""
+
+    def __init__(self, message: str, retry_after: float = 3600.0) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+class QueryRejected(FetchError):
+    """The provider rejected the query itself (GDELT: "keyword that was too short"): no
+    cooldown; the caller rebuilds the query once."""
+
+
 def is_timeout(exc: Exception) -> bool:
     """Timeouts from our providers or from ``JsonApiAdapter.get_json`` (``ReadTimeout`` ...)."""
     return isinstance(exc, ProviderTimeout) or "Timeout:" in str(exc)
@@ -165,7 +184,7 @@ def register(name: str) -> Callable[[type[SearchProvider]], type[SearchProvider]
 
 
 def create_provider(config: SearchProviderConfig, client: httpx.AsyncClient) -> SearchProvider:
-    from app.search import providers  # noqa: F401  (registers the built-in providers)
+    from app.search import providers, tinyfish  # noqa: F401  (registers the built-in providers)
 
     try:
         cls = PROVIDERS[config.name]

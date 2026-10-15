@@ -38,21 +38,46 @@ def only_providers(enricher: Enricher, names: list[str] | None) -> None:
 
 
 def respect_cooldowns(enricher: Enricher, *, wait: bool, out=sys.stderr) -> bool:
-    """The providers' cooldowns are shared with the app (``search_provider_state``): refuse
-    (or ``--wait``) instead of sending a request that would only earn another 429. Pacing
-    (``min_interval_seconds``) is waited out automatically."""
+    """The providers' cooldowns are shared with the app (``search_provider_state``): with
+    every provider cooling down, refuse (or ``--wait``) instead of sending requests that
+    would only earn another 429; one cooling provider is skipped (its fallback serves) or,
+    with ``--wait``, waited for. Pacing (``min_interval_seconds``) is waited out
+    automatically."""
+    providers = enricher.config.providers
+    cooling = {
+        p.name: r for p in providers if (r := enricher.search.cooldown_remaining(p.name)) > 0
+    }
+    if not cooling:
+        return True
+    if not wait and len(cooling) == len(providers):
+        for name, remaining in cooling.items():
+            print(
+                f"{name} is cooling down for {math.ceil(remaining)} s after a rate limit "
+                "(shared with the app). Try again then, or pass --wait.",
+                file=out,
+            )
+        return False
+    if not wait:
+        for name, remaining in cooling.items():
+            print(
+                f"{name} is cooling down for {math.ceil(remaining)} s (shared with the app); "
+                "its searches are skipped (pass --wait to wait for it).",
+                file=out,
+            )
+        return True
+    wait_for_cooldowns(enricher, out=out)
+    return True
+
+
+def wait_for_cooldowns(enricher: Enricher, *, out=sys.stderr, sleep=time.sleep) -> float:
+    """Sleep until no configured provider is cooling down; returns the seconds waited."""
+    waited = 0.0
     for provider in enricher.config.providers:
         remaining = enricher.search.cooldown_remaining(provider.name)
         if remaining <= 0:
             continue
         seconds = math.ceil(remaining)
-        if not wait:
-            print(
-                f"{provider.name} is cooling down for {seconds} s after a rate limit "
-                "(shared with the app). Try again then, or pass --wait.",
-                file=out,
-            )
-            return False
-        print(f"{provider.name} is cooling down; waiting {seconds} s ...", file=out)
-        time.sleep(seconds)
-    return True
+        print(f"waiting for {provider.name} (cooling down, {seconds} s) ...", file=out)
+        sleep(seconds)
+        waited += seconds
+    return waited

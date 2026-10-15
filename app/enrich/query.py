@@ -7,14 +7,16 @@ from collections import Counter
 from dataclasses import dataclass
 
 from app.cluster.tokens import STOPWORDS
-from app.config import LLMRole
+from app.config import DEFAULT_STRIP_TITLE_PREFIXES, LLMRole
 
 logger = logging.getLogger(__name__)
 
 MAX_TOKENS = 10
 MAX_LLM_QUERIES = 2
 MAX_LLM_WORDS = 8
-_WORD = re.compile(r"[^\W_]+(?:['\u2019.&-][^\W_]+)*", re.UNICODE)
+_WORD = re.compile(r"[$\u20ac\u00a3]?[^\W_]+(?:['\u2019.&-][^\W_]+)*%?", re.UNICODE)
+_ACRONYM = re.compile(r"^(?:[A-Za-z]\.)+[A-Za-z]\.?$")
+_PIECE = re.compile(r"[^\W_]+", re.UNICODE)
 _EXTRA_STOP = frozenset({"breaking", "live", "update", "updates", "exclusive", "watch", "video"})
 
 QUERY_SCHEMA = {
@@ -38,7 +40,33 @@ def _is_stop(raw: str) -> bool:
 
 
 def _clean(raw: str) -> str:
-    return raw.replace("\u2019", "'").removesuffix("'s").strip("'.-&")
+    word = raw.replace("\u2019", "'").removesuffix("'s").strip("'.-&")
+    return word.replace(".", "") if _ACRONYM.match(word) else word  # U.S. -> US
+
+
+def strip_boilerplate(title: str, prefixes: list[str] | None = None) -> str:
+    """The headline without leading labels such as ``Show HN:`` or ``Exclusive -``."""
+    names = DEFAULT_STRIP_TITLE_PREFIXES if prefixes is None else prefixes
+    if not names:
+        return title.strip()
+    label = "|".join(re.escape(p) for p in sorted(names, key=len, reverse=True))
+    pattern = re.compile(rf"^\s*(?:{label})\s*[:|\-\u2013\u2014]\s*", re.IGNORECASE)
+    text, previous = title.strip(), None
+    while text != previous:
+        previous, text = text, pattern.sub("", text, count=1)
+    return text or title.strip()
+
+
+def signal_tokens(headline: str) -> set[str]:
+    """Distinct names (capitalized non-stop words, acronyms) and numbers of a headline."""
+    found = set()
+    for raw in _WORD.findall(strip_boilerplate(headline)):
+        word = _clean(raw)
+        if not word or _is_stop(raw):
+            continue
+        if _NUMBER.match(word.lstrip("$\u20ac\u00a3")) or raw[:1].isupper():
+            found.add(word.casefold())
+    return found
 
 
 def heuristic_query(headlines: list[str]) -> str:
@@ -46,6 +74,7 @@ def heuristic_query(headlines: list[str]) -> str:
     member headlines repeat most; at most ``MAX_TOKENS`` tokens."""
     if not headlines:
         return ""
+    headlines = [strip_boilerplate(h) for h in headlines]
     main = [_clean(w) for w in _WORD.findall(headlines[0]) if not _is_stop(w)]
     main = [w for w in main if len(w) > 1 or w.isdigit()]
     seen = {w.casefold() for w in main}
@@ -65,15 +94,31 @@ def heuristic_query(headlines: list[str]) -> str:
 
 # --- per-provider queries -----------------------------------------------------------------
 
-STRICT_TERMS = {"gdelt": 4, "guardian": 4, "newsdata": 5, "searxng": 6, "brave": 6}
-"""Terms in the first query. GDELT and Guardian AND every term, so a long query finds
-nothing; 3-5 high-signal terms is the sweet spot."""
+STRICT_TERMS = {
+    "tinyfish": 5,
+    "gdelt": 4,
+    "guardian": 4,
+    "newsdata": 5,
+    "searxng": 6,
+    "brave": 6,
+}
+"""Terms in the first query. Every provider ANDs (or ranks by) every term, so a long
+query finds nothing; 3-5 high-signal terms is the sweet spot."""
 LOOSE_TERMS = 4
 QUERY_CHARS = {"newsdata": 100}
 MIN_TERM_CHARS = {"gdelt": 3}
-"""GDELT rejects keywords shorter than 3 characters ("too short")."""
+"""GDELT rejects keywords shorter than 3 characters ("too short"); it splits words on
+punctuation, so ``U.S`` or ``0.1%`` count as short keywords too."""
+FOLD = {
+    "ai": "artificial intelligence",
+    "us": "United States",
+    "uk": "United Kingdom",
+    "eu": "European Union",
+    "un": "United Nations",
+}
+"""Short acronyms spelled out for providers with a minimum keyword length."""
 OR_SYNTAX = frozenset({"gdelt", "guardian", "newsdata"})
-_NUMBER = re.compile(r"^\d[\d,.]*$")
+_NUMBER = re.compile(r"^\d[\d,.]*%?$")
 
 
 @dataclass
@@ -120,6 +165,7 @@ def story_terms(headlines: list[str]) -> list[Term]:
     score higher; title-case headlines only count multi-word names seen twice."""
     if not headlines:
         return []
+    headlines = [strip_boilerplate(h) for h in headlines]
     others = [h.casefold() for h in headlines[1:]]
     tokenized = [_WORD.findall(h) for h in headlines]
     phrases: Counter[str] = Counter()
@@ -145,9 +191,22 @@ def story_terms(headlines: list[str]) -> list[Term]:
                 rep = sum(text.casefold() in o for o in others)
                 terms.append(Term(text, 4.0 + rep, i))
                 used |= set(range(i, i + size))
+    for i in range(len(main) - 1):  # a name and its version / model number: "Ubuntu 26.10"
+        name, number = joined[i], joined[i + 1]
+        if (
+            {i, i + 1} & used
+            or not main[i][:1].isupper()
+            or _is_stop(main[i])
+            or not _NUMBER.match(number)
+            or number.endswith("%")
+        ):
+            continue
+        rep = sum(f"{name} {number}".casefold() in o for o in others)
+        terms.append(Term(f"{name} {number}", 4.5 + rep, i))
+        used |= {i, i + 1}
     for i, raw in enumerate(main):
         word = _clean(raw)
-        if i in used or _is_stop(raw) or (len(word) < 2 and not word.isdigit()):
+        if i in used or _is_stop(raw) or len(word) < 2:  # "2", "5": no signal on their own
             continue
         rep = sum(word.casefold() in o for o in others)
         if _NUMBER.match(word):
@@ -180,9 +239,65 @@ def story_terms(headlines: list[str]) -> list[Term]:
     return sorted(unique.values(), key=lambda t: (-t.score, t.pos))
 
 
+def short_pieces(text: str, least: int) -> list[str]:
+    return [p for p in _PIECE.findall(text) if len(p) < least]
+
+
 def _usable(provider: str, terms: list[Term]) -> list[Term]:
+    """Terms the provider accepts: with a minimum keyword length (GDELT), short acronyms
+    are spelled out, other single words with short parts dropped; a quoted name may keep
+    a short word ("Gen Z") as long as it has a long one."""
     least = MIN_TERM_CHARS.get(provider, 1)
-    return [t for t in terms if len(t.text) >= least]
+    if least <= 1:
+        return terms
+    usable, seen = [], set()
+    for term in terms:
+        text = term.text
+        if " " not in text and text.casefold() in FOLD:
+            term = Term(FOLD[text.casefold()], term.score, term.pos)
+        else:
+            short = short_pieces(text, least)
+            if short and (" " not in text or len(short) == len(_PIECE.findall(text))):
+                continue
+        if term.text.casefold() not in seen:
+            seen.add(term.text.casefold())
+            usable.append(term)
+    return usable
+
+
+_QUERY_PART = re.compile(r'"[^"]*"|\(|\)|[^\s()]+')
+
+
+def drop_short_terms(provider: str, query: str) -> str:
+    """The query without any keyword or quoted phrase containing a part shorter than the
+    provider allows (the one rebuild after GDELT answers "too short"); "" if nothing is
+    left or nothing changed."""
+    least = MIN_TERM_CHARS.get(provider, 3)
+    out: list[str] = []
+    group: list[str] | None = None
+    changed = False
+
+    def keep(part: str) -> bool:
+        nonlocal changed
+        if short_pieces(part.strip('"'), least):
+            changed = True
+            return False
+        return True
+
+    for part in _QUERY_PART.findall(query):
+        if part == "(":
+            group = []
+        elif part == ")":
+            if group:
+                out.append(group[0] if len(group) == 1 else "(" + " OR ".join(group) + ")")
+            group = None
+        elif part.upper() in ("OR", "AND", "NOT"):
+            continue
+        elif keep(part):
+            (group if group is not None else out).append(part)
+    if group:  # unbalanced
+        out.extend(group)
+    return " ".join(out) if changed and out else ""
 
 
 def _fit(provider: str, query: str, parts: list[str]) -> str:
@@ -228,7 +343,10 @@ def adapt_query(provider: str, query: str) -> str:
     term count, no too-short words, no quotes (they are added for multi-word names only)."""
     words = [w for w in re.sub(r"[\"\u201c\u201d()]", " ", query).split()]
     words = [w for w in words if w.upper() not in {"AND", "OR", "NOT"}]
-    words = [w for w in words if len(w) >= MIN_TERM_CHARS.get(provider, 1)]
+    least = MIN_TERM_CHARS.get(provider, 1)
+    if least > 1:
+        words = [FOLD.get(w.casefold().replace(".", ""), w) for w in words]
+        words = [f'"{w}"' if " " in w else w for w in words if not short_pieces(w, least)]
     words = words[: STRICT_TERMS.get(provider, 6)]
     return _fit(provider, " ".join(words), words)
 
@@ -239,10 +357,11 @@ def provider_queries(
     *,
     llm: list[str] | None = None,
     max_queries: int = 2,
+    strip_prefixes: list[str] | None = None,
 ) -> list[str]:
     """Queries for one provider, in order: the strict one first, then looser fallbacks
     (the caller only sends a fallback when the previous query found nothing)."""
-    terms = story_terms(headlines)
+    terms = story_terms([strip_boilerplate(h, strip_prefixes) for h in headlines])
     queries = [adapt_query(provider, q) for q in llm or []]
     if not queries:
         queries.append(strict_query(provider, terms))

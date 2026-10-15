@@ -469,17 +469,20 @@ class AlertsConfig(_Model):
 
 
 GDELT_MIN_INTERVAL = 5.0
+TINYFISH_MIN_INTERVAL = 2.0
+"""TinyFish allows 30 requests / minute per key by default."""
 """GDELT DOC 2.0 asks for at most one request every 5 seconds."""
 
 
 class SearchProviderConfig(_Model):
     """One web-search provider used by enrichment (``enrichment.providers``)."""
 
-    name: str = Field(pattern=r"^(gdelt|searxng|guardian|newsdata|brave)$")
+    name: str = Field(pattern=r"^(tinyfish|gdelt|searxng|guardian|newsdata|brave)$")
     base_url: str | None = None
     """API root (required for ``searxng``: your instance, with ``json`` in search.formats)."""
     api_key: str | None = None
-    """Name of the environment variable holding the key (guardian / newsdata / brave)."""
+    """Name of the environment variable holding the key (tinyfish / guardian / newsdata /
+    brave)."""
     budget_source: str | None = None
     """Share the daily request budget recorded for this source id (e.g. a guardian feed)."""
     daily_request_budget: int | None = Field(default=None, ge=0)
@@ -487,7 +490,13 @@ class SearchProviderConfig(_Model):
     cost_per_request_usd: float = Field(default=0.0, ge=0)
     min_interval_seconds: float | None = Field(default=None, ge=0)
     """Seconds between requests, shared by the app and the CLI tools. Unset: 5 for gdelt
-    (it answers 429 "one every 5 seconds"; lower values are raised to 5), 1 otherwise."""
+    (it answers 429 "one every 5 seconds"; lower values are raised to 5), 2 for tinyfish
+    (30 requests / minute; lower values are raised to 2 unless ``override_min_interval``),
+    1 otherwise."""
+    override_min_interval: bool = False
+    """Allow a tinyfish ``min_interval_seconds`` below 2 (a key with a higher rate limit)."""
+    search_type: str = Field(default="news", pattern=r"^(news|web)$")
+    """tinyfish ``domain_type``: ``news`` (publisher + date) or ``web``."""
     max_results: int = Field(default=10, ge=1, le=50)
     timeout_seconds: float = Field(default=15.0, gt=0)
 
@@ -503,6 +512,18 @@ class SearchProviderConfig(_Model):
                     GDELT_MIN_INTERVAL,
                 )
             self.min_interval_seconds = max(self.min_interval_seconds or 0.0, GDELT_MIN_INTERVAL)
+        elif self.name == "tinyfish":
+            low = self.min_interval_seconds
+            if low is None:
+                self.min_interval_seconds = TINYFISH_MIN_INTERVAL
+            elif low < TINYFISH_MIN_INTERVAL and not self.override_min_interval:
+                logger.warning(
+                    "enrichment provider tinyfish: min_interval_seconds %s is below its 30 "
+                    "requests/minute limit; using %s (set override_min_interval to allow it)",
+                    low,
+                    TINYFISH_MIN_INTERVAL,
+                )
+                self.min_interval_seconds = TINYFISH_MIN_INTERVAL
         elif self.min_interval_seconds is None:
             self.min_interval_seconds = 1.0
         return self
@@ -514,7 +535,37 @@ class QueryMode(StrEnum):
 
 
 def _default_providers() -> list[SearchProviderConfig]:
-    return [SearchProviderConfig(name="gdelt")]
+    return [SearchProviderConfig(name="tinyfish"), SearchProviderConfig(name="gdelt")]
+
+
+DEFAULT_SKIP_TITLE_PATTERNS = [
+    r"^Show HN\b",
+    r"^Ask HN\b",
+    r"^Tell HN\b",
+    r"^Opinion\b",
+    r"^Letters\b",
+]
+DEFAULT_STRIP_TITLE_PREFIXES = [
+    "Show HN",
+    "Ask HN",
+    "Tell HN",
+    "Launch HN",
+    "Analysis",
+    "Revealed",
+    "Exclusive",
+    "Opinion",
+    "Explainer",
+    "Live",
+    "Watch",
+    "Breaking",
+    "Update",
+    "Comment",
+    "Review",
+    "Interview",
+    "Factbox",
+    "Podcast",
+    "Video",
+]
 
 
 class EnrichmentConfig(_Model):
@@ -556,6 +607,19 @@ class EnrichmentConfig(_Model):
     late_regen_max_per_hour: int = Field(default=6, ge=0)
     """Published stories re-generated because of late sources, at most this many per hour
     (the rest keep their new sources for their next regeneration)."""
+    skip_title_patterns: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_SKIP_TITLE_PATTERNS)
+    )
+    """Regexes (case-insensitive) on the headline: matching stories are not searched
+    (``enrich_reason = skipped:pattern``); other outlets rarely cover them."""
+    strip_title_prefixes: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_STRIP_TITLE_PREFIXES)
+    )
+    """Headline boilerplate (``Exclusive:``, ``Analysis -`` ...) removed before building
+    queries."""
+    min_signal_tokens: int = Field(default=2, ge=0, le=10)
+    """Stories whose headlines have fewer distinct names / numbers than this are not
+    searched (``skipped:no_signal``; 0: off)."""
 
     @model_validator(mode="after")
     def _check(self) -> "EnrichmentConfig":
@@ -566,6 +630,11 @@ class EnrichmentConfig(_Model):
             if p.name == "searxng" and not p.base_url:
                 raise ValueError("the searxng provider needs base_url")
         self.deny_domains = [d.strip().lower().lstrip(".") for d in self.deny_domains if d]
+        for pattern in self.skip_title_patterns:
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                raise ValueError(f"invalid skip_title_patterns entry {pattern!r}: {exc}") from None
         return self
 
 
