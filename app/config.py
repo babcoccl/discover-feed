@@ -469,6 +469,8 @@ class AlertsConfig(_Model):
 
 
 GDELT_MIN_INTERVAL = 5.0
+GDELT_DEFAULT_INTERVAL = 10.0
+"""GDELT documents one request per 5 s but rate-limits at 6 s spacing in practice."""
 TINYFISH_MIN_INTERVAL = 2.0
 """TinyFish allows 30 requests / minute per key by default."""
 """GDELT DOC 2.0 asks for at most one request every 5 seconds."""
@@ -489,8 +491,9 @@ class SearchProviderConfig(_Model):
     monthly_budget_usd: float | None = Field(default=None, ge=0)
     cost_per_request_usd: float = Field(default=0.0, ge=0)
     min_interval_seconds: float | None = Field(default=None, ge=0)
-    """Seconds between requests, shared by the app and the CLI tools. Unset: 5 for gdelt
-    (it answers 429 "one every 5 seconds"; lower values are raised to 5), 2 for tinyfish
+    """Seconds between requests, shared by the app and the CLI tools. Unset: 10 for gdelt
+    (it answers 429 "one every 5 seconds", and often at 6 s too; lower values are raised to
+    5), 2 for tinyfish
     (30 requests / minute; lower values are raised to 2 unless ``override_min_interval``),
     1 otherwise."""
     override_min_interval: bool = False
@@ -511,7 +514,10 @@ class SearchProviderConfig(_Model):
                     low,
                     GDELT_MIN_INTERVAL,
                 )
-            self.min_interval_seconds = max(self.min_interval_seconds or 0.0, GDELT_MIN_INTERVAL)
+            if low is None:
+                self.min_interval_seconds = GDELT_DEFAULT_INTERVAL
+            else:
+                self.min_interval_seconds = max(low, GDELT_MIN_INTERVAL)
         elif self.name == "tinyfish":
             low = self.min_interval_seconds
             if low is None:
@@ -580,8 +586,12 @@ class EnrichmentConfig(_Model):
     wait_seconds: float = Field(default=180, ge=0)
     """How long a new story's brief waits for enrichment before going ahead without it."""
     concurrency: int = Field(default=2, ge=1, le=8)
-    min_snippet_similarity: float = Field(default=0.35, ge=0, le=1)
-    min_text_similarity: float = Field(default=0.45, ge=0, le=1)
+    # Similarity thresholds are starting points from one live evaluation (Ubuntu 26.10 via
+    # TinyFish); tune them with ``python -m app.enrich.evaluate`` as more live data comes in.
+    min_snippet_similarity: float = Field(default=0.25, ge=0, le=1)
+    """Hit title + snippet vs. the story headlines (TF-IDF cosine)."""
+    min_text_similarity: float = Field(default=0.35, ge=0, le=1)
+    """Extracted page text vs. the story's headlines and member text (TF-IDF cosine)."""
     min_shared_entities: int = Field(default=2, ge=0, le=10)
     max_time_gap_hours: float = Field(default=72, gt=0)
     duplicate_overlap: float = Field(default=0.6, gt=0, le=1)

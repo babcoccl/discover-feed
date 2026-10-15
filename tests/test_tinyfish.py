@@ -3,6 +3,7 @@ real headlines, skipped stories and GDELT's "keyword too short" replies."""
 
 import asyncio
 import io
+from datetime import timedelta
 
 import httpx
 import pytest
@@ -20,6 +21,7 @@ from tests.test_enrich import (
     clocked_enricher,
     config,
     no_sleep,
+    run,
     seed,
     seed_more,
 )
@@ -169,8 +171,9 @@ def test_falls_back_to_gdelt_after_a_tinyfish_error(session_factory, monkeypatch
     result = run_now(enricher, story_id)
     assert [s["provider"] for s in result.searches][-1] == "gdelt"
     assert result.searches[0]["kind"] == "transient" and router.gdelt.requests
-    assert result.status == "done" and result.added >= 1
-    assert {c.provider for c in result.accepted} == {"gdelt"}
+    assert result.added >= 1 and {c.provider for c in result.accepted} == {"gdelt"}
+    # gdelt's finds are kept, but only a fallback answered: retried until tinyfish does
+    assert result.status == "retry" and result.reason.startswith("degraded: tinyfish")
 
 
 def test_falls_back_to_gdelt_after_zero_tinyfish_hits(session_factory, monkeypatch):
@@ -426,3 +429,91 @@ def test_capacity_uses_the_first_provider_not_cooling_down(session_factory):
         normal = enricher.capacity(session)
         enricher.search._cool_down("tinyfish", 3600)
         assert normal == 15 and enricher.capacity(session) > 0  # gdelt (0 s) serves
+
+
+# --- degraded passes --------------------------------------------------------------------
+
+
+def guardian_body(hits) -> dict:
+    results = [
+        {
+            "webUrl": url,
+            "webTitle": title,
+            "webPublicationDate": NOW.isoformat(),
+            "fields": {"trailText": f"{title} - Guardian"},
+        }
+        for url, title in hits
+    ]
+    return {"response": {"status": "ok", "results": results}}
+
+
+def test_tinyfish_401_with_guardian_hits_is_retried_then_re_enriched(session_factory, monkeypatch):
+    from app.summarize.worker import SummaryWorker
+
+    monkeypatch.setenv("TINYFISH_API_KEY", "bad-key")
+    monkeypatch.setenv("GUARDIAN_API_KEY", "g")
+    story_id = seed(session_factory)
+    denied = httpx.Response(401, json={"error": {"code": "INVALID_API_KEY", "message": "x"}})
+    router = Router(tinyfish=[denied])
+    guardian: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if "guardian" in request.url.host:
+            guardian.append(request)
+            wire = [h for h in HITS if "wire.example" in h[0]]
+            return httpx.Response(200, json=guardian_body(wire))
+        return router(request)
+
+    providers = [
+        SearchProviderConfig(name="tinyfish"),
+        SearchProviderConfig(name="guardian", base_url="https://content.guardianapis.example"),
+    ]
+    handle.transport = lambda: httpx.MockTransport(handle)
+    enricher, clock = clocked_enricher(session_factory, handle, config(providers=providers))
+    summary = run(enricher, story_id)  # admitted like the pipeline does: the brief is held
+    assert summary["added"] == 1 and summary["retry"] == 1 and guardian
+    assert enricher.search.cooldown_remaining("tinyfish") > 0  # auth failure rests tinyfish
+    with session_factory() as session:
+        story = session.get(Story, story_id)
+        accepted = session.scalars(
+            select(EnrichmentCandidate).where(EnrichmentCandidate.decision == "accepted")
+        ).all()
+        assert {c.provider for c in accepted} == {"guardian"}
+        assert story.enrich_status == "retry" and story.enriched_at is None
+        assert story.enrich_reason.startswith("degraded: tinyfish unavailable")
+        cooling = enricher.search.cooldown_remaining("tinyfish")
+        assert story.enrich_next_attempt_at >= clock.now + timedelta(seconds=cooling)
+        # the brief waits for the retry like any other provider outage
+        assert story_id not in SummaryWorker(session_factory, None, clock=clock).candidates(session)
+    assert asyncio.run(enricher.run_pending()) == []  # tinyfish still cooling down
+    monkeypatch.setenv("TINYFISH_API_KEY", "good-key")
+    with session_factory() as session:
+        due = session.get(Story, story_id).enrich_next_attempt_at
+    clock.now = due
+    asyncio.run(enricher.run_pending())
+    assert len(router.tf_requests) == 2  # re-enriched with tinyfish once it recovered
+    with session_factory() as session:
+        story = session.get(Story, story_id)
+        assert story.enrich_status == "done" and story.enriched_at == clock.now
+        assert not (story.enrich_reason or "").startswith("degraded")
+        assert story.enrich_attempts == 0 and story.enrich_next_attempt_at is None
+        members = session.scalars(select(Article).where(Article.story_id == story_id)).all()
+        assert sum(1 for a in members if a.origin == "enrichment") == 1
+
+
+def test_degraded_passes_stop_after_a_few_attempts(session_factory, monkeypatch):
+    monkeypatch.setenv("TINYFISH_API_KEY", "k")
+    story_id = seed(session_factory)
+    router = Router(default=httpx.Response(500, text="down"))
+    enricher, clock = clocked_enricher(session_factory, router, tf_config())
+    run_now(enricher, story_id)
+    for _ in range(5):
+        with session_factory() as session:
+            story = session.get(Story, story_id)
+            if story.enrich_status != "retry":
+                break
+            clock.now = story.enrich_next_attempt_at
+        asyncio.run(enricher.run_pending())
+    with session_factory() as session:
+        story = session.get(Story, story_id)
+        assert story.enrich_status == "done" and story.enrich_reason.startswith("degraded")
