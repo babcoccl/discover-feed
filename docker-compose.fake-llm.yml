@@ -10,7 +10,7 @@ services:
       DISCOVER_EXTRACT_DOMAIN_DELAY_SECONDS: "0.2"
       DISCOVER_EXTRACT_MAX_ARTICLES: "100"
       # The fixture service is on the private compose network; the image SSRF guard allows it.
-      DISCOVER_IMAGES_ALLOW_HOSTS: fixtures
+      DISCOVER_IMAGES_ALLOW_HOSTS: fixtures,otherwire
     volumes:
       - ./tests/fixtures:/fixtures:ro
     depends_on:
@@ -20,7 +20,12 @@ services:
     build: .
     image: discover-feed:local
     command: ["python", "-m", "app.fixture_server", "--port", "8081",
-              "--base", "http://fixtures:8081", "--fixture-dir", "/fixtures/demo"]
+              "--base", "http://fixtures:8081", "--fixture-dir", "/fixtures/demo",
+              "--wire-base", "http://otherwire:8081"]
+    networks:
+      default:
+        # A second host name: the fake web-search hits look like another publisher.
+        aliases: [otherwire]
     volumes:
       - ./tests/fixtures:/fixtures:ro
     ports:

@@ -139,6 +139,11 @@ class StorySourceV1(BaseModel):
     via: str | None = Field(
         default=None, description="The aggregator feed (`Hacker News`) when there is one."
     )
+    origin: Literal["feed", "enrichment"] = Field(
+        default="feed",
+        description="`feed`: a configured source; `enrichment`: found by web search for "
+        "this story (it never makes a story visible on its own).",
+    )
 
 
 class ImageOut(BaseModel):
@@ -352,6 +357,7 @@ def _sources(members: Sequence[views.Member]) -> list[StorySourceV1]:
             published_at=m.published_at,
             publisher=m.publisher,
             via=m.via,
+            origin="enrichment" if m.found_by_search else "feed",
         )
         for m in members
     ]

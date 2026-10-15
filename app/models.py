@@ -80,6 +80,16 @@ class Article(Base):
     image_source: Mapped[str | None] = mapped_column(String(10))
     """``ImageSource`` the article's own image came from: ``feed`` | ``page`` | ``none``."""
     image_checked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, index=True)
+    origin: Mapped[str] = mapped_column(String(12), default="feed", server_default="feed")
+    """``feed`` (a configured source) | ``enrichment`` (found by web search for a story)."""
+    discovered_for_story_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    """Enrichment only: the story the search ran for (the article is pinned to it)."""
+    anchor_article_id: Mapped[int | None] = mapped_column(Integer)
+    """Enrichment only: a feed member of that story; a clustering rebuild re-pins to its story."""
+
+
+ENRICHMENT = "enrichment"
+"""``Article.origin`` of members found by web search (``app.enrich``)."""
 
 
 class ImageSource(StrEnum):
@@ -159,6 +169,14 @@ class Story(Base):
     """``last_updated_at`` of the served version (feed order)."""
     image_source: Mapped[str | None] = mapped_column(String(10))
     """``ImageSource`` of the newest view's image (Pipeline stats)."""
+    enrich_status: Mapped[str | None] = mapped_column(String(10), index=True)
+    """Web-search enrichment: NULL (never) | ``pending`` | ``done`` | ``failed``."""
+    enrich_started_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    enriched_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    enrich_added: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    enrich_regens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    """Times late enrichment re-generated an already published story (at most once)."""
+    enrich_reason: Mapped[str | None] = mapped_column(Text)
 
 
 class StoryState(StrEnum):
@@ -423,6 +441,8 @@ class ProfileRecord(Base):
     )
     alerts_seeded_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     """Set once the YAML alert rules/channels were copied in (the DB owns them afterwards)."""
+    enrichment_enabled: Mapped[bool | None] = mapped_column(Boolean)
+    """Settings toggle for web-search enrichment (NULL: the YAML ``enrichment.enabled``)."""
 
 
 class Topic(Base):
@@ -623,3 +643,37 @@ class Notification(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
     sent_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+
+
+class EnrichmentCandidate(Base):
+    """One search hit considered for a story, with the decision (diagnostics and stats)."""
+
+    __tablename__ = "enrichment_candidates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    story_id: Mapped[int] = mapped_column(Integer, index=True)
+    run_id: Mapped[str] = mapped_column(String(32), index=True)
+    provider: Mapped[str] = mapped_column(String(30), default="")
+    query: Mapped[str] = mapped_column(Text, default="")
+    url: Mapped[str] = mapped_column(String(2048), default="")
+    domain: Mapped[str] = mapped_column(String(300), default="")
+    title: Mapped[str] = mapped_column(Text, default="")
+    decision: Mapped[str] = mapped_column(String(10))
+    """``accepted`` | ``rejected``."""
+    reason: Mapped[str] = mapped_column(String(40), default="")
+    similarity: Mapped[float | None] = mapped_column(Float)
+    text_similarity: Mapped[float | None] = mapped_column(Float)
+    article_id: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
+
+
+class SearchCacheEntry(Base):
+    """A provider's parsed hits for one query (reused for ``cache_hours``)."""
+
+    __tablename__ = "search_cache"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(30))
+    query: Mapped[str] = mapped_column(Text, default="")
+    hits: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)

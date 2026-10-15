@@ -69,6 +69,44 @@
     </tbody>
   </table>
 </div>
+{% if enrichment %}
+{%- set en = enrichment -%}
+<section class="mt-4 rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900" aria-labelledby="enrich-heading" data-enrichment>
+  <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+    <h3 id="enrich-heading" class="text-sm font-semibold">Web-search enrichment <span class="ml-1 font-normal text-slate-500 dark:text-slate-400">last {{ en.days }} days{% if en.running %} · <span class="text-sky-700 dark:text-sky-400">running…</span>{% endif %}</span></h3>
+    {% if profile %}
+    <div class="flex items-center gap-3">
+      <form hx-post="/p/{{ profile.slug }}/settings/enrichment" hx-target="#pipeline" hx-trigger="change" class="flex items-center gap-2 text-sm">
+        <input type="hidden" name="enabled" value="0">
+        <label class="flex items-center gap-2"><input type="checkbox" name="enabled" value="1" data-enrich-toggle {% if enrich_on %}checked{% endif %} class="rounded border-slate-300"> Search the web for more sources for this profile's stories</label>
+      </form>
+      <button type="button" hx-post="/p/{{ profile.slug }}/settings/pipeline/enrich" hx-target="#pipeline" data-enrich-now class="rounded-md border border-slate-300 px-3 py-1 text-xs font-medium hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">Enrich now</button>
+    </div>
+    {% endif %}
+  </div>
+  <dl class="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-5">
+    <div><dt class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Eligible now</dt><dd class="text-xl font-semibold" data-enrich-eligible>{{ en.eligible }}</dd></div>
+    <div><dt class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Waiting</dt><dd class="text-xl font-semibold">{{ en.pending }}</dd></div>
+    <div><dt class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Enriched</dt><dd class="text-xl font-semibold" data-enrich-enriched>{{ en.enriched }} <span class="text-sm font-normal text-slate-500">of {{ en.attempted }}</span></dd></div>
+    <div><dt class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Avg sources added</dt><dd class="text-xl font-semibold">{{ en.avg_added }}</dd></div>
+    <div><dt class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Status</dt><dd class="text-xl font-semibold">{{ "on" if en.enabled else "off" }}</dd></div>
+  </dl>
+  <div class="grid gap-4 sm:grid-cols-2">
+    <div>
+      <h4 class="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Rejected candidates by reason</h4>
+      {% if en.reject_reasons %}<ul class="space-y-0.5 text-sm" data-enrich-rejections>
+        {% for reason, n in en.reject_reasons %}<li class="flex justify-between gap-4"><code>{{ reason or "unknown" }}</code><span class="font-medium tabular-nums">{{ n }}</span></li>{% endfor %}
+      </ul>{% else %}<p class="text-sm text-slate-500 dark:text-slate-400">None.</p>{% endif %}
+    </div>
+    <div>
+      <h4 class="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Search providers (today)</h4>
+      <ul class="space-y-1 text-sm" data-enrich-providers>
+        {% for p in en.providers %}<li data-provider="{{ p.provider }}"><span class="font-medium">{{ p.provider }}</span>: {{ p.requests_today }}{% if p.daily_budget %} of {{ p.daily_budget }}{% endif %} requests{% if p.errors %}, <span class="text-rose-700 dark:text-rose-400">{{ p.errors }} error(s)</span>{% endif %}{% if p.rate_limited %}, {{ p.rate_limited }} rate-limited{% endif %}{% if p.budget_skips %}, {{ p.budget_skips }} over budget{% endif %}{% if p.last_error %}<br><span class="text-xs text-rose-700 dark:text-rose-400">{{ p.last_error | snippet(160) }}</span>{% endif %}</li>{% endfor %}
+      </ul>
+    </div>
+  </div>
+</section>
+{% endif %}
 {% if image_stats %}
 {%- set ims = image_stats -%}
 <section class="mt-4 rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900" aria-labelledby="images-heading" data-image-stats>

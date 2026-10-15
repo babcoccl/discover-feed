@@ -28,6 +28,7 @@ from app.models import ProfileRecord
 from app.pipeline import (
     Pipeline,
     clusterer_from_settings,
+    enricher_from_settings,
     extractor_from_settings,
     images_from_settings,
     summarize_profile,
@@ -126,6 +127,7 @@ def create_app(
     *,
     llm_transport: httpx.AsyncBaseTransport | None = None,
     demo_sink=None,
+    enrich_transports: dict | None = None,
 ) -> FastAPI:
     """``llm_transport`` replaces the summarizer's network calls (the demo's fake LLM);
     ``demo_sink`` (an ``app.alerts.sink.FakeSink``) enables ``/demo/sink``."""
@@ -167,6 +169,15 @@ def create_app(
             ),
         )
         app.state.summaries = app.state.pipeline.summaries
+        app.state.pipeline.attach_enricher(
+            enricher_from_settings(
+                app.state.session_factory,
+                settings,
+                app.state.config,
+                llm_transport=llm_transport,
+                **getattr(app.state, "enrich_transports", {}),
+            )
+        )
         app.state.pipeline.attach_images(
             images_from_settings(
                 app.state.session_factory,
@@ -247,6 +258,7 @@ def create_app(
     )
     app.state.auth = AuthConfig.from_settings(settings)
     app.state.demo_sink = demo_sink
+    app.state.enrich_transports = enrich_transports or {}
     app.include_router(v1_router)
     app.include_router(alerts_router)
     app.include_router(sources_router)

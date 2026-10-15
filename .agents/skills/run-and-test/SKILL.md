@@ -212,6 +212,25 @@ update it when fixtures or defaults change. README "Tuning clustering" has the f
   Catalog: `python scripts/verify_catalog.py --out catalog.md` (network) before editing
   `config/source_catalog.yaml`.
 
+## Web-search enrichment
+
+- Code: `app/search/` (providers `gdelt|searxng|guardian|newsdata|brave`, `SearchService`:
+  cache in `search_cache`, budgets in `source_usage` as `search:<name>`, in-memory health and
+  cooldown), `app/enrich/` (`query`, `filters`, `fetch` = Extractor + SSRF `Guard`,
+  `service.Enricher`). Pipeline: `Pipeline.cluster()` calls `enrich()` before queuing
+  summaries; the worker skips `enrich_status = pending` stories for `wait_seconds`.
+- Enrichment members: `Article.origin = "enrichment"`, `source_id = web:<domain>` (no
+  `sources` row; `SourceNames.get` falls back to the domain), `anchor_article_id` re-pins
+  them after `--rebuild`. Queries over members that feed alerts, cards or profile visibility
+  must filter `origin != "enrichment"`.
+- Debug: `python -m app.enrich.diagnose --auto|--story-id N [--dry-run]`,
+  `python -m app.enrich.evaluate --stories 30 --markdown` (Windows:
+  `.venv\Scripts\python -m app.enrich.diagnose ...`). Admin: `POST /api/admin/enrich`.
+- Tests: `tests/test_enrich.py` (fake GDELT/SearXNG via `httpx.MockTransport`, a fake page
+  transport + `Guard(resolver)` for SSRF; never call real providers). Docker E2E serves a
+  GDELT-shaped `/gdelt` from the fixture server (`DISCOVER_E2E_ENRICH=1` profile).
+- Real-provider relevance is unverified until someone runs `diagnose`/`evaluate` on live data.
+
 ## Card images
 
 - Code: `app/images/` — `meta.py` (og/twitter/JSON-LD/icon parsing, called by

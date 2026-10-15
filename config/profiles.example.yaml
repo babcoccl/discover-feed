@@ -6,6 +6,21 @@ profiles:
   - id: personal-reader
     name: Personal Reader
     description: Long-form tech, science and culture reading, summarised daily.
+    # Web-search enrichment: find other publishers' coverage of single-sourced stories
+    # (README "Web-search enrichment"). Off by default; Settings > Pipeline can toggle it.
+    enrichment:
+      enabled: false
+      providers:
+        - name: gdelt               # free, no key
+        # - name: searxng
+        #   base_url: http://searxng:8080
+        # - name: brave
+        #   api_key: BRAVE_API_KEY  # env var name, never the key
+        #   daily_request_budget: 60
+      target_sources: 3
+      max_added_sources: 3
+      wait_seconds: 180
+      deny_domains: []
     # Topics become feed tabs. Keywords are whole-word and case-insensitive; an empty
     # include list means "every article from the topic's sources".
     topics:

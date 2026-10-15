@@ -2515,6 +2515,16 @@
             "title": "Name",
             "type": "string"
           },
+          "origin": {
+            "default": "feed",
+            "description": "`feed`: a configured source; `enrichment`: found by web search for this story (it never makes a story visible on its own).",
+            "enum": [
+              "feed",
+              "enrichment"
+            ],
+            "title": "Origin",
+            "type": "string"
+          },
           "published_at": {
             "format": "date-time",
             "title": "Published At",

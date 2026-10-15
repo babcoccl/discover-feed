@@ -6,6 +6,17 @@ profiles:
 - id: personal-reader
   name: Personal Reader
   description: Long-form tech, science and culture reading, summarised daily.
+  # Web-search enrichment against the fixture server's fake GDELT (/gdelt). Fixture
+  # articles have fixed past dates, hence the wide age / time-gap windows.
+  enrichment:
+    enabled: true
+    providers:
+    - name: gdelt
+      base_url: http://otherwire:8081/gdelt
+      min_interval_seconds: 0
+    max_age_hours: 1000000
+    max_time_gap_hours: 1000000
+    wait_seconds: 60
   topics:
   - name: AI
     include:

@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from datetime import timedelta
+from typing import TYPE_CHECKING
 
 import httpx
 from sqlalchemy.orm import sessionmaker
@@ -10,10 +11,10 @@ from sqlalchemy.orm import sessionmaker
 from app import images
 from app.cluster import Clusterer, TfidfClusterer
 from app.cluster.service import ClusterRunResult, run_clustering
-from app.config import AppConfig, LLMRole, Profile, SummariesConfig
+from app.config import AppConfig, EnrichmentConfig, LLMRole, Profile, SummariesConfig
 from app.extract import Extractor, ExtractRunResult
 from app.images.service import ImageRunResult, ImageWorker
-from app.ingest import USER_AGENT
+from app.ingest import USER_AGENT, build_user_agent
 from app.llm import LLMClient
 from app.llm.client import set_max_inflight
 from app.publish import Policy, sync_story
@@ -21,6 +22,9 @@ from app.runs import record_run
 from app.settings import Settings
 from app.summarize.service import Summarizer, summarizer_options
 from app.summarize.worker import SummaryWorker
+
+if TYPE_CHECKING:
+    from app.enrich.service import Enricher
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +123,47 @@ def images_from_settings(
     )
 
 
+def enricher_from_settings(
+    session_factory: sessionmaker,
+    settings: Settings,
+    config: AppConfig,
+    *,
+    search_transport: httpx.AsyncBaseTransport | None = None,
+    page_transport: httpx.AsyncBaseTransport | None = None,
+    llm_transport: httpx.AsyncBaseTransport | None = None,
+    resolver=None,
+) -> "Enricher":
+    """Web-search enrichment with the summarize profile's ``enrichment`` settings; each
+    profile's ``enrichment.enabled`` is its default (the Settings toggle overrides it)."""
+    from app.enrich.fetch import CandidateFetcher
+    from app.enrich.service import Enricher
+    from app.images.safety import Guard, system_resolver
+    from app.search.service import SearchService
+
+    profile = summarize_profile(config, settings)
+    cfg = profile.enrichment if profile else EnrichmentConfig()
+    allow = [h for h in settings.images_allow_hosts.split(",") if h.strip()]
+    fetcher = CandidateFetcher(
+        session_factory,
+        guard=Guard(resolver or system_resolver, allow_hosts=allow),
+        user_agent=build_user_agent(settings.contact_email),
+        timeout=settings.extract_timeout_seconds,
+        max_bytes=settings.extract_max_bytes,
+        min_words=settings.extract_min_words,
+        domain_delay=settings.extract_domain_delay_seconds,
+        transport=page_transport,
+    )
+    return Enricher(
+        session_factory,
+        cfg,
+        profile_defaults={p.id: p.enrichment.enabled for p in config.profiles},
+        search=SearchService(session_factory, transport=search_transport),
+        fetcher=fetcher,
+        llm_role=profile.llm.summarizer if profile else None,
+        llm_transport=llm_transport,
+    )
+
+
 class Pipeline:
     def __init__(
         self,
@@ -135,6 +180,29 @@ class Pipeline:
         """An ``AlertEngine``: text rules after extraction, updates after clustering."""
         self.images: ImageWorker | None = None
         """Checks new articles' images after clustering (``app.images``)."""
+        self.enricher: Enricher | None = None
+        """Web-search enrichment between clustering and the brief (``app.enrich``)."""
+
+    def attach_enricher(self, enricher: "Enricher") -> "Enricher":
+        self.enricher = enricher
+        enricher.on_done = self._enriched
+        if self.summaries is not None:
+            self.summaries.enrich_wait = timedelta(seconds=enricher.config.wait_seconds)
+        return enricher
+
+    def _enriched(self, story_ids: list[int]) -> None:
+        if self.summaries is not None and self.summaries.enabled:
+            self.summaries.start()
+
+    def enrich(self, story_ids: list[int] | None = None, *, force: bool = False) -> int:
+        """Queue enrichment (new / under-covered stories); never blocks the LLM worker."""
+        if self.enricher is None:
+            return 0
+        try:
+            return self.enricher.schedule(story_ids, force=force)
+        except Exception:
+            logger.exception("could not schedule enrichment")
+            return 0
 
     def attach_images(self, worker: ImageWorker) -> ImageWorker:
         worker.on_changed = self._republish
@@ -193,6 +261,7 @@ class Pipeline:
         if result.status == "ok":
             self._record("cluster", result.model_dump(exclude={"joins", "story_ids"}))
             self._alert("on_clustered", list(result.story_ids))
+            self.enrich()  # before the worker looks: new stories' briefs wait for it
             self._queue_summaries(result)
         return result
 
