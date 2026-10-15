@@ -18,7 +18,7 @@ from app.config import EnrichmentConfig, LLMRole, SearchProviderConfig
 from app.enrich.diagnose import report
 from app.enrich.domains import blocked_reason, registrable_domain
 from app.enrich.fetch import CandidateFetcher
-from app.enrich.filters import StoryContext, pre_filter, text_check
+from app.enrich.filters import StoryContext, pre_filter, snippet_check, text_check
 from app.enrich.query import MAX_TOKENS, build_queries, heuristic_query, parse_llm_queries
 from app.enrich.service import Enricher
 from app.images.safety import Guard
@@ -328,6 +328,112 @@ def test_text_check_accepts_related_and_rejects_copies_and_unrelated():
     )
 
 
+def test_threshold_defaults_are_the_tuned_starting_points():
+    cfg = EnrichmentConfig()
+    assert cfg.min_text_similarity == 0.35 and cfg.min_snippet_similarity == 0.25
+    assert cfg.min_title_similarity == 0.30 and cfg.min_shared_entities == 2
+    assert [p.name for p in cfg.providers] == ["tinyfish", "gdelt"]  # guardian is opt-in
+    assert "guardian" not in {p.name for p in cfg.providers}
+
+
+@pytest.mark.parametrize(
+    ("site", "score", "reason"),
+    [
+        ("gamingonlinux.com", 0.67, None),
+        ("phoronix.com", 0.46, None),
+        ("linuxiac.com", 0.36, None),
+        ("unrelated.example", 0.20, "low_text_similarity"),
+    ],
+)
+def test_live_text_scores_pass_the_default_threshold(monkeypatch, site, score, reason):
+    """Story 370 (Ubuntu 26.10): the related coverage TinyFish found scored 0.36-0.67."""
+    monkeypatch.setattr("app.enrich.filters.similarity", lambda _a, _b: score)
+    cfg = EnrichmentConfig()
+    got = text_check(
+        f"Ubuntu 26.10 on {site}",
+        OTHER_TEXT,
+        story_ctx(),
+        threshold=cfg.min_text_similarity,
+        min_entities=cfg.min_shared_entities,
+        duplicate_overlap=cfg.duplicate_overlap,
+    )
+    assert got == (reason, score)
+
+
+@pytest.mark.parametrize(
+    ("site", "score", "reason"),
+    [
+        ("betanews.com", 0.30, None),
+        ("omgubuntu.co.uk", 0.29, None),
+        ("x.example", 0.20, "low_similarity"),
+    ],
+)
+def test_live_snippet_scores_pass_the_default_threshold(monkeypatch, site, score, reason):
+    monkeypatch.setattr("app.enrich.filters.similarity", lambda _a, _b: score)
+    hit = SearchHit(url=f"https://{site}/ubuntu-26-10", title="Ubuntu 26.10", snippet="out now")
+    assert snippet_check(hit, story_ctx(), EnrichmentConfig().min_snippet_similarity) == (
+        reason,
+        score,
+    )
+
+
+NINE_TO_FIVE = "https://9to5linux.com/ubuntu-26-10-is-now-available-for-download-heres-whats-new"
+NINE_TO_FIVE_ROBOTS = (  # the shape of 9to5linux.com/robots.txt: named crawlers only
+    "User-agent: Googlebot\nAllow: /\n\nUser-agent: bingbot\nCrawl-delay: 10\nAllow: /\n\n"
+    "User-agent: GPTBot\nDisallow: /\n\nUser-agent: *\nDisallow: /\n"
+)
+
+
+def nine_to_five_transport(robots: httpx.Response) -> httpx.MockTransport:
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/robots.txt":
+            return robots
+        if str(request.url) == NINE_TO_FIVE:
+            body = page("Ubuntu 26.10 is now available for download", OTHER_TEXT)
+            return httpx.Response(200, content=body, headers={"content-type": "text/html"})
+        return httpx.Response(404)
+
+    return httpx.MockTransport(handle)
+
+
+@pytest.mark.parametrize(
+    ("robots", "status", "reason"),
+    [
+        (httpx.Response(200, text=NINE_TO_FIVE_ROBOTS), "skipped", "disallowed by robots.txt"),
+        (httpx.Response(403, text="cloudflare"), "ok", None),  # RFC 9309: 4xx = no rules
+        (httpx.Response(404), "ok", None),
+    ],
+)
+def test_9to5linux_pages_fetch_unless_robots_refuses(robots, status, reason):
+    fetcher = CandidateFetcher(
+        guard=Guard(resolver), domain_delay=0, transport=nine_to_five_transport(robots)
+    )
+    got = asyncio.run(fetcher.fetch(NINE_TO_FIVE))
+    assert got.status == status, got.reason
+    if reason:
+        assert got.reason == reason
+    else:
+        assert got.words > 50
+
+
+def test_robots_refusals_are_reported_as_robots_not_fetch_failed(session_factory):
+    story_id = seed(session_factory)
+    hits = [(NINE_TO_FIVE, "Springfield council approves electric buses plan")]
+    fetcher = CandidateFetcher(
+        session_factory,
+        guard=Guard(resolver),
+        domain_delay=0,
+        transport=nine_to_five_transport(httpx.Response(200, text=NINE_TO_FIVE_ROBOTS)),
+    )
+    search = SearchService(session_factory, transport=FakeSearch(hits).transport(), sleep=no_sleep)
+    enricher = Enricher(session_factory, config(), search=search, fetcher=fetcher)
+    result = asyncio.run(enricher.enrich_story(story_id, dry_run=True))
+    (candidate,) = result.candidates
+    assert candidate.reason == "robots"
+    out = report(result)
+    assert "fetch: skipped (disallowed by robots.txt)" in out and NINE_TO_FIVE in out
+
+
 # --- providers ----------------------------------------------------------------------------
 
 
@@ -607,8 +713,8 @@ def clocked_enricher(factory, fake, cfg=None, clock=None, sleep=no_sleep):
     return Enricher(factory, cfg or config(), search=search, fetcher=fetcher, now=clock), clock
 
 
-def test_gdelt_interval_defaults_to_5_and_is_floored(caplog):
-    assert SearchProviderConfig(name="gdelt").min_interval_seconds == 5.0
+def test_gdelt_interval_defaults_to_10_and_is_floored_at_5(caplog):
+    assert SearchProviderConfig(name="gdelt").min_interval_seconds == 10.0
     assert SearchProviderConfig(name="gdelt", min_interval_seconds=6).min_interval_seconds == 6
     with caplog.at_level("WARNING"):
         assert SearchProviderConfig(name="gdelt", min_interval_seconds=1).min_interval_seconds == 5
@@ -616,7 +722,7 @@ def test_gdelt_interval_defaults_to_5_and_is_floored(caplog):
     assert SearchProviderConfig(name="guardian").min_interval_seconds == 1.0
     assert SearchProviderConfig(name="newsdata", min_interval_seconds=0).min_interval_seconds == 0
     cfg = EnrichmentConfig.model_validate({"providers": [{"name": "gdelt"}]})
-    assert cfg.providers[0].min_interval_seconds == 5.0
+    assert cfg.providers[0].min_interval_seconds == 10.0
     assert cfg.max_queries_per_story == 2 and cfg.min_title_similarity == 0.30
     assert cfg.empty_cache_minutes == 10 and cfg.second_pass_hours == 3
     assert cfg.late_regen_max_per_hour == 6
@@ -644,7 +750,7 @@ def test_provider_state_is_shared_across_services(session_factory):
         slept.append(seconds)
 
     clock = Clock()
-    gdelt = SearchProviderConfig(name="gdelt")
+    gdelt = SearchProviderConfig(name="gdelt", min_interval_seconds=5)
     one = SearchService(session_factory, transport=fake.transport(), sleep=sleep, now=clock)
     two = SearchService(session_factory, transport=fake.transport(), sleep=sleep, now=clock)
     asyncio.run(one.search(gdelt, "q1", since=NOW, language=None, cache_hours=0))
@@ -781,7 +887,9 @@ def test_falls_back_to_a_second_provider(session_factory):
     assert summary["added"] >= 1 and summary["provider_errors"] == 1
     assert fake.requests[1].url.path.endswith("/search")
     with session_factory() as session:
-        assert session.get(Story, story_id).enrich_status == "done"
+        story = session.get(Story, story_id)
+        # the fallback's finds are kept, but the pass is degraded: retried for the primary
+        assert story.enrich_status == "retry" and story.enrich_reason.startswith("degraded: gdelt")
 
 
 def test_looser_query_only_after_zero_hits(session_factory):

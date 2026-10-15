@@ -14,9 +14,11 @@ profiles:
         - name: tinyfish            # primary: titles + snippets; key in TINYFISH_API_KEY
           min_interval_seconds: 2   # 30 requests / minute (lower is raised to 2)
         - name: gdelt               # free fallback, no key; tried when tinyfish fails or finds nothing
-          min_interval_seconds: 6   # GDELT allows one request per 5 s (lower is raised to 5)
-        # More providers are tried when those fail or find too little:
-        # - name: guardian
+          # GDELT documents one request per 5 s (lower is raised to 5) but rate-limits at 6 s
+          # spacing in practice: it is an unreliable fallback, keep tinyfish primary.
+          min_interval_seconds: 10
+        # Opt-in providers, tried after those when they fail or find too little:
+        # - name: guardian           # broad search: many loosely related results for tech
         #   api_key: GUARDIAN_API_KEY  # env var name, never the key
         #   daily_request_budget: 200
         # - name: searxng
@@ -28,6 +30,10 @@ profiles:
       max_added_sources: 3
       wait_seconds: 180
       deny_domains: []
+      # Similarity thresholds (TF-IDF cosine). Starting points from one live evaluation;
+      # tune them with `python -m app.enrich.evaluate` as more live data comes in.
+      # min_snippet_similarity: 0.25  # hit title + snippet vs. the headlines
+      # min_text_similarity: 0.35     # extracted page text vs. the story's members
       # Not searched (rarely covered elsewhere); regexes on the headline:
       # skip_title_patterns: ["^Show HN", "^Ask HN", "^Tell HN", "^Opinion", "^Letters"]
       # min_signal_tokens: 2    # skip headlines with fewer distinct names / numbers

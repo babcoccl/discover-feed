@@ -48,6 +48,8 @@ def report(result: StoryEnrichment, title: str = "") -> str:
             f"- [{c.decision}] {c.reason:<20} snippet {sim} title {title_sim} text {tsim}  "
             f"{c.hit.domain or '?'} · {c.hit.title[:90]}\n    {c.hit.url}"
         )
+        if c.page is not None and c.page.status != "ok" and c.page.reason:
+            lines.append(f"    fetch: {c.page.status} ({c.page.reason})")
     if not result.candidates:
         lines.append("(none)")
     top = sorted((c for c in result.candidates if c.decision != "accepted"), key=lambda c: -c.score)

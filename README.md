@@ -266,8 +266,10 @@ How it works (`app/search/`, `app/enrich/`):
    header; works through a keyless proxy `base_url`); the real API answers 401 then, which
    rests TinyFish for an hour (GDELT serves meanwhile) instead of failing every story.
    `min_interval_seconds` defaults to 2 for tinyfish (30 requests / minute; lower values are
-   raised to 2 unless `override_min_interval: true`), 5 for gdelt (lower values are raised to
-   5 with a warning; GDELT answers 429 otherwise) and 1 for the others. Pacing and cooldowns are stored per provider in `search_provider_state`
+   raised to 2 unless `override_min_interval: true`), 10 for gdelt (GDELT documents one request
+   per 5 s but rate-limits at 6 s spacing in practice, so it is an unreliable fallback; values
+   below 5 are raised to 5 with a warning) and 1 for the others. `guardian` is opt-in only:
+   its search is broad (many loosely related results for tech stories) and burns requests. Pacing and cooldowns are stored per provider in `search_provider_state`
    (`last_request_at`, `cooldown_until`, `consecutive_errors`) and shared by the app and the
    CLI tools. Retry-After / HTTP 429 and GDELT's plain-text "limit requests" reply are
    honored: waits of 10 s or less are retried once, longer ones cool the provider down;
@@ -284,19 +286,29 @@ How it works (`app/search/`, `app/enrich/`):
    doubling to 60 (`enrich_reason = "provider_unavailable: <error>"`). While a provider only
    cools down, the story waits for the cooldown end without counting a failed attempt.
    A story that later succeeds records `recovered after N failed attempt(s)`.
+   A **degraded pass** is not completion either: when the first provider (TinyFish) never
+   answered (auth, rate limit, cooldown, timeout, budget) and only a fallback did, the
+   fallback's sources are kept but the story stays `retry`
+   (`enrich_reason = "degraded: tinyfish unavailable: <error>"`) and is searched again after
+   the backoff or the primary's cooldown, whichever is later, while it is under
+   `target_sources`, for at most 3 degraded passes in a row. A primary that answers with
+   zero hits is not degraded: the fallback's result counts as done.
 5. **Second pass:** stories still under `target_sources` are searched once more
    `second_pass_hours` (default 3; 0 = off) after the first pass.
 6. Candidates are rejected before fetching for: same registrable domain as a member
    (`bbc.co.uk`, `cnn.com`), social sites and aggregators, `deny_domains`, an already known
    URL, a publication time more than `max_time_gap_hours` from the story, another language,
-   or title/snippet TF-IDF similarity below `min_snippet_similarity`. Hits without a snippet
+   or title/snippet TF-IDF similarity below `min_snippet_similarity` (default 0.25). Hits without a snippet
    (GDELT returns titles only) must share an entity with the headlines and reach
    `min_title_similarity` (default 0.30); both scores are stored in `enrichment_candidates`
    and the text check below has the final say. The best
    `max_candidates` are fetched with the extractor's robots.txt rules, per-domain delay and
    size caps, through the image fetcher's SSRF guard (http(s) only, public addresses only,
-   every redirect re-checked). Failed and paywalled (`isAccessibleForFree: false`) pages are
-   dropped; extracted text must reach `min_text_similarity`, share `min_shared_entities`
+   every redirect re-checked). Failed, robots-disallowed (reason `robots`, e.g. 9to5linux.com,
+   whose robots.txt allows named crawlers only) and paywalled (`isAccessibleForFree: false`)
+   pages are dropped; `diagnose` prints the fetch detail under each one
+   (`fetch: skipped (disallowed by robots.txt)`, `fetch: failed (HTTP 403)`). Extracted text
+   must reach `min_text_similarity` (default 0.35), share `min_shared_entities`
    names with the headlines, and not be a copy (5-word shingle overlap of `duplicate_overlap`
    with a member or an accepted page: syndicated wire copies collapse).
 7. Accepted pages become members with `origin = enrichment`, source id `web:<domain>`,
@@ -322,8 +334,8 @@ enrichment:
     - name: tinyfish                # primary; key in TINYFISH_API_KEY (.env)
       min_interval_seconds: 2       # never below 2 (30 requests / minute)
     - name: gdelt                   # free fallback when tinyfish fails or finds nothing
-      min_interval_seconds: 6       # never below 5
-    # - name: guardian              # a third provider
+      min_interval_seconds: 10      # never below 5; GDELT rate-limits at 6 s in practice
+    # - name: guardian              # opt-in: broad search, mostly noise for tech stories
     #   api_key: GUARDIAN_API_KEY
     # - name: searxng
     #   base_url: http://searxng:8080
@@ -344,8 +356,11 @@ the one-time **Re-enrich stories that ended with provider errors** (stories that
 are waiting to retry, or were marked done by older versions with nothing found and no
 candidate recorded; they are retried at the providers' pace, briefs do not wait).
 
-Diagnose and evaluate against real providers before trusting it (the defaults are tuned on
-fixtures only; real-world false-match rates are not measured yet):
+Diagnose and evaluate against real providers before trusting it. The similarity thresholds
+(`min_snippet_similarity` 0.25, `min_text_similarity` 0.35) are starting points from one live
+evaluation (story "Ubuntu 26.10": related GamingOnLinux / Phoronix / Linuxiac pages scored
+0.36-0.67 on text, Betanews / OMG! Ubuntu 0.29-0.30 on snippets); tune them with `evaluate`
+as more live data comes in (real-world false-match rates are not measured yet):
 
 ```bash
 python -m app.enrich.diagnose --story-id 42 --dry-run   # queries, raw responses, decisions
@@ -371,7 +386,7 @@ candidates with scores and reasons. A provider that is cooling down (shared with
 is skipped and its fallback answers; with every provider cooling down both refuse (exit 3).
 `--wait` waits instead, and `evaluate --wait` also waits whenever a provider starts cooling
 down mid-run ("waiting for gdelt (cooling down)"). Runs take at least
-`min_interval_seconds` per query (tinyfish 2 s, GDELT 5 s).
+`min_interval_seconds` per query (tinyfish 2 s, GDELT 10 s by default).
 
 ## Card images
 

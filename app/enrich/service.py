@@ -62,6 +62,11 @@ SKIPPED = "skipped:"
 matches ``skip_title_patterns``) or ``skipped:no_signal`` (too few names / numbers)."""
 QUERY_TOO_SHORT = "query_too_short"
 RECOVERED = "recovered"
+DEGRADED = "degraded"
+"""``enrich_reason`` prefix when the primary provider was unavailable and only a fallback
+answered: the story is retried (``retry``) until the primary answers again."""
+DEGRADED_MAX_ATTEMPTS = 3
+"""Degraded passes in a row before the story is marked done with what the fallback found."""
 
 
 def retry_delay(attempts: int) -> timedelta:
@@ -119,6 +124,8 @@ class StoryEnrichment:
     reason: str | None = None
     answered: bool = False
     """At least one provider answered (hits or none); otherwise the story is retried."""
+    degraded: str | None = None
+    """The primary provider's error when only a fallback answered (a degraded pass)."""
     retry_at: datetime | None = None
 
     @property
@@ -588,8 +595,27 @@ class Enricher:
         if not result.answered:
             last = failures[-1]["error"] if failures else "no provider answered"
             result.status, result.reason = "retry", f"{UNAVAILABLE}: {last}"[:500]
+        else:
+            result.degraded = self._primary_down(result)
+            if result.degraded:
+                primary = cfg.providers[0].name
+                result.reason = f"{DEGRADED}: {primary} unavailable: {result.degraded}"[:500]
+                if dry_run and len(result.accepted) < need:
+                    result.status = "retry"
         if not dry_run:
             self._finish(result, anchor_id=anchor.id)
+
+    def _primary_down(self, result: StoryEnrichment) -> str | None:
+        """The first provider's error when it never answered for this story (auth, rate
+        limit, cooldown, timeout, budget) while a fallback did; None otherwise."""
+        providers = self.config.providers
+        if len(providers) < 2:
+            return None
+        mine = [s for s in result.searches if s["provider"] == providers[0].name]
+        if not mine or any(not s.get("error") for s in mine):
+            return None
+        down = [s for s in mine if s.get("kind") != "query_rejected"]
+        return down[-1]["error"] if down else None
 
     async def _search(self, provider, query: str, since: datetime, dry_run: bool, result):
         cfg = self.config
@@ -730,15 +756,19 @@ class Enricher:
                         created_at=now,
                     )
                 )
-            if result.status != "failed" and story.enrich_attempts and not result.reason:
-                result.reason = f"{RECOVERED} after {story.enrich_attempts} failed attempt(s)"
-            story.enrich_status = result.status if result.status == "failed" else "done"
-            story.enriched_at = now
-            story.enrich_passes = (story.enrich_passes or 0) + 1
-            story.enrich_attempts, story.enrich_next_attempt_at = 0, None
-            if result.added and late and not regenerate:
-                result.reason = "late_regen_deferred"  # kept for the next regeneration
-            story.enrich_reason = result.reason
+            if result.degraded and self._degraded_retry(session, story, now):
+                self._schedule_degraded(story, result, now)
+            else:
+                if result.status != "failed" and story.enrich_attempts and not result.reason:
+                    result.reason = f"{RECOVERED} after {story.enrich_attempts} failed attempt(s)"
+                result.status = "failed" if result.status == "failed" else "done"
+                story.enrich_status = result.status
+                story.enriched_at = now
+                story.enrich_passes = (story.enrich_passes or 0) + 1
+                story.enrich_attempts, story.enrich_next_attempt_at = 0, None
+                if result.added and late and not regenerate:
+                    result.reason = "late_regen_deferred"  # kept for the next regeneration
+                story.enrich_reason = result.reason
             if result.added:
                 from app.cluster.service import refresh_stories
 
@@ -764,6 +794,29 @@ class Enricher:
             story.enrich_attempts = (story.enrich_attempts or 0) + 1
             delay = max(retry_delay(story.enrich_attempts), wait_out)
         result.retry_at = now + delay
+        story.enrich_status, story.enrich_next_attempt_at = "retry", result.retry_at
+        story.enrich_reason = result.reason
+
+    def _degraded_retry(self, session: Session, story: Story, now: datetime) -> bool:
+        """A degraded pass is retried while the story is still under ``target_sources``,
+        within ``max_age_hours`` and short of ``DEGRADED_MAX_ATTEMPTS`` passes in a row."""
+        cfg = self.config
+        session.flush()
+        return (
+            (story.enrich_attempts or 0) < DEGRADED_MAX_ATTEMPTS
+            and story.last_updated_at >= now - timedelta(hours=cfg.max_age_hours)
+            and self.publishers(session, story.id) < cfg.target_sources
+        )
+
+    def _schedule_degraded(self, story: Story, result: StoryEnrichment, now: datetime) -> None:
+        """Keep what the fallback found, but not done: retry once the primary's cooldown
+        (if any) is over, after the usual backoff at least."""
+        story.enrich_attempts = (story.enrich_attempts or 0) + 1
+        cooling = self.search.cooldown_remaining(self.config.providers[0].name)
+        delay = retry_delay(story.enrich_attempts)
+        if cooling > 0:
+            delay = max(delay, timedelta(seconds=cooling + 1))
+        result.status, result.retry_at = "retry", now + delay
         story.enrich_status, story.enrich_next_attempt_at = "retry", result.retry_at
         story.enrich_reason = result.reason
 
