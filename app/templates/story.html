@@ -17,12 +17,14 @@
 {%- set numbered = report.citations if report and report.citations else (brief.citations if brief else []) -%}
 {%- set cited_ids = numbered | map(attribute="article_id") | list -%}
 {%- set web_ids = story.members | selectattr("found_by_search") | map(attribute="id") | list -%}
+{%- set numbered_members = story.members | rejectattr("link_only") | list -%}
+{%- set link_only_members = story.members | selectattr("link_only") | list -%}
 {%- macro web_badge() -%}<span class="ml-1 inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[0.7rem] font-medium text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" data-web-search title="Not one of your sources: found via web search to add independent coverage">found via web search</span>{%- endmacro -%}
 <a href="{{ back }}" class="mb-4 inline-flex items-center gap-1 text-sm font-medium text-sky-700 hover:underline dark:text-sky-400"><span aria-hidden="true">←</span> Back to feed</a>
 <h1 class="mb-1 max-w-3xl text-2xl font-bold leading-tight tracking-tight">{{ story.title }}</h1>
 <p class="mb-4 text-sm text-slate-500 dark:text-slate-400">
-  Covered by {{ story.source_count }} source{{ "s" if story.source_count != 1 }} ·
-  {{ story.members | length }} article{{ "s" if story.members | length != 1 }} ·
+  Covered by {{ numbered_members | map(attribute="source_id") | unique | list | length }} source{{ "s" if (numbered_members | map(attribute="source_id") | unique | list | length) != 1 }} ·
+  {{ numbered_members | length }} article{{ "s" if numbered_members | length != 1 }} ·
   first seen <time datetime="{{ story.first_seen_at.isoformat() }}" title="{{ story.first_seen_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ story.first_seen_at | reltime }}</time>
 </p>
 {% set story_src = story.image | image_src %}
@@ -57,7 +59,7 @@
   </ol>
 </section>
 {% endif %}
-{%- set others = story.members | rejectattr("id", "in", cited_ids) | list -%}
+{%- set others = numbered_members | rejectattr("id", "in", cited_ids) | list -%}
 {% if others %}
 {% if numbered %}<h2 class="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">More coverage</h2>{% endif %}
 <ol class="max-w-3xl divide-y divide-slate-200 overflow-hidden rounded-xl border border-slate-200 bg-white dark:divide-slate-800 dark:border-slate-800 dark:bg-slate-900" data-members>
@@ -75,6 +77,15 @@
   </li>
   {% endfor %}
 </ol>
+{% endif %}
+{% if link_only_members %}
+<p class="mt-2 max-w-3xl text-sm text-slate-500 dark:text-slate-400" data-link-only>
+  Also reported by
+  {%- for m in link_only_members -%}
+    <a href="{{ m.url }}" target="_blank" rel="noopener noreferrer" class="font-medium text-slate-600 hover:underline dark:text-slate-300" data-publisher>{{ m.publisher or m.source }}</a>{{ ", " if not loop.last }}
+  {%- endfor -%}
+  (link only: the page could not be fetched, so it is not counted or summarized)
+</p>
 {% endif %}
 {% if profile %}<script>
 (function () {

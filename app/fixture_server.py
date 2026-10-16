@@ -147,9 +147,11 @@ def make_handler(
     faults: GdeltFaults | None = None,
     tinyfish_base: str | None = None,
     tinyfish_faults: GdeltFaults | None = None,
+    tinyfish_own_first: int = 0,
 ) -> type[BaseHTTPRequestHandler]:
     faults = faults or GdeltFaults([])
     tf_faults = tinyfish_faults or GdeltFaults([], TINYFISH_FAULTS, "--tinyfish-faults")
+    own_remaining = [tinyfish_own_first]
 
     class Handler(BaseHTTPRequestHandler):
         def _send(self, status: int, body: bytes, ctype: str, headers=None) -> None:
@@ -214,6 +216,11 @@ def make_handler(
             elif wire_base and path == "/tinyfish":
                 query = parse_qs(urlsplit(self.path).query).get("query", [""])[0]
                 hits_base = tinyfish_base or wire_base
+                if own_remaining[0] > 0:
+                    # first response(s): every hit on the feed host itself, so all of
+                    # them are rejected as same_domain and the looser query must run
+                    own_remaining[0] -= 1
+                    hits_base = base
                 body, ctype = tinyfish_json(fixture_dir, query, hits_base), "application/json"
             elif wire_base and path in ("/gdelt-stats", "/tinyfish-stats"):
                 counter = faults if path == "/gdelt-stats" else tf_faults
@@ -250,13 +257,25 @@ def main() -> None:
     parser.add_argument(
         "--gdelt-faults", default="", help=f"comma-separated, served first: {', '.join(FAULTS)}"
     )
+    parser.add_argument(
+        "--tinyfish-own-first",
+        type=int,
+        default=0,
+        help="first N /tinyfish answers have hits on the feed host (all same_domain)",
+    )
     args = parser.parse_args()
     faults = GdeltFaults([f for f in args.gdelt_faults.split(",") if f])
     tf_faults = GdeltFaults(
         [f for f in args.tinyfish_faults.split(",") if f], TINYFISH_FAULTS, "--tinyfish-faults"
     )
     handler = make_handler(
-        args.fixture_dir, args.base, args.wire_base, faults, args.tinyfish_wire_base, tf_faults
+        args.fixture_dir,
+        args.base,
+        args.wire_base,
+        faults,
+        args.tinyfish_wire_base,
+        tf_faults,
+        args.tinyfish_own_first,
     )
     server = ThreadingHTTPServer((args.host, args.port), handler)
     print(f"fixture feeds from {args.fixture_dir} on :{args.port} as {args.base}", flush=True)

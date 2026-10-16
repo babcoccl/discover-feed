@@ -54,7 +54,7 @@ def summary(results: list[tuple[str, StoryEnrichment]], *, markdown: bool) -> st
     rejected: dict[str, list[Candidate]] = {}
     for _, r in results:
         for c in r.candidates:
-            if c.decision != "accepted":
+            if c.decision == "rejected":
                 rejected.setdefault(c.reason or "unknown", []).append(c)
     searches = [s for _, r in results for s in r.searches]
     skipped = Counter(s["skipped"] for s in searches if s.get("skipped"))
@@ -76,6 +76,12 @@ def summary(results: list[tuple[str, StoryEnrichment]], *, markdown: bool) -> st
     judged = sum(len(r.candidates) for _, r in results)
     accepted = sum(len(r.accepted) for _, r in results)
     lines.append(f"- candidates judged: {judged}, accepted: {accepted}")
+    link_only = sum(len(r.link_only) for _, r in results)
+    if link_only:
+        lines.append(f"- link-only members (enrichment.link_only): {link_only}")
+    rule_b = sum(1 for _, r in results for c in r.accepted if c.rule_b)
+    if rule_b:
+        lines.append(f"- newly accepted by rule B (review for false matches): {rule_b}")
     lines.append(
         f"- stories not searched: {dict(sorted(story_skips.items())) or 'none'}"
         " (skip_title_patterns / min_signal_tokens)"
@@ -107,6 +113,7 @@ def summary(results: list[tuple[str, StoryEnrichment]], *, markdown: bool) -> st
             str(r.story_id),
             c.provider,
             c.hit.domain or "?",
+            "rule_b" if c.rule_b else "",
             _f(c.similarity),
             _f(c.title_similarity),
             _f(c.text_similarity),
@@ -116,7 +123,9 @@ def summary(results: list[tuple[str, StoryEnrichment]], *, markdown: bool) -> st
         for c in r.accepted
     ]
     lines += _table(
-        ["story", "provider", "domain", "snippet", "title", "text", "headline"], rows, markdown
+        ["story", "provider", "domain", "via", "snippet", "title", "text", "headline"],
+        rows,
+        markdown,
     )
     lines += ["", f"{h}Rejected by reason"]
     rows = [
@@ -126,10 +135,15 @@ def summary(results: list[tuple[str, StoryEnrichment]], *, markdown: bool) -> st
             _avg([c.similarity for c in cs]),
             _avg([c.title_similarity for c in cs]),
             _avg([c.text_similarity for c in cs]),
+            _avg([float(c.shared_entities) if c.shared_entities is not None else None for c in cs]),
         ]
         for reason, cs in sorted(rejected.items(), key=lambda kv: -len(kv[1]))
     ]
-    lines += _table(["reason", "count", "avg snippet", "avg title", "avg text"], rows, markdown)
+    lines += _table(
+        ["reason", "count", "avg snippet", "avg title", "avg text", "avg entities"],
+        rows,
+        markdown,
+    )
     lines += ["", f"{h}Per story"]
     rows = []
     for title, r in results:
@@ -144,11 +158,13 @@ def summary(results: list[tuple[str, StoryEnrichment]], *, markdown: bool) -> st
             )
             for s in r.searches
         )
-        top = sorted((c for c in r.candidates if c.decision != "accepted"), key=lambda c: -c.score)[
+        top = sorted((c for c in r.candidates if c.decision == "rejected"), key=lambda c: -c.score)[
             :3
         ]
         rejected_top = "; ".join(
-            f"{c.hit.domain or '?'} {c.reason} {_f(c.similarity)}/{_f(c.title_similarity)}"
+            f"{c.hit.domain or '?'} {c.reason} "
+            f"{_f(c.similarity)}/{_f(c.title_similarity)}/{_f(c.text_similarity)}"
+            f" e{c.shared_entities if c.shared_entities is not None else '-'}"
             for c in top
         )
         rows.append(

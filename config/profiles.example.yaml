@@ -13,15 +13,15 @@ profiles:
       providers:
         - name: tinyfish            # primary: titles + snippets; key in TINYFISH_API_KEY
           min_interval_seconds: 2   # 30 requests / minute (lower is raised to 2)
-        - name: gdelt               # free fallback, no key; tried when tinyfish fails or finds nothing
-          # GDELT documents one request per 5 s (lower is raised to 5) but rate-limits at 6 s
-          # spacing in practice: it is an unreliable fallback, keep tinyfish primary.
-          min_interval_seconds: 10
-        # Opt-in providers, tried after those when they fail or find too little:
+        # Opt-in providers, tried after tinyfish when it fails or finds too little:
+        # - name: gdelt              # free, no key. Opt-in: on a live eval it rate-limited
+        #   min_interval_seconds: 10 # 32 of 37 requests and found nothing; when tinyfish
+        #                          # cools down, stories are retried rather than gdelt
+        #                          # falling over the same limit again.
         # - name: guardian           # broad search: many loosely related results for tech
         #   api_key: GUARDIAN_API_KEY  # env var name, never the key
         #   daily_request_budget: 200
-        # - name: searxng
+        # - name: searxng            # self-hosted metasearch fallback
         #   base_url: http://searxng:8080
         # - name: brave
         #   api_key: BRAVE_API_KEY  # env var name, never the key
@@ -34,9 +34,16 @@ profiles:
       # tune them with `python -m app.enrich.evaluate` as more live data comes in.
       # min_snippet_similarity: 0.25  # hit title + snippet vs. the headlines
       # min_text_similarity: 0.35     # extracted page text vs. the story's members
+      # Combined rule B: a strong snippet can carry a weaker page: accepted when
+      # min_snippet_strong + min_shared_entities are met and the text passes min_text_floor.
+      # min_snippet_strong: 0.45
+      # min_text_floor: 0.25
+      # link_only: false          # strong-snippet hits whose page cannot be fetched are
+      #                           # stored as "also reported by (link only)" members: shown
+      #                           # on the story page, never summarized, cited or counted.
       # Not searched (rarely covered elsewhere); regexes on the headline:
       # skip_title_patterns: ["^Show HN", "^Ask HN", "^Tell HN", "^Opinion", "^Letters"]
-      # min_signal_tokens: 2    # skip headlines with fewer distinct names / numbers
+      # min_signal_tokens: 1    # skip headlines with fewer distinct names / numbers
     # Topics become feed tabs. Keywords are whole-word and case-insensitive; an empty
     # include list means "every article from the topic's sources".
     topics:

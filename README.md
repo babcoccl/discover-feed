@@ -237,8 +237,9 @@ How it works (`app/search/`, `app/enrich/`):
 2. Stories other outlets are unlikely to cover are not searched: headlines matching
    `skip_title_patterns` (default `^Show HN`, `^Ask HN`, `^Tell HN`, `^Opinion`, `^Letters`;
    `enrich_reason = skipped:pattern`) and headlines with fewer than `min_signal_tokens`
-   (default 2) distinct names / numbers ("The cost of getting a job today", "AI was great
-   until it was not": `skipped:no_signal`). They are marked done at once (briefs never wait)
+   (default 1) distinct names / numbers ("The cost of getting a job today":
+   `skipped:no_signal`; one entity, acronym or number is enough to search, so "AI was
+   great until it was not" is searched now). They are marked done at once (briefs never wait)
    and counted separately in Settings > Pipeline and `evaluate`.
    Queries come from the headlines only (never article text), built per provider, after
    removing boilerplate labels (`strip_title_prefixes`: `Show HN:`, `Exclusive:`,
@@ -251,13 +252,18 @@ How it works (`app/search/`, `app/enrich/`):
    `AI`, `US`, `UK`, `EU`, `UN` are spelled out (`"artificial intelligence"`), other short
    words dropped; a quoted name keeps a short word (`"Gen Z"`). If GDELT still answers
    "keyword that was too short", the query is rebuilt once without any short part and sent
-   again (no cooldown); if that is rejected too the search is skipped (`query_too_short`). Only when that query returns 0
-   hits is a looser one sent (`"Federal Reserve" (Powell OR 2025 OR rates)`), at most
+   again (no cooldown); if that is rejected too the search is skipped (`query_too_short`). Only when that query leaves too few
+   usable candidates after the cheap rejects (same domain, social, already known, time,
+   language) is a looser one sent (`"Federal Reserve" (Powell OR 2025 OR rates)`), at most
    `max_queries_per_story` (default 2) requests per provider and story. `query_mode: llm`
    asks the summarizer for up to 2 queries, trimmed to the same per-provider limits, falling
    back to the heuristic.
 3. Each provider in `providers` is asked in order until enough sources are found (a failing
-   or empty provider falls through to the next). The default is `tinyfish` then `gdelt`.
+   or empty provider falls through to the next). The default is `tinyfish` alone: `gdelt`
+   stays available but is opt-in (on a live eval it rate-limited 32 of 37 requests and
+   found nothing; when TinyFish cools down stories are retried rather than handed to a
+   fallback that keeps failing). TinyFish is sent `exclude_domains` with the story's own
+   publishers so their hits do not use up result slots.
    Supported: `tinyfish` ([TinyFish Search API](https://docs.tinyfish.ai/search-api/reference):
    titles, snippets and dates; key in `TINYFISH_API_KEY`, free up to 12,000 requests a day,
    `search_type: news|web`), `gdelt` (free, no key, titles only), `searxng` (your instance;
@@ -308,8 +314,11 @@ How it works (`app/search/`, `app/enrich/`):
    whose robots.txt allows named crawlers only) and paywalled (`isAccessibleForFree: false`)
    pages are dropped; `diagnose` prints the fetch detail under each one
    (`fetch: skipped (disallowed by robots.txt)`, `fetch: failed (HTTP 403)`). Extracted text
-   must reach `min_text_similarity` (default 0.35), share `min_shared_entities`
-   names with the headlines, and not be a copy (5-word shingle overlap of `duplicate_overlap`
+   is accepted when it reaches `min_text_similarity` (default 0.35), or — rule B — when the
+   hit's snippet was strong (`min_snippet_strong`, default 0.45), the text shares
+   `min_shared_entities` names with the headlines and stays above `min_text_floor`
+   (default 0.25): a precise snippet can carry a page that extracts thinly. In both cases
+   it must not be a copy (5-word shingle overlap of `duplicate_overlap`
    with a member or an accepted page: syndicated wire copies collapse).
 7. Accepted pages become members with `origin = enrichment`, source id `web:<domain>`,
    pinned to the story through incremental clustering, merges and `--rebuild`. They count
@@ -317,6 +326,11 @@ How it works (`app/search/`, `app/enrich/`):
    badged "found via web search" on the story page; the API returns `sources[].origin`
    (`feed` | `enrichment`). They never fire alerts, never become cards of their own and
    never make a story visible in a profile that does not follow one of its feed sources.
+   With `link_only: true`, a candidate whose snippet is strong (>= `min_snippet_strong`)
+   and shares the entity names but whose page cannot be fetched (failed, blocked or
+   paywalled — never robots-disallowed) is stored as a member with `text_status = none`:
+   the story page lists it as "also reported by (link only)"; it is never summarized,
+   cited or counted in the sources.
 8. Sources found after a story was published regenerate it once (`enrich_regens`); the
    published version stays visible until the new one passes the publish gate. At most
    `late_regen_max_per_hour` (default 6) stories are regenerated that way per hour, so
@@ -333,8 +347,8 @@ enrichment:
   providers:
     - name: tinyfish                # primary; key in TINYFISH_API_KEY (.env)
       min_interval_seconds: 2       # never below 2 (30 requests / minute)
-    - name: gdelt                   # free fallback when tinyfish fails or finds nothing
-      min_interval_seconds: 10      # never below 5; GDELT rate-limits at 6 s in practice
+    # - name: gdelt                 # opt-in fallback: rate-limits in practice (32 of 37
+    #   min_interval_seconds: 10    # requests on a live eval); never below 5 s
     # - name: guardian              # opt-in: broad search, mostly noise for tech stories
     #   api_key: GUARDIAN_API_KEY
     # - name: searxng

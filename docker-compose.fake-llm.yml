@@ -25,8 +25,11 @@ services:
               "--tinyfish-wire-base", "http://tinywire:8081",
               # The first fake-TinyFish replies fail (each transient one twice: the client
               # retries it once), so those stories fall back to the fake GDELT, whose first
-              # replies fail too; stories must be retried, then enriched.
+              # replies fail too; stories must be retried, then enriched. The first good
+              # TinyFish answer puts every hit on the feed host itself (all same_domain),
+              # so the looser second query must run to find the wire pages.
               "--tinyfish-faults", "malformed,malformed,empty,empty,429",
+              "--tinyfish-own-first", "1",
               "--gdelt-faults", "429,limit,timeout,empty,429"]
     networks:
       default:

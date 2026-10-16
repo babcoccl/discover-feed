@@ -319,11 +319,11 @@ def test_registrable_domains_and_block_list():
 def test_text_check_accepts_related_and_rejects_copies_and_unrelated():
     ctx = story_ctx()
     kw = {"threshold": 0.45, "min_entities": 2, "duplicate_overlap": 0.6}
-    assert text_check("Springfield buses", OTHER_TEXT, ctx, **kw)[0] is None
-    assert text_check("Springfield buses", TEXT, ctx, **kw)[0] == "near_duplicate"
-    assert text_check("Football", UNRELATED, ctx, **kw)[0] == "low_text_similarity"
+    assert text_check("Springfield buses", OTHER_TEXT, ctx, **kw).reason is None
+    assert text_check("Springfield buses", TEXT, ctx, **kw).reason == "near_duplicate"
+    assert text_check("Football", UNRELATED, ctx, **kw).reason == "low_text_similarity"
     # a second copy of an already accepted candidate collapses too
-    assert text_check("Copy", OTHER_TEXT, ctx, accepted_texts=[OTHER_TEXT], **kw)[0] == (
+    assert text_check("Copy", OTHER_TEXT, ctx, accepted_texts=[OTHER_TEXT], **kw).reason == (
         "near_duplicate"
     )
 
@@ -332,8 +332,88 @@ def test_threshold_defaults_are_the_tuned_starting_points():
     cfg = EnrichmentConfig()
     assert cfg.min_text_similarity == 0.35 and cfg.min_snippet_similarity == 0.25
     assert cfg.min_title_similarity == 0.30 and cfg.min_shared_entities == 2
-    assert [p.name for p in cfg.providers] == ["tinyfish", "gdelt"]  # guardian is opt-in
+    assert cfg.min_snippet_strong == 0.45 and cfg.min_text_floor == 0.25
+    assert cfg.min_signal_tokens == 1 and cfg.link_only is False
+    assert [p.name for p in cfg.providers] == ["tinyfish"]  # gdelt is opt-in
     assert "guardian" not in {p.name for p in cfg.providers}
+
+
+@pytest.mark.parametrize(
+    ("site", "snippet", "text", "entities", "reason", "rule_b"),
+    [
+        # the live-eval scores: snippets of 0.43-0.48 with text of ~0.25 were dropped
+        ("gamesindustry.biz", 0.48, 0.25, 2, None, True),
+        ("phoronix.com", 0.46, 0.30, 3, None, True),
+        ("shacknews.com", 0.43, 0.30, 2, "low_text_similarity", False),  # weak snippet
+        ("thin.example", 0.48, 0.20, 2, "low_text_similarity", False),  # below the floor
+        ("few.example", 0.48, 0.30, 1, "few_shared_entities", False),
+        ("strong.example", 0.40, 0.60, 2, None, False),  # rule A still wins
+    ],
+)
+def test_combined_rule_b_accepts_strong_snippets(
+    monkeypatch, site, snippet, text, entities, reason, rule_b
+):
+    """Rule B: snippet >= 0.45 + entities >= 2 + text >= 0.25 accepts below the
+    min_text_similarity threshold; the near-duplicate check still applies."""
+    monkeypatch.setattr("app.enrich.filters.similarity", lambda _a, _b: text)
+    monkeypatch.setattr("app.enrich.filters.shared_entities", lambda _a, _b: entities)
+    verdict = text_check(
+        f"Ubuntu 26.10 on {site}",
+        OTHER_TEXT,
+        story_ctx(),
+        threshold=0.35,
+        min_entities=2,
+        duplicate_overlap=0.6,
+        snippet_similarity=snippet,
+    )
+    assert verdict.reason == reason and verdict.score == text
+    if reason is None:
+        assert verdict.rule_b == rule_b
+
+
+@pytest.mark.parametrize(
+    ("status", "decision", "reason"),
+    [
+        ("failed", "link_only", "fetch_failed"),
+        ("blocked", "link_only", "blocked_url"),
+        ("paywalled", "link_only", "paywalled"),
+        ("skipped", "rejected", "robots"),  # robots-disallowed is never link-only
+    ],
+)
+def test_link_only_candidate_is_stored_without_text(
+    session_factory, monkeypatch, status, decision, reason
+):
+    """A strong-snippet hit whose page cannot be fetched becomes a text_status=none member
+    (enrichment.link_only): counted separately, never summarized."""
+    from app.enrich.fetch import FetchedPage
+
+    monkeypatch.setattr("app.enrich.filters.similarity", lambda _a, _b: 0.5)
+    monkeypatch.setattr("app.enrich.filters.shared_entities", lambda _a, _b: 3)
+    story_id = seed(session_factory)
+    tinyfish = SearchProviderConfig(
+        name="tinyfish", base_url="http://tinyfish.test/search", min_interval_seconds=0
+    )
+    enricher = make_enricher(
+        session_factory, FakeSearch(), config(providers=[tinyfish], link_only=True)
+    )
+
+    async def dead(url: str) -> FetchedPage:
+        return FetchedPage(url, status, reason="", text="", words=0)
+
+    monkeypatch.setattr(enricher.fetcher, "fetch", dead)
+    result = asyncio.run(enricher.enrich_story(story_id))
+    link_only = [c for c in result.candidates if c.decision == "link_only"]
+    if decision == "link_only":
+        assert link_only and link_only[0].reason == reason and result.added == 0
+        with session_factory() as session:
+            member = session.scalar(select(Article).where(Article.url == link_only[0].hit.url))
+            assert member.text_status == "none" and member.text is None
+            assert member.origin == ENRICHMENT and member.word_count is None
+            ctx, _ = enricher.context(session, story_id)
+            assert all(t == "" for t in ctx.texts[1:])  # link-only text is never input
+    else:
+        assert not link_only
+        assert all(c.reason != "robots" or c.decision == "rejected" for c in result.candidates)
 
 
 @pytest.mark.parametrize(
@@ -357,7 +437,7 @@ def test_live_text_scores_pass_the_default_threshold(monkeypatch, site, score, r
         min_entities=cfg.min_shared_entities,
         duplicate_overlap=cfg.duplicate_overlap,
     )
-    assert got == (reason, score)
+    assert got.reason == reason and got.score == score
 
 
 @pytest.mark.parametrize(
@@ -896,12 +976,35 @@ def test_looser_query_only_after_zero_hits(session_factory):
     story_id = seed(session_factory)
     fake = FakeSearch()
     run(make_enricher(session_factory, fake), story_id)
-    assert len(fake.requests) == 1  # the strict query found hits
+    assert len(fake.requests) == 1  # the strict query found usable hits
     other = seed_more(session_factory, ["Fresno council backs Kings River water plant"])[0]
     empty = FakeSearch(hits=[])
     run(make_enricher(session_factory, empty), other)
     queries = [r.url.params["query"] for r in empty.requests]
     assert len(queries) == 2 and " OR " in queries[1] and "(" in queries[1]
+
+
+def test_looser_query_runs_when_the_first_returns_only_unusable_hits(session_factory):
+    """Live bug (stories 549/531/532): the enricher stopped after the first query with any
+    hits, even when every hit was rejected by the cheap filters (same domain, social,
+    already ingested). The looser query now runs and its page is accepted."""
+    story_id = seed(session_factory)
+    own = [
+        ("https://news.example/other", "Springfield buses approved by council"),  # same domain
+        ("https://twitter.com/x/status/1", "Springfield electric buses"),  # social
+        ("https://news.example/1", "Springfield buses"),  # already ingested
+    ]
+    good = [("https://www.wire.example/buses", "Springfield council approves electric buses plan")]
+    fake = FakeSearch()
+    fake.responses = [
+        httpx.Response(200, json=gdelt_body(own)),
+        httpx.Response(200, json=gdelt_body(good)),
+    ]
+    result = asyncio.run(make_enricher(session_factory, fake).enrich_story(story_id))
+    assert len(fake.requests) == 2 and result.added == 1
+    assert {c.hit.domain for c in result.accepted} == {"wire.example"}
+    reasons = {c.hit.url: c.reason for c in result.candidates}
+    assert reasons["https://news.example/other"] == "same_domain"
 
 
 def test_cli_refuses_during_a_cooldown(session_factory):

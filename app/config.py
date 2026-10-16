@@ -541,7 +541,9 @@ class QueryMode(StrEnum):
 
 
 def _default_providers() -> list[SearchProviderConfig]:
-    return [SearchProviderConfig(name="tinyfish"), SearchProviderConfig(name="gdelt")]
+    # GDELT rate-limits in practice (32 of 37 requests on a live eval, no useful results):
+    # it stays available as an opt-in fallback but is not a default provider.
+    return [SearchProviderConfig(name="tinyfish")]
 
 
 DEFAULT_SKIP_TITLE_PATTERNS = [
@@ -593,6 +595,15 @@ class EnrichmentConfig(_Model):
     min_text_similarity: float = Field(default=0.35, ge=0, le=1)
     """Extracted page text vs. the story's headlines and member text (TF-IDF cosine)."""
     min_shared_entities: int = Field(default=2, ge=0, le=10)
+    min_snippet_strong: float = Field(default=0.45, ge=0, le=1)
+    """Rule B: a hit whose snippet is this similar can be accepted with weaker page text."""
+    min_text_floor: float = Field(default=0.25, ge=0, le=1)
+    """Rule B: extracted text must still reach this similarity (and share the entities)."""
+    link_only: bool = False
+    """Candidates with a strong snippet (``min_snippet_strong``) and ``min_shared_entities``
+    whose page cannot be fetched (failed / blocked / paywalled, never robots-disallowed)
+    are stored as ``text_status = none`` members: shown as \"also reported by (link only)\",
+    never summarized, cited or counted in the word budget."""
     max_time_gap_hours: float = Field(default=72, gt=0)
     duplicate_overlap: float = Field(default=0.6, gt=0, le=1)
     """Shingle overlap at which a candidate counts as a copy (syndicated wire text)."""
@@ -627,7 +638,7 @@ class EnrichmentConfig(_Model):
     )
     """Headline boilerplate (``Exclusive:``, ``Analysis -`` ...) removed before building
     queries."""
-    min_signal_tokens: int = Field(default=2, ge=0, le=10)
+    min_signal_tokens: int = Field(default=1, ge=0, le=10)
     """Stories whose headlines have fewer distinct names / numbers than this are not
     searched (``skipped:no_signal``; 0: off)."""
 
