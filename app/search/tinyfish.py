@@ -10,6 +10,8 @@ configuration error and the next provider is tried.
 
 import json
 import os
+import re
+from datetime import UTC, datetime, timedelta
 
 import httpx
 
@@ -28,6 +30,34 @@ from app.sources.base import FetchError, Quota, QuotaExhausted, RateLimited
 TINYFISH_API = "https://api.search.tinyfish.ai"
 PURPOSE = "Find other news outlets' coverage of the same news event"
 
+_RELATIVE = re.compile(
+    r"^\s*(?:(\d+(?:\.\d+)?)|an?|one)\s+"
+    r"(second|minute|hour|day|week|month|year)s?\s+ago\s*$",
+    re.IGNORECASE,
+)
+_UNITS = {
+    "second": 1,
+    "minute": 60,
+    "hour": 3600,
+    "day": 86400,
+    "week": 7 * 86400,
+    "month": 30 * 86400,
+    "year": 365 * 86400,
+}
+
+
+def published_date(value: str, *, now: datetime | None = None) -> datetime | None:
+    """TinyFish dates: ISO strings, or relative ones like ``7 hours ago`` / ``3 weeks ago``
+    (measured from ``now``, defaulting to the request time)."""
+    parsed = parse_datetime(value or None)
+    if parsed is not None:
+        return parsed
+    match = _RELATIVE.match(value or "")
+    if not match:
+        return None
+    amount = float(match.group(1)) if match.group(1) else 1.0
+    return (now or datetime.now(UTC)) - timedelta(seconds=amount * _UNITS[match.group(2).lower()])
+
 
 def _str(value) -> str:
     return value.strip() if isinstance(value, str) else ""
@@ -45,11 +75,15 @@ def _error_code(response: httpx.Response) -> str:
 @register("tinyfish")
 class TinyFishProvider(SearchProvider):
     default_key_env = "TINYFISH_API_KEY"
+    supports_exclude = True
+    """``exclude_domains`` keeps the story's own publishers out of the results."""
 
     def optional_key(self) -> str:
         return os.environ.get(self.key_env or "", "").strip()
 
-    async def search(self, query, since, language, limit, quota: Quota) -> list[SearchHit]:
+    async def search(
+        self, query, since, language, limit, quota: Quota, exclude=()
+    ) -> list[SearchHit]:
         key = self.optional_key()
         params = {
             "query": query,
@@ -59,6 +93,8 @@ class TinyFishProvider(SearchProvider):
         }
         if language:
             params["language"] = language
+        if exclude:
+            params["exclude_domains"] = ",".join(dict.fromkeys(exclude))
         headers = {"Accept": "application/json"}
         if key:
             headers["X-API-Key"] = key
@@ -113,7 +149,7 @@ class TinyFishProvider(SearchProvider):
                     title=_str(r.get("title")),
                     snippet=_str(r.get("snippet")) or _str(r.get("content")),
                     domain=_str(r.get("site_name")),
-                    published_at=parse_datetime(_str(r.get("date")) or None),
+                    published_at=published_date(_str(r.get("date"))),
                     language=language,
                 )
             )

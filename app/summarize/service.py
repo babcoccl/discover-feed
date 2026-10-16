@@ -449,11 +449,13 @@ class Summarizer:
     def sources_for(
         self, item: repo.StoryItem, names: dict[str, str], kind: str
     ) -> list[SourceDoc]:
+        # link-only members (``text_status = none``) are never summarized or cited
+        members = [m for m in item.members if m.text_status != TextStatus.NONE]
         if kind == SummaryKind.REPORT:
             role = self.report_client.role
             return trim_sources(
                 select_sources(
-                    item.members,
+                    members,
                     names,
                     max_articles=self.report_max_articles,
                     total_words=self.report_total_words,
@@ -464,15 +466,19 @@ class Summarizer:
             )
         if kind == FOLLOWUPS:
             return select_sources(
-                item.members, names, max_articles=self.max_articles, total_words=FOLLOWUPS_WORDS
+                members, names, max_articles=self.max_articles, total_words=FOLLOWUPS_WORDS
             )
         return select_sources(
-            item.members, names, max_articles=self.max_articles, max_words=self.max_words
+            members, names, max_articles=self.max_articles, max_words=self.max_words
         )
 
     def key_for(self, item: repo.StoryItem, sources: Sequence[SourceDoc], kind: str) -> str:
         return input_hash(
-            [m.id for m in item.members], sources, PROMPT_VERSIONS[kind], self.client.model, kind
+            [m.id for m in item.members if m.text_status != TextStatus.NONE],
+            sources,
+            PROMPT_VERSIONS[kind],
+            self.client.model,
+            kind,
         )
 
     def is_current(self, session, story_id: int, kind: str) -> bool:

@@ -115,6 +115,17 @@ def overlap(a: set, b: set) -> float:
     return len(a & b) / min(len(a), len(b))
 
 
+@dataclass
+class TextVerdict:
+    """The post-extraction decision: a rejection reason (None: accepted), the text
+    similarity, the shared-entity count and whether the combined rule B accepted."""
+
+    reason: str | None
+    score: float
+    entities: int = 0
+    rule_b: bool = False
+
+
 def text_check(
     title: str,
     text: str,
@@ -124,16 +135,26 @@ def text_check(
     min_entities: int,
     duplicate_overlap: float,
     accepted_texts: Sequence[str] = (),
-) -> tuple[str | None, float]:
-    """Post-extraction checks: body similarity, shared entities, not a copy of a member or of
-    an already accepted candidate."""
+    snippet_similarity: float | None = None,
+    min_snippet_strong: float = 0.45,
+    min_text_floor: float = 0.25,
+) -> TextVerdict:
+    """Post-extraction checks. Accepted when the body reaches ``threshold`` (rule A), or when
+    the hit's snippet was strong (``min_snippet_strong``), the text shares ``min_entities``
+    names with the story and is not below ``min_text_floor`` (rule B); never a copy of a
+    member or of an already accepted candidate (5-word shingle overlap)."""
     score = round(similarity(f"{title} {text}", story.document), 4)
-    if score < threshold:
-        return "low_text_similarity", score
-    if shared_entities(f"{title} {text[:2000]}", story) < min_entities:
-        return "few_shared_entities", score
+    entities = shared_entities(f"{title} {text[:2000]}", story)
+    rule_b = score < threshold
+    if rule_b:
+        if score < min_text_floor or not (
+            snippet_similarity is not None and snippet_similarity >= min_snippet_strong
+        ):
+            return TextVerdict("low_text_similarity", score, entities)
+        if entities < min_entities:
+            return TextVerdict("few_shared_entities", score, entities)
     mine = shingles(text)
     for other in [*story.texts, *accepted_texts]:
         if overlap(mine, shingles(other)) >= duplicate_overlap:
-            return "near_duplicate", score
-    return None, score
+            return TextVerdict("near_duplicate", score, entities)
+    return TextVerdict(None, score, entities, rule_b=rule_b)

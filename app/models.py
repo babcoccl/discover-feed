@@ -134,6 +134,8 @@ class TextStatus(StrEnum):
     OK = "ok"
     FAILED = "failed"
     SKIPPED = "skipped"
+    NONE = "none"
+    """Never fetched by design (link-only enrichment members): no text, never summarized."""
 
 
 class Story(Base):
@@ -669,7 +671,7 @@ class EnrichmentCandidate(Base):
     domain: Mapped[str] = mapped_column(String(300), default="")
     title: Mapped[str] = mapped_column(Text, default="")
     decision: Mapped[str] = mapped_column(String(10))
-    """``accepted`` | ``rejected``."""
+    """``accepted`` | ``rejected`` | ``link_only`` (a member stored without its text)."""
     reason: Mapped[str] = mapped_column(String(40), default="")
     similarity: Mapped[float | None] = mapped_column(Float)
     """Title + snippet vs. headlines (NULL when the hit had no snippet)."""

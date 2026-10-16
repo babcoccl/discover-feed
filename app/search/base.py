@@ -9,7 +9,7 @@ error message is scrubbed of them. Budgets, rate limits, caching and health live
 import json
 import os
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -130,6 +130,8 @@ class SearchProvider(ABC):
     name: str = ""
     default_key_env: str | None = None
     needs_key: bool = False
+    supports_exclude: bool = False
+    """The provider can exclude domains server-side (TinyFish ``exclude_domains``)."""
 
     def __init__(self, config: SearchProviderConfig, client: httpx.AsyncClient) -> None:
         self.config = config
@@ -165,10 +167,18 @@ class SearchProvider(ABC):
 
     @abstractmethod
     async def search(
-        self, query: str, since: datetime, language: str | None, limit: int, quota: Quota
+        self,
+        query: str,
+        since: datetime,
+        language: str | None,
+        limit: int,
+        quota: Quota,
+        exclude: Sequence[str] = (),
     ) -> list[SearchHit]:
         """Hits for ``query`` published after ``since`` (best effort per provider).
-        ``quota.before_request()`` is called once per HTTP request (budgets)."""
+        ``quota.before_request()`` is called once per HTTP request (budgets).
+        ``exclude``: registrable domains the caller does not want back (only honored by
+        providers with ``supports_exclude``)."""
 
 
 PROVIDERS: dict[str, type[SearchProvider]] = {}

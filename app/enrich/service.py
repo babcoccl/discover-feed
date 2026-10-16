@@ -24,7 +24,14 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.config import AppConfig, EnrichmentConfig, LLMRole
 from app.enrich.domains import registrable_domain
 from app.enrich.fetch import CandidateFetcher, FetchedPage
-from app.enrich.filters import StoryContext, pre_filter, snippet_check, text_check, title_check
+from app.enrich.filters import (
+    StoryContext,
+    pre_filter,
+    shared_entities,
+    snippet_check,
+    text_check,
+    title_check,
+)
 from app.enrich.query import (
     build_queries,
     drop_short_terms,
@@ -46,7 +53,7 @@ from app.models import (
     utcnow,
 )
 from app.normalize import canonicalize_url, content_hash
-from app.search.base import SearchHit
+from app.search.base import PROVIDERS, SearchHit
 from app.search.service import SearchService, budget_use
 
 logger = logging.getLogger(__name__)
@@ -91,6 +98,8 @@ class Candidate:
     text_similarity: float | None = None
     page: FetchedPage | None = None
     article_id: int | None = None
+    rule_b: bool = False
+    """Accepted by the combined rule (strong snippet + shared entities + text floor)."""
 
     def as_dict(self) -> dict:
         return {
@@ -131,6 +140,11 @@ class StoryEnrichment:
     @property
     def accepted(self) -> list[Candidate]:
         return [c for c in self.candidates if c.decision == "accepted"]
+
+    @property
+    def link_only(self) -> list[Candidate]:
+        """Members stored without text (``enrichment.link_only``): never summarized."""
+        return [c for c in self.candidates if c.decision == "link_only"]
 
 
 class Enricher:
@@ -487,7 +501,8 @@ class Enricher:
                 title=story.title or anchor.title or "",
                 headlines=[h for h in headlines if h],
                 texts=[
-                    (m.text if m.text_status == "ok" else None) or m.summary_raw or ""
+                    (m.text if m.text_status == "ok" else None)
+                    or ("" if m.text_status == "none" else m.summary_raw or "")
                     for m in members
                 ],
                 domains={registrable_domain(m.url) for m in members if m.url},
@@ -562,13 +577,18 @@ class Enricher:
             if len(result.accepted) >= need:
                 break
             fresh: list[Candidate] = []
-            for query in plans[provider.name]:  # a looser query only after 0 hits
-                outcome = await self._search(provider, query, since, dry_run, result)
+            exclude = self._excluded(provider.name, story)
+            for query in plans[provider.name]:
+                outcome = await self._search(
+                    provider, query, since, dry_run, result, exclude=exclude
+                )
                 if outcome.kind == "query_rejected":
                     rebuilt = drop_short_terms(provider.name, query)
                     if rebuilt:  # rebuilt once without the short keywords
                         query = rebuilt
-                        outcome = await self._search(provider, query, since, dry_run, result)
+                        outcome = await self._search(
+                            provider, query, since, dry_run, result, exclude=exclude
+                        )
                     if outcome.kind == "query_rejected":
                         result.searches[-1]["skipped"] = QUERY_TOO_SHORT
                         continue  # the looser query may be valid; never a cooldown
@@ -581,7 +601,8 @@ class Enricher:
                         continue
                     seen.add(key)
                     fresh.append(Candidate(hit=hit, provider=provider.name, query=query))
-                if outcome.hits:
+                # a looser query only when this one left too few usable candidates
+                if self._prescreen(fresh, story) >= need - len(result.accepted):
                     break
             await self._judge(fresh, story, need - len(result.accepted), accepted_texts)
             result.candidates += fresh
@@ -617,7 +638,25 @@ class Enricher:
         down = [s for s in mine if s.get("kind") != "query_rejected"]
         return down[-1]["error"] if down else None
 
-    async def _search(self, provider, query: str, since: datetime, dry_run: bool, result):
+    @staticmethod
+    def _excluded(provider: str, story: StoryContext) -> list[str]:
+        """The story's own publisher domains, when the provider can exclude them
+        server-side (TinyFish ``exclude_domains``); same-domain hits otherwise consume
+        result slots."""
+        cls = PROVIDERS.get(provider)
+        if cls is not None and cls.supports_exclude:
+            return sorted(story.domains)
+        return []
+
+    async def _search(
+        self,
+        provider,
+        query: str,
+        since: datetime,
+        dry_run: bool,
+        result,
+        exclude: list[str] | None = None,
+    ):
         cfg = self.config
         outcome = await self.search.search(
             provider,
@@ -627,6 +666,7 @@ class Enricher:
             cache_hours=cfg.cache_hours,
             empty_cache_minutes=cfg.empty_cache_minutes,
             store=not dry_run,
+            exclude=exclude or (),
         )
         result.searches.append(
             {
@@ -644,14 +684,16 @@ class Enricher:
         )
         return outcome
 
-    async def _judge(
-        self, candidates: list[Candidate], story: StoryContext, need: int, accepted_texts: list
-    ) -> None:
+    def _prescreen(self, candidates: list[Candidate], story: StoryContext) -> int:
+        """The cheap rejections, before any fetch: same domain, deny / social / aggregator
+        lists, an already ingested URL, the time gap, the language. Returns how many
+        candidates are still usable (drives whether the looser query runs)."""
         cfg = self.config
         gap = timedelta(hours=cfg.max_time_gap_hours)
-        keep: list[Candidate] = []
         with self.session_factory() as session:
             for c in candidates:
+                if c.reason:
+                    continue
                 c.reason = (
                     pre_filter(
                         c.hit, story, deny=cfg.deny_domains, max_gap=gap, language=cfg.language
@@ -664,18 +706,27 @@ class Enricher:
                     .where(Article.canonical_url == canonicalize_url(c.hit.url))
                 ):
                     c.reason = "already_ingested"
-                if c.reason:
-                    continue
-                if c.hit.snippet.strip():
-                    reason, c.similarity = snippet_check(c.hit, story, cfg.min_snippet_similarity)
-                else:
-                    reason, c.title_similarity, c.shared_entities = title_check(
-                        c.hit, story, cfg.min_title_similarity
-                    )
-                if reason:
-                    c.reason = reason
-                    continue
-                keep.append(c)
+        return sum(1 for c in candidates if not c.reason)
+
+    async def _judge(
+        self, candidates: list[Candidate], story: StoryContext, need: int, accepted_texts: list
+    ) -> None:
+        cfg = self.config
+        keep: list[Candidate] = []
+        for c in candidates:
+            if c.reason:
+                continue  # rejected by the cheap prescreen
+            if c.hit.snippet.strip():
+                reason, c.similarity = snippet_check(c.hit, story, cfg.min_snippet_similarity)
+                c.shared_entities = shared_entities(f"{c.hit.title} {c.hit.snippet}", story)
+            else:
+                reason, c.title_similarity, c.shared_entities = title_check(
+                    c.hit, story, cfg.min_title_similarity
+                )
+            if reason:
+                c.reason = reason
+                continue
+            keep.append(c)
         keep.sort(key=lambda c: -c.score)
         for i, c in enumerate(keep):
             if need <= 0 or i >= cfg.max_candidates:
@@ -687,13 +738,22 @@ class Enricher:
                 continue
             c.page = await self.fetcher.fetch(c.hit.url)
             if c.page.status != "ok":
-                c.reason = {
+                reason = {
                     "blocked": "blocked_url",
                     "paywalled": "paywalled",
                     "skipped": "robots",
                 }.get(c.page.status, "fetch_failed")
+                if (
+                    cfg.link_only
+                    and c.page.status in ("failed", "blocked", "paywalled")  # never robots
+                    and (c.similarity or 0.0) >= cfg.min_snippet_strong
+                    and (c.shared_entities or 0) >= cfg.min_shared_entities
+                ):
+                    c.decision, c.reason = "link_only", reason
+                    continue
+                c.reason = reason
                 continue
-            reason, c.text_similarity = text_check(
+            verdict = text_check(
                 c.hit.title,
                 c.page.text,
                 story,
@@ -701,11 +761,19 @@ class Enricher:
                 min_entities=cfg.min_shared_entities,
                 duplicate_overlap=cfg.duplicate_overlap,
                 accepted_texts=accepted_texts,
+                snippet_similarity=c.similarity,
+                min_snippet_strong=cfg.min_snippet_strong,
+                min_text_floor=cfg.min_text_floor,
             )
-            if reason:
-                c.reason = reason
+            c.text_similarity, c.shared_entities, c.rule_b = (
+                verdict.score,
+                verdict.entities,
+                verdict.rule_b,
+            )
+            if verdict.reason:
+                c.reason = verdict.reason
                 continue
-            c.decision, c.reason = "accepted", "accepted"
+            c.decision, c.reason = "accepted", "accepted_rule_b" if c.rule_b else "accepted"
             accepted_texts.append(c.page.text)
             story.domains.add(domain)
             need -= 1
@@ -723,6 +791,7 @@ class Enricher:
                 session.commit()
                 return
             accepted = result.accepted
+            link_only = result.link_only
             late = story.published_version is not None
             if (
                 accepted
@@ -733,9 +802,10 @@ class Enricher:
                     c.decision, c.reason = "rejected", "late"
                 accepted = []
             regenerate = late and accepted and self._regen_allowed(session, now)
-            for c in accepted:
+            for c in accepted + link_only:
                 c.article_id = self._add_member(session, story, c, anchor_id, now)
             result.added = sum(1 for c in accepted if c.article_id is not None)
+            link_only_added = sum(1 for c in link_only if c.article_id is not None)
             for c in result.candidates:
                 session.add(
                     EnrichmentCandidate(
@@ -769,7 +839,7 @@ class Enricher:
                 if result.added and late and not regenerate:
                     result.reason = "late_regen_deferred"  # kept for the next regeneration
                 story.enrich_reason = result.reason
-            if result.added:
+            if result.added or link_only_added:
                 from app.cluster.service import refresh_stories
 
                 story.enrich_added = (story.enrich_added or 0) + result.added
@@ -844,6 +914,7 @@ class Enricher:
         if session.scalar(select(Article.id).where(Article.canonical_url == canonical)):
             c.decision, c.reason = "rejected", "already_ingested"
             return None
+        link_only = c.decision == "link_only"
         article = Article(
             source_id=web_source_id(url),
             url=url,
@@ -855,10 +926,10 @@ class Enricher:
             image_url=c.hit.image_url or (page.image_url if page else None),
             content_hash=content_hash(c.hit.title or "", url),
             raw_json={"provider": c.provider, "query": c.query, "similarity": c.similarity},
-            text=page.text if page else None,
-            text_status=TextStatus.OK.value,
+            text=None if link_only else (page.text if page else None),
+            text_status=TextStatus.NONE.value if link_only else TextStatus.OK.value,
             text_fetched_at=now,
-            word_count=page.words if page else None,
+            word_count=None if link_only else (page.words if page else None),
             story_id=story.id,
             origin=ENRICHMENT,
             discovered_for_story_id=story.id,
@@ -958,12 +1029,13 @@ class Enricher:
 
 
 def summarize_run(results: list[StoryEnrichment]) -> dict:
-    reasons = Counter(c.reason for r in results for c in r.candidates if c.decision != "accepted")
+    reasons = Counter(c.reason for r in results for c in r.candidates if c.decision == "rejected")
     errors = [s["error"] for r in results for s in r.searches if s.get("error")]
     return {
         "stories": len(results),
         "enriched": sum(1 for r in results if r.added),
         "added": sum(r.added for r in results),
+        "link_only": sum(len(r.link_only) for r in results),
         "failed": sum(1 for r in results if r.status == "failed"),
         "retry": sum(1 for r in results if r.status == "retry"),
         "candidates": sum(len(r.candidates) for r in results),

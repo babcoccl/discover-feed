@@ -130,6 +130,12 @@ class Member:
     """``feed`` | ``enrichment`` (found by web search; shown with a badge)."""
 
     @property
+    def link_only(self) -> bool:
+        """Enrichment member stored without its text (``enrichment.link_only``): shown as
+        \"also reported by\", never numbered, summarized or cited."""
+        return self.text_status == "none"
+
+    @property
     def label(self) -> str:
         return label(self.publisher, self.via)
 

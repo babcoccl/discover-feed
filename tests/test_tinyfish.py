@@ -1,9 +1,9 @@
-"""TinyFish as the primary enrichment provider (GDELT the fallback), query hardening for
-real headlines, skipped stories and GDELT's "keyword too short" replies."""
+"""TinyFish as the primary enrichment provider (GDELT an opt-in fallback), query
+hardening for real headlines, skipped stories and GDELT's "keyword too short" replies."""
 
 import asyncio
 import io
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -104,6 +104,74 @@ def test_tinyfish_maps_results_and_sends_the_key(session_factory, monkeypatch):
         assert sum(u.requests for u in usage) >= 1
 
 
+def test_tinyfish_relative_dates_are_parsed(session_factory, monkeypatch):
+    """TinyFish returns "7 hours ago"-style dates: parsed relative to the request so
+    ``too_far_in_time`` (159 live rejections) works on them."""
+    monkeypatch.setenv("TINYFISH_API_KEY", "k")
+    body = {
+        "results": [
+            {
+                "position": n,
+                "site_name": url.split("/")[2],
+                "title": "t",
+                "url": url,
+                "snippet": "s",
+                "date": date,
+            }
+            for n, (url, date) in enumerate(
+                [
+                    ("https://a.example/1", "7 hours ago"),
+                    ("https://b.example/2", "3 weeks ago"),
+                    ("https://c.example/3", "just now"),
+                    ("https://d.example/4", "2026-10-01T00:00:00Z"),
+                ],
+                start=1,
+            )
+        ],
+        "total_results": 4,
+        "page": 0,
+    }
+    _, outcome = search_once(session_factory, Router(default=httpx.Response(200, json=body)))
+    recent, old, undated, iso = outcome.hits
+    now = datetime.now(UTC)
+    assert timedelta(hours=6) <= now - recent.published_at <= timedelta(hours=8)
+    assert now - old.published_at >= timedelta(days=20)
+    assert undated.published_at is None and iso.published_at is not None
+
+
+def test_published_date_units():
+    from app.search.tinyfish import published_date
+
+    now = datetime(2026, 10, 16, 12, tzinfo=UTC)
+    assert published_date("a second ago", now=now) == now - timedelta(seconds=1)
+    assert published_date("5 minutes ago", now=now) == now - timedelta(minutes=5)
+    assert published_date("an hour ago", now=now) == now - timedelta(hours=1)
+    assert published_date("2 days ago", now=now) == now - timedelta(days=2)
+    assert published_date("3 weeks ago", now=now) == now - timedelta(weeks=3)
+    assert published_date("1 month ago", now=now) == now - timedelta(days=30)
+    assert published_date("tomorrow", now=now) is None
+    assert published_date("", now=now) is None
+
+
+def test_tinyfish_exclude_domains_is_sent(session_factory, monkeypatch):
+    """``exclude_domains`` keeps the story's own publishers out of the results (they used
+    52 of 157 judged slots on the live eval); part of the cache key."""
+    monkeypatch.setenv("TINYFISH_API_KEY", "k")
+    router = Router()
+    service = SearchService(session_factory, transport=router.transport(), sleep=no_sleep)
+    outcome = asyncio.run(
+        service.search(
+            TF, "buses", since=NOW, language="en", exclude=["news.example", "other.example"]
+        )
+    )
+    assert outcome.ok
+    assert router.tf_requests[-1].url.params["exclude_domains"] == "news.example,other.example"
+    other = Router()
+    service = SearchService(session_factory, transport=other.transport(), sleep=no_sleep)
+    asyncio.run(service.search(TF, "buses", since=NOW, language="en"))
+    assert "exclude_domains" not in other.tf_requests[-1].url.params
+
+
 def test_tinyfish_title_only_results(session_factory, monkeypatch):
     monkeypatch.delenv("TINYFISH_API_KEY", raising=False)
     router = Router(default=httpx.Response(200, json=tf_body(snippet=False)))
@@ -156,8 +224,28 @@ def test_tinyfish_interval_floor_and_defaults():
         name="tinyfish", min_interval_seconds=0.5, override_min_interval=True
     )
     assert fast.min_interval_seconds == 0.5
-    assert [p.name for p in EnrichmentConfig().providers] == ["tinyfish", "gdelt"]
+    assert [p.name for p in EnrichmentConfig().providers] == ["tinyfish"]  # gdelt opt-in
     assert create_provider(TF, httpx.AsyncClient()).key_env == "TINYFISH_API_KEY"
+
+
+def test_relative_dates_feed_the_time_filter_and_own_domains_are_excluded(
+    session_factory, monkeypatch
+):
+    """A "3 weeks ago" hit is rejected by ``too_far_in_time``; the story's own domains go
+    out as ``exclude_domains`` on every TinyFish request."""
+    monkeypatch.setenv("TINYFISH_API_KEY", "k")
+    story_id = seed(session_factory)
+    body = tf_body(HITS)
+    body["results"][-1]["date"] = "3 weeks ago"  # elsewhere.example
+    router = Router(default=httpx.Response(200, json=body))
+    enricher, _ = clocked_enricher(
+        session_factory, router, config(providers=[SearchProviderConfig(name="tinyfish")])
+    )
+    result = run_now(enricher, story_id)
+    stale = next(c for c in result.candidates if "elsewhere" in c.hit.url)
+    assert stale.reason == "too_far_in_time"
+    for request in router.tf_requests:
+        assert request.url.params["exclude_domains"] == "news.example"
 
 
 # --- fallback -------------------------------------------------------------------------
@@ -361,16 +449,18 @@ def test_skip_patterns_and_no_signal_are_marked_done_and_counted(session_factory
     )
     router = Router()
     enricher, _ = clocked_enricher(session_factory, router, tf_config())
-    enricher.start = lambda: True
     enricher.schedule()
+    enricher._thread.join(30)
     with session_factory() as session:
         reasons = {sid: session.get(Story, sid).enrich_reason for sid in ids}
         statuses = {session.get(Story, sid).enrich_status for sid in ids}
         stats = enricher.stats(session)
     assert reasons[ids[0]] == "skipped:pattern"
-    assert reasons[ids[1]] == reasons[ids[2]] == "skipped:no_signal"
-    assert statuses == {"done"} and not router.tf_requests
-    assert stats["skipped"] == {"no_signal": 2, "pattern": 1}
+    assert reasons[ids[1]] == "skipped:no_signal"
+    # min_signal_tokens is 1: "AI" alone is a signal, so this story is searched now
+    assert reasons[ids[2]] != "skipped:no_signal" and router.tf_requests
+    assert statuses == {"done"}
+    assert stats["skipped"] == {"no_signal": 1, "pattern": 1}
 
 
 def test_skip_patterns_are_configurable(session_factory):
