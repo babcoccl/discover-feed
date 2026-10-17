@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, R
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import RedirectResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app import images
@@ -26,7 +27,7 @@ from app.api import BriefOut, ReportOut, _brief_out, _report_out
 from app.auth import require_api_key
 from app.db import ping
 from app.events import StoryEvent, Subscription, bus, events_after, latest_event_id
-from app.models import ProfileRecord
+from app.models import CONTEXT, Article, ProfileRecord
 from app.topics import TopicRule, matches
 from app.web import snippet
 
@@ -143,6 +144,22 @@ class StorySourceV1(BaseModel):
         default="feed",
         description="`feed`: a configured source; `enrichment`: found by web search for "
         "this story (it never makes a story visible on its own).",
+    )
+
+
+class ContextLinkV1(BaseModel):
+    """A background/context link found by web search — related, never coverage of the
+    same event; not a source of the story, never summarized or alerted on."""
+
+    url: str
+    title: str
+    domain: str = Field(description="The page's registrable domain (`wikipedia.org`).")
+    note: str | None = Field(
+        default=None, description="What it adds (the LLM judge's <=25-word note)."
+    )
+    angle: str | None = Field(
+        default=None,
+        description="The search angle that surfaced it (`history`, `opposing view`...).",
     )
 
 
@@ -269,6 +286,15 @@ class StoryV1(BaseModel):
                     "model": "qwen3.5-9b",
                     "versions": {"story": 3, "schema_version": 1},
                     "sources": [_SOURCE_EXAMPLE],
+                    "context": [
+                        {
+                            "url": "https://en.wikipedia.org/wiki/Chiplet",
+                            "title": "Chiplet - Wikipedia",
+                            "domain": "wikipedia.org",
+                            "note": "Background on the packaging technique the story mentions",
+                            "angle": "explained",
+                        }
+                    ],
                 }
             ]
         }
@@ -294,6 +320,11 @@ class StoryV1(BaseModel):
     model: str
     versions: VersionsV1
     sources: list[StorySourceV1] = Field(description="Every member article, oldest first.")
+    context: list[ContextLinkV1] = Field(
+        default_factory=list,
+        description="Background/context links (related, not the same event). Empty until "
+        "the context search runs or when it is off.",
+    )
 
 
 class HealthV1(BaseModel):
@@ -483,6 +514,14 @@ def get_story(
         story = views.published_story(
             session, story_id, [s.id for s in record.sources] if record else None
         )
+        if story is not None:
+            context_articles = list(
+                session.scalars(
+                    select(Article)
+                    .where(Article.story_id == story.story_id, Article.origin == CONTEXT)
+                    .order_by(Article.id)
+                )
+            )
     if story is None:
         raise HTTPException(status_code=404, detail=f"story {story_id} is not published")
     report = story.report
@@ -505,6 +544,16 @@ def get_story(
         model=story.model,
         versions=VersionsV1(story=story.version, schema_version=views.SCHEMA_VERSION),
         sources=_sources(story.members),
+        context=[
+            ContextLinkV1(
+                url=a.url,
+                title=a.title or a.url,
+                domain=(a.source_id or "").removeprefix("web:"),
+                note=a.context_note,
+                angle=a.context_angle,
+            )
+            for a in context_articles
+        ],
     )
 
 

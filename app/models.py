@@ -81,15 +81,27 @@ class Article(Base):
     """``ImageSource`` the article's own image came from: ``feed`` | ``page`` | ``none``."""
     image_checked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, index=True)
     origin: Mapped[str] = mapped_column(String(12), default="feed", server_default="feed")
-    """``feed`` (a configured source) | ``enrichment`` (found by web search for a story)."""
+    """``feed`` (a configured source) | ``enrichment`` (web-search coverage of the story) |
+    ``context`` (web-search background/context link, never a member of the event)."""
     discovered_for_story_id: Mapped[int | None] = mapped_column(Integer, index=True)
-    """Enrichment only: the story the search ran for (the article is pinned to it)."""
+    """Enrichment/context: the story the search ran for (the article is pinned to it)."""
     anchor_article_id: Mapped[int | None] = mapped_column(Integer)
-    """Enrichment only: a feed member of that story; a clustering rebuild re-pins to its story."""
+    """Enrichment/context: a feed member of that story; a clustering rebuild re-pins to
+    its story."""
+    context_note: Mapped[str | None] = mapped_column(String(300))
+    """Context links only (``app.context``): the judge's <= 25-word "why this adds
+    background"; empty when the LLM judge is off."""
+    context_angle: Mapped[str | None] = mapped_column(String(120))
+    """Context links only: the angle the page was found under (``app.context.angles``)."""
 
 
 ENRICHMENT = "enrichment"
 """``Article.origin`` of members found by web search (``app.enrich``)."""
+CONTEXT = "context"
+"""``Article.origin`` of background/context pages found by web search (``app.context``):
+shown in their own section, never members of the event."""
+NON_FEED = (ENRICHMENT, CONTEXT)
+"""``Article.origin`` values that are not configured sources (member queries exclude them)."""
 
 
 class ImageSource(StrEnum):
@@ -189,6 +201,16 @@ class Story(Base):
     enrich_regens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     """Times late enrichment re-generated an already published story (at most once)."""
     enrich_reason: Mapped[str | None] = mapped_column(Text)
+    context_status: Mapped[str | None] = mapped_column(String(10), index=True)
+    """Background/context search (``app.context``): NULL (never ran) | ``pending`` |
+    ``retry`` (provider failure; due at ``context_next_attempt_at``) | ``done`` | ``failed``.
+    Runs once per story after its brief is published; it never blocks the brief."""
+    context_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    """When the context search last finished (success or hard failure)."""
+    context_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    """Failed passes in a row (same backoff as enrichment: 2 min doubling to 60 min)."""
+    context_next_attempt_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    context_reason: Mapped[str | None] = mapped_column(Text)
 
 
 class StoryState(StrEnum):
@@ -455,6 +477,8 @@ class ProfileRecord(Base):
     """Set once the YAML alert rules/channels were copied in (the DB owns them afterwards)."""
     enrichment_enabled: Mapped[bool | None] = mapped_column(Boolean)
     """Settings toggle for web-search enrichment (NULL: the YAML ``enrichment.enabled``)."""
+    context_enabled: Mapped[bool | None] = mapped_column(Boolean)
+    """Settings toggle for background/context links (NULL: the YAML ``context.enabled``)."""
 
 
 class Topic(Base):
@@ -678,6 +702,33 @@ class EnrichmentCandidate(Base):
     title_similarity: Mapped[float | None] = mapped_column(Float)
     shared_entities: Mapped[int | None] = mapped_column(Integer)
     text_similarity: Mapped[float | None] = mapped_column(Float)
+    article_id: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
+
+
+class ContextCandidate(Base):
+    """One search hit considered as a background/context link for a story (``app.context``)."""
+
+    __tablename__ = "context_candidates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    story_id: Mapped[int] = mapped_column(Integer, index=True)
+    run_id: Mapped[str] = mapped_column(String(32), index=True)
+    provider: Mapped[str] = mapped_column(String(30), default="")
+    query: Mapped[str] = mapped_column(Text, default="")
+    angle: Mapped[str] = mapped_column(String(120), default="")
+    url: Mapped[str] = mapped_column(String(2048), default="")
+    domain: Mapped[str] = mapped_column(String(300), default="")
+    title: Mapped[str] = mapped_column(Text, default="")
+    decision: Mapped[str] = mapped_column(String(10))
+    """``accepted`` | ``rejected``."""
+    reason: Mapped[str] = mapped_column(String(40), default="")
+    shared_entities: Mapped[int | None] = mapped_column(Integer)
+    text_similarity: Mapped[float | None] = mapped_column(Float)
+    judge: Mapped[int | None] = mapped_column(Integer)
+    """The LLM judge's ``adds_context`` score 0 | 1 | 2 (NULL: judge off / not reached)."""
+    note: Mapped[str] = mapped_column(Text, default="")
+    """The judge's one-line reason shown to readers (``context_note`` on the article)."""
     article_id: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
 

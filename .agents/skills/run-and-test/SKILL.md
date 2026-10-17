@@ -301,6 +301,53 @@ update it when fixtures or defaults change. README "Tuning clustering" has the f
   either (do not spoof a crawler User-Agent).
 - Real-provider relevance is unverified until someone runs `diagnose`/`evaluate` on live data.
 
+## Background and context links
+
+- Code: `app/context/` (`angles.py` = LLM angles + `heuristic_angles` fallback pairing the
+  top entity with history/explained/background, `filters.py` = `context_pre_filter` +
+  `context_text_check` + `StoryContext`, `service.py` = `ContextFinder` + `ContextResult` +
+  `ContextCandidate` rows, `cli.py`, `diagnose.py`, `evaluate.py`). Config `context:` under
+  each profile (`ContextConfig`, off by default); per-profile toggle = `profiles.context_enabled`
+  (Settings > Pipeline). Runs inside `Pipeline.cluster()` right after `enrich()`; never
+  blocks briefs; once per story via `context_status|context_at|context_attempts|
+  context_next_attempt_at`; `POST /api/admin/context[?story_id=N]`.
+- Eligibility: published story (`published_version` set, state `published`) AND
+  (`priority > min_priority` OR distinct publishers >= `min_publishers`), newest first.
+  Provider failures => `retry` with backoff, never `done`. Skipped stories
+  (`no_angles`, `story gone`) are `done`.
+- Accepted pages: `Article.origin = "context"`, `source_id = web:<domain>`,
+  `discovered_for_story_id` + `anchor_article_id` pins, `context_note` /
+  `context_angle`. They are NOT members: `profiles.get_story` filters them out, so
+  briefs/reports/citations/word budget/Q&A/alerts/counts never see them; the story
+  page and API v1 `story.context[]` fetch them by `origin`. `NON_FEED =
+  (ENRICHMENT, CONTEXT)` covers the shared exclusion spots (clustering counts,
+  alert candidate updates, `refresh_stories` rep/counts/timestamps — context pages can
+  be years old and must not move `first_seen_at`/`last_updated_at`).
+- Acceptance band: `similarity_floor` 0.10 <= TF-IDF score < `similarity_ceiling` 0.60
+  (below = `off_topic`, at/above = `same_event`); `min_shared_entities` 1 (2 when the
+  angle query was heuristic); `min_words` 300; shingle `near_duplicate` vs members and
+  already-accepted pages; optional `llm_judge` (default on with a summarizer role)
+  keeps only `adds_context: 2`, `judge_failed`/`judge_rejected` reject — never
+  fabricate notes. Cheap rejects before any fetch: `same_domain` (vs ALL member
+  domains incl. enrichment members), `social`/`aggregator`/`denied`/`bad_url`/
+  `duplicate_url`/`already_ingested`/`language`.
+- Budget: shared `search:<name>` usage via `SearchService` plus context's own
+  `daily_request_budget` counted as `context:<name>` `source_usage` rows.
+- Providers: reuse `SearchService`; `SearchProvider.supports_find_similar` + default
+  `find_similar()` raising `FetchError`; `exa` (`app/search/exa.py`, `EXA_API_KEY`)
+  implements it — hits merge into the candidate pool under a `related` angle.
+- Debug: `python -m app.context.diagnose --story-id N [--dry-run]`,
+  `python -m app.context.evaluate --stories 30 --markdown`
+  (Windows: `.venv\Scripts\python -m app.context.evaluate ...`). Dry runs write nothing.
+- Tests: `tests/test_context.py` (fakes everywhere — `FakeSearch`, `page_transport`,
+  `Guard(resolver)`, no real LLM). Docker E2E: fixture server `--context-wire-base
+  http://contextwire:8081` serves a TinyFish-shaped `/context-search` whose hits are
+  generated `/context/<id>` backgrounder pages (shares title entities + some content
+  words -> lands in the similarity band; `llm_judge: false` in
+  `tests/fixtures/docker/profiles.yaml` because the fake LLM cannot emit
+  `{"adds_context":2}`); `scripts/docker_e2e.py` asserts at least one story gets
+  `context[]` and that no context link ever appears in `sources`.
+
 ## Card images
 
 - Code: `app/images/` — `meta.py` (og/twitter/JSON-LD/icon parsing, called by

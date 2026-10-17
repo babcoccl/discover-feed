@@ -24,6 +24,7 @@ import json
 import re
 import threading
 import time
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -48,7 +49,7 @@ def _page_parts(fixture_dir: Path, article_id: str) -> tuple[str, list[str]] | N
     return title, [p for p in paras if p]
 
 
-def _matches(fixture_dir: Path, query: str) -> list[tuple[int, str, str]]:
+def _matches(fixture_dir: Path, query: str, min_shared: int = 2) -> list[tuple[int, str, str]]:
     words = set(_WORD.findall(query.split(" sourcelang:")[0].lower()))
     scored = []
     for path in sorted((fixture_dir / "pages").glob("*.html")):
@@ -56,7 +57,7 @@ def _matches(fixture_dir: Path, query: str) -> list[tuple[int, str, str]]:
         if parts is None:
             continue
         shared = len(words & set(_WORD.findall(parts[0].lower())))
-        if shared >= 2:
+        if shared >= min_shared:
             scored.append((-shared, path.stem, parts[0]))
     return sorted(scored)[:3]
 
@@ -95,6 +96,73 @@ def tinyfish_json(fixture_dir: Path, query: str, wire_base: str) -> bytes:
         )
     body = {"query": query, "results": results, "total_results": len(results), "page": 0}
     return json.dumps(body).encode()
+
+
+def context_json(fixture_dir: Path, query: str, wire_base: str) -> bytes:
+    """TinyFish-shaped hits at the generated ``/context/<id>`` backgrounder pages: the same
+    matched fixture articles, presented as background reading rather than coverage."""
+    results = [
+        {
+            "position": n,
+            "site_name": urlsplit(wire_base).hostname or "contextwire",
+            "title": f"Background: {title}",
+            "snippet": f"Background and history on {title}.",
+            "url": f"{wire_base.rstrip('/')}/context/{stem}",
+            "date": datetime.now(UTC).isoformat(),
+        }
+        for n, (_, stem, title) in enumerate(_matches(fixture_dir, query, min_shared=1), start=1)
+    ]
+    body = {"query": query, "results": results, "total_results": len(results), "page": 0}
+    return json.dumps(body).encode()
+
+
+def context_html(fixture_dir: Path, article_id: str) -> bytes | None:
+    """A backgrounder page for a fixture article: shares the title's entities and a few
+    content words (enough to pass the context similarity band) but is otherwise generic
+    history-vocabulary text — related, never the same event."""
+    parts = _page_parts(fixture_dir, article_id)
+    if parts is None:
+        return None
+    title, paras = parts
+    ents = [w for w in re.findall(r"[A-Za-z0-9]+", title) if len(w) >= 4][:4]
+    mids: list[str] = []
+    seen = {e.lower() for e in ents}
+    for w in _WORD.findall(" ".join(paras[:2])):
+        if len(w) >= 5 and w.lower() not in seen:
+            mids.append(w)
+            seen.add(w.lower())
+        if len(mids) >= 24:
+            break
+    lead = ents[0] if ents else "the issue"
+    sentences = [
+        f"The debate over {title} did not begin this week; records show "
+        f"{lead} has drawn sustained attention for years.",
+        f"Earlier reviews of {' and '.join(ents[:2]) or 'the field'} described "
+        "a gradual shift rather than a single turning point.",
+        f"Archives trace {lead} back through earlier decisions, public consultations "
+        "and a long series of smaller changes that rarely made headlines.",
+    ]
+    for i, w in enumerate(mids):
+        other = ents[i % len(ents)] if ents else "the topic"
+        sentences.append(
+            f"Background files mention {w} alongside {other}, "
+            f"and historians note {w} reappears whenever the wider story is retold."
+        )
+    filler = (
+        "Context like this helps readers place current developments against earlier "
+        "coverage, institutional memory and the timeline of the debate."
+    )
+    text = " ".join(sentences)
+    while len(text.split()) < 340:
+        text += " " + filler
+    body = "".join(f"<p>{htmllib.escape(s)}</p>" for s in sentences)
+    pad = max(0, (340 - len(text.split())) // 28 + 2)
+    body += "".join(f"<p>{htmllib.escape(filler)}</p>" for _ in range(pad))
+    heading = htmllib.escape(f"Background: {title}")
+    return (
+        f"<!doctype html><html><head><title>{heading}</title></head><body>"
+        f"<article><h1>{heading}</h1>{body}</article></body></html>"
+    ).encode()
 
 
 def wire_html(fixture_dir: Path, article_id: str) -> bytes | None:
@@ -148,6 +216,7 @@ def make_handler(
     tinyfish_base: str | None = None,
     tinyfish_faults: GdeltFaults | None = None,
     tinyfish_own_first: int = 0,
+    context_base: str | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     faults = faults or GdeltFaults([])
     tf_faults = tinyfish_faults or GdeltFaults([], TINYFISH_FAULTS, "--tinyfish-faults")
@@ -222,11 +291,21 @@ def make_handler(
                     own_remaining[0] -= 1
                     hits_base = base
                 body, ctype = tinyfish_json(fixture_dir, query, hits_base), "application/json"
+            elif wire_base and path == "/context-search":
+                # Context-finder E2E: TinyFish-shaped search whose hits point at the
+                # generated backgrounder pages (on the context wire host).
+                query = parse_qs(urlsplit(self.path).query).get("query", [""])[0]
+                body, ctype = (
+                    context_json(fixture_dir, query, context_base or tinyfish_base or wire_base),
+                    "application/json",
+                )
             elif wire_base and path in ("/gdelt-stats", "/tinyfish-stats"):
                 counter = faults if path == "/gdelt-stats" else tf_faults
                 with counter.lock:
                     stats = {**counter.served, "pending_faults": list(counter.queue)}
                 body, ctype = json.dumps(stats).encode(), "application/json"
+            elif wire_base and path.startswith("/context/"):
+                body = context_html(fixture_dir, path.removeprefix("/context/"))
             elif wire_base and path.startswith("/wire/"):
                 body = wire_html(fixture_dir, path.removeprefix("/wire/"))
             elif path.startswith("/demo-image/"):
@@ -263,6 +342,10 @@ def main() -> None:
         default=0,
         help="first N /tinyfish answers have hits on the feed host (all same_domain)",
     )
+    parser.add_argument(
+        "--context-wire-base",
+        help="host of /context-search hits and /context/<id> pages (context-finder E2E)",
+    )
     args = parser.parse_args()
     faults = GdeltFaults([f for f in args.gdelt_faults.split(",") if f])
     tf_faults = GdeltFaults(
@@ -276,6 +359,7 @@ def main() -> None:
         args.tinyfish_wire_base,
         tf_faults,
         args.tinyfish_own_first,
+        args.context_wire_base,
     )
     server = ThreadingHTTPServer((args.host, args.port), handler)
     print(f"fixture feeds from {args.fixture_dir} on :{args.port} as {args.base}", flush=True)

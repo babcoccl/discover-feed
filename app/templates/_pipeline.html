@@ -119,6 +119,45 @@
   </div>
 </section>
 {% endif %}
+{% if context_stats %}
+{%- set cx = context_stats -%}
+<section class="mt-4 rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900" aria-labelledby="context-heading" data-context-stats>
+  <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+    <h3 id="context-heading" class="text-sm font-semibold">Background and context links <span class="ml-1 font-normal text-slate-500 dark:text-slate-400">last {{ cx.days }} days{% if cx.running %} · <span class="text-sky-700 dark:text-sky-400">running…</span>{% endif %}</span></h3>
+    {% if profile %}
+    <div class="flex items-center gap-3">
+      <form hx-post="/p/{{ profile.slug }}/settings/context" hx-target="#pipeline" hx-trigger="change" class="flex items-center gap-2 text-sm">
+        <input type="hidden" name="enabled" value="0">
+        <label class="flex items-center gap-2"><input type="checkbox" name="enabled" value="1" data-context-toggle {% if context_on %}checked{% endif %} class="rounded border-slate-300"> Find background/context pages for this profile's published stories</label>
+      </form>
+      <button type="button" hx-post="/p/{{ profile.slug }}/settings/pipeline/context" hx-target="#pipeline" data-context-now class="rounded-md border border-slate-300 px-3 py-1 text-xs font-medium hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">Find context now</button>
+    </div>
+    {% endif %}
+  </div>
+  <dl class="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-6">
+    <div><dt class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Eligible now</dt><dd class="text-xl font-semibold" data-context-eligible>{{ cx.eligible }}</dd></div>
+    <div><dt class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Waiting</dt><dd class="text-xl font-semibold" data-context-waiting>{{ cx.waiting }}</dd></div>
+    <div><dt class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Searched</dt><dd class="text-xl font-semibold" data-context-done>{{ cx.done }}</dd></div>
+    <div><dt class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">With links</dt><dd class="text-xl font-semibold" data-context-with-links>{{ cx.with_links }}</dd></div>
+    <div><dt class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Links added</dt><dd class="text-xl font-semibold" data-context-added>{{ cx.added_links }}</dd></div>
+    <div><dt class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Judge accept</dt><dd class="text-xl font-semibold" data-context-judge>{% if cx.judge_rate is not none %}{{ (cx.judge_rate * 100) | round | int }}%{% else %}—{% endif %}</dd></div>
+  </dl>
+  <div class="grid gap-4 sm:grid-cols-2">
+    <div>
+      <h4 class="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Rejected candidates by reason</h4>
+      {% if cx.reject_reasons %}<ul class="space-y-0.5 text-sm" data-context-rejections>
+        {% for reason, n in cx.reject_reasons %}<li class="flex justify-between gap-4"><code>{{ reason or "unknown" }}</code><span class="font-medium tabular-nums">{{ n }}</span></li>{% endfor %}
+      </ul>{% else %}<p class="text-sm text-slate-500 dark:text-slate-400">None.</p>{% endif %}
+    </div>
+    <div>
+      <h4 class="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Search providers (today)</h4>
+      <ul class="space-y-1 text-sm" data-context-providers>
+        {% for p in cx.providers %}<li data-provider="{{ p.provider }}"><span class="font-medium">{{ p.provider }}</span>: {{ p.context_requests_today }} context requests today{% if p.requests_today %} · {{ p.requests_today }} total{% if p.daily_budget %} of {{ p.daily_budget }}{% endif %}{% endif %}{% if p.cooldown_seconds %} · <span class="text-amber-700 dark:text-amber-400">cooling down {{ p.cooldown_seconds }} s</span>{% endif %}</li>{% endfor %}
+      </ul>
+    </div>
+  </div>
+</section>
+{% endif %}
 {% if image_stats %}
 {%- set ims = image_stats -%}
 <section class="mt-4 rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900" aria-labelledby="images-heading" data-image-stats>

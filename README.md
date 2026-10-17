@@ -440,6 +440,71 @@ is skipped and its fallback answers; with every provider cooling down both refus
 down mid-run ("waiting for gdelt (cooling down)"). Runs take at least
 `min_interval_seconds` per query (tinyfish 2 s, GDELT 10 s by default).
 
+## Background and context links
+
+Separate from enrichment: for each eligible published story the context finder looks for
+1-3 pages from *other* sources that add background — history, context, data, opposing
+views — **related, never coverage of the same event**. They appear in a
+"Background and context" section on the story page, clearly marked "found via web
+search; not part of the event reporting". They are stored as `Article` rows with
+`origin = "context"` (plus `context_note` / `context_angle`) and are excluded
+everywhere enrichment is excluded — source counts, clustering, alerts, brief/report
+inputs, citations, word budget, Q&A — *and additionally from the story's member set
+itself*, so they can never influence the published document.
+
+How it works (`app/context/`):
+
+1. Once a story's brief is published, the story becomes eligible (`context_status`
+   NULL → `pending` → `done`): `priority > context.min_priority` **or** at least
+   `context.min_publishers` distinct publishers. The finder runs in a background
+   thread after the enrichment pass inside `cluster()` — it never blocks briefs and
+   runs once per story (`context_attempts`, `context_next_attempt_at`); provider
+   failures leave it in `retry` with backoff (2 min → 60 min), never `done`.
+2. `app/context/angles.py` asks the summarizer LLM for up to `max_angles` (3) search
+   angles — `label` + a 3-5 term keyword query (entities quoted). If the LLM is absent
+   or answers unparseably, the heuristic fallback pairs the top story entity with
+   "history" / "explained" / "background" (queries marked heuristic).
+3. Each provider × angle is searched through the shared `SearchService` (same
+   cooldowns, pacing and `search:<name>` budgets as enrichment); context additionally
+   enforces its own `context.daily_request_budget` (tracked as `context:<name>` usage
+   rows). Providers that implement `find_similar()` (the optional `exa` provider,
+   `EXA_API_KEY`) also pull semantically-similar pages for the anchor URL.
+4. `app/context/filters.py` rejects before and after fetching: same domain as any
+   member, social / aggregator / deny-listed domains, already-ingested URLs,
+   non-HTTP URLs, robots/fetch/paywall failures, pages under `min_words` (300),
+   near-duplicates of any member or accepted page (5-word shingle overlap). The page
+   must share `min_shared_entities` (1; 2 when the angle was heuristic) names/numbers
+   with the story and land inside the TF-IDF band
+   `similarity_floor` (0.10) ≤ score < `similarity_ceiling` (0.60): below is off
+   topic, at or above is the same event — both rejected.
+5. With `llm_judge` on (default when a summarizer role is configured) each surviving
+   page is judged by the LLM on the brief + title + first 1500 chars:
+   `{"adds_context": 0|1|2, "note": "<=25 words"}` — 0 = off topic, 1 = same event,
+   2 = adds background. Only 2 is kept, with `note` stored as `context_note`.
+   Failures and unparsable answers reject the candidate (`judge_failed`) — notes are
+   never fabricated. With the judge off, accepted pages carry no note.
+6. Accepted pages become `origin="context"` articles pinned to the story
+   (`discovered_for_story_id` + `anchor_article_id`), shown on the story page with
+   their domain, angle label and note, and exposed in API v1 as
+   `GET /api/v1/stories/{id}` → `context[]` (url, title, domain, note, angle).
+   Every decision is persisted in `context_candidates` (provider, query, angle,
+   decision, reason, scores, judge verdict).
+
+Settings > Pipeline shows the context toggle plus live stats (eligible / waiting /
+done / stories with links / links added / judge accept rate / rejections by reason)
+and a "Find context now" button. `POST /api/admin/context[?story_id=N]` triggers a
+run for all eligible stories or a single one (admin key).
+
+```bash
+python -m app.context.diagnose --story-id 42            # one story, writes nothing
+python -m app.context.diagnose --story-id 42 --dry-run  # queries + decisions, no writes
+python -m app.context.evaluate --stories 30 --markdown  # dry run over 30 recent stories
+# inside Docker:
+docker exec discover-feed python -m app.context.evaluate --stories 30 --markdown
+```
+
+Windows: `.venv\Scripts\python -m app.context.evaluate --stories 30 --markdown`.
+
 ## Card images
 
 Cards show the best validated image of a story, never one repeated placeholder (`app/images/`):
@@ -856,7 +921,7 @@ and never the extracted article text. Contract: [`docs/openapi.v1.json`](docs/op
 | --- | --- |
 | `GET /api/v1/profiles`, `/profiles/{slug}`, `/profiles/{slug}/topics` | profiles, sources, topics |
 | `GET /api/v1/profiles/{slug}/feed` | `topic`, `limit` (1-100), `cursor`, `since` (first published after), `updated_since` (current version published after), `include=card\|full` (`full` adds `report` and `sources`) |
-| `GET /api/v1/stories/{id}` | brief, report (or its `report_state`/`report_reason`), sources with raw URLs, model, versions; 301 for merged ids, 404 unless published |
+| `GET /api/v1/stories/{id}` | brief, report (or its `report_state`/`report_reason`), sources with raw URLs, `context[]` background links (url, title, domain, note, angle), model, versions; 301 for merged ids, 404 unless published |
 | `GET /api/v1/profiles/{slug}/feed.atom` | Atom: title = headline, content = lead + bullets, links to the story page and sources |
 | `GET /api/v1/stream` | SSE, see below |
 | `GET/POST /api/v1/profiles/{slug}/alert-rules`, `PUT/DELETE .../alert-rules/{id}` | alert rules (writes need the admin key) |

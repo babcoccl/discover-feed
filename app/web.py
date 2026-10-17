@@ -23,7 +23,7 @@ from app.demo_images import demo_image
 from app.demo_pages import FIXTURE_DIR, page_html
 from app.images.cache import image_key, is_key
 from app.images.service import ImageWorker, image_stats
-from app.models import ENRICHMENT, Article, ProfileRecord, StorySummary, Topic
+from app.models import CONTEXT, ENRICHMENT, Article, ProfileRecord, StorySummary, Topic
 from app.pipeline_panel import pipeline_queue, quality_metrics, recent_attempts
 from app.runs import last_runs, text_status_counts
 from app.secret_warnings import missing_secrets
@@ -329,6 +329,13 @@ def story_page(
             back = f"/p/{profile.slug}" + (f"?topic={selected.id}" if selected else "")
         else:
             back = "/"
+        context_items = list(
+            session.scalars(
+                select(Article)
+                .where(Article.story_id == story.story_id, Article.origin == CONTEXT)
+                .order_by(Article.id)
+            )
+        )
         context = _base_context(
             session,
             profile,
@@ -339,6 +346,7 @@ def story_page(
             summary=story.brief,
             **_report_context(request, story),
             **_chat_context(request, session, story.story_id, p),
+            context_items=context_items,
             can_block=is_admin(request) and _enricher(request) is not None,
         )
     return TEMPLATES.TemplateResponse(request, "story.html", context)
@@ -487,10 +495,12 @@ def x_spend(session: Session) -> list[dict]:
 def _pipeline_context(request: Request, session: Session) -> dict:
     worker = getattr(request.app.state, "summaries", None)
     enricher = _enricher(request)
+    finder = _context_finder(request)
     profile_slug = request.path_params.get("slug")
     record = session.scalar(select(ProfileRecord).where(ProfileRecord.slug == profile_slug))
     return {
         "enrich_on": bool(enricher and record and enricher.profile_enabled(record)),
+        "context_on": bool(finder and record and finder.profile_enabled(record)),
         "text_counts": text_status_counts(session),
         "runs": last_runs(session),
         "summarizer": worker.status() if worker is not None else None,
@@ -505,12 +515,18 @@ def _pipeline_context(request: Request, session: Session) -> dict:
         "image_stats": image_stats(session, _image_cache(request)),
         "image_backfill": _image_backfill(request),
         "enrichment": _enrichment_stats(request, session),
+        "context_stats": _context_stats(request, session),
     }
 
 
 def _enricher(request: Request):
     pipeline = getattr(request.app.state, "pipeline", None)
     return getattr(pipeline, "enricher", None)
+
+
+def _context_finder(request: Request):
+    pipeline = getattr(request.app.state, "pipeline", None)
+    return getattr(pipeline, "context", None)
 
 
 def _enrichment_stats(request: Request, session: Session) -> dict | None:
@@ -521,6 +537,17 @@ def _enrichment_stats(request: Request, session: Session) -> dict | None:
         return enricher.stats(session)
     except Exception:  # the panel never fails on a metrics query
         logger.exception("enrichment stats failed")
+        return None
+
+
+def _context_stats(request: Request, session: Session) -> dict | None:
+    finder = _context_finder(request)
+    if finder is None:
+        return None
+    try:
+        return finder.stats(session)
+    except Exception:  # the panel never fails on a metrics query
+        logger.exception("context stats failed")
         return None
 
 
@@ -739,6 +766,29 @@ async def settings_enrichment(request: Request, slug: str) -> Response:
         profile = _profile_or_404(session, slug)
         profile.enrichment_enabled = form.get("enabled") in ("1", "on", "true")
         session.commit()
+    return _pipeline_response(request, slug)
+
+
+@router.post("/p/{slug}/settings/context")
+async def settings_context(request: Request, slug: str) -> Response:
+    """The per-profile background-and-context search toggle (overrides the YAML default)."""
+    form = await request.form()
+    with _session(request) as session:
+        profile = _profile_or_404(session, slug)
+        profile.context_enabled = form.get("enabled") in ("1", "on", "true")
+        session.commit()
+    return _pipeline_response(request, slug)
+
+
+@router.post("/p/{slug}/settings/pipeline/context")
+def pipeline_context(request: Request, slug: str, story_id: int | None = None) -> Response:
+    """Find context now: every eligible published story, or one story regardless of its
+    previous status (re-runs)."""
+    pipeline = getattr(request.app.state, "pipeline", None)
+    if pipeline is None or pipeline.context is None:
+        raise HTTPException(status_code=409, detail="context search is not configured")
+    ids = [story_id] if story_id is not None else None
+    pipeline.find_context(ids, force=story_id is not None)
     return _pipeline_response(request, slug)
 
 

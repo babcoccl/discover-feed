@@ -33,7 +33,7 @@ from app.config import AlertsConfig, AppConfig
 from app.events import record_alert
 from app.labels import label, publisher_of, via_of
 from app.models import (
-    ENRICHMENT,
+    NON_FEED,
     AlertChannelRecord,
     AlertFiring,
     AlertRuleRecord,
@@ -251,7 +251,7 @@ class AlertEngine:
     def _updates(self, session: Session, root: int, now: datetime) -> list[int]:
         members = list(
             session.scalars(
-                select(Article).where(Article.story_id == root, Article.origin != ENRICHMENT)
+                select(Article).where(Article.story_id == root, Article.origin.not_in(NON_FEED))
             )
         )
         if len(members) < 2:

@@ -132,6 +132,8 @@ class SearchProvider(ABC):
     needs_key: bool = False
     supports_exclude: bool = False
     """The provider can exclude domains server-side (TinyFish ``exclude_domains``)."""
+    supports_find_similar: bool = False
+    """The provider offers a ``find_similar`` endpoint keyed on a URL (Exa)."""
 
     def __init__(self, config: SearchProviderConfig, client: httpx.AsyncClient) -> None:
         self.config = config
@@ -182,6 +184,17 @@ class SearchProvider(ABC):
         ``exclude``: registrable domains the caller does not want back (only honored by
         providers with ``supports_exclude``)."""
 
+    async def find_similar(
+        self,
+        url: str,
+        since: datetime,
+        language: str | None,
+        limit: int,
+        quota: Quota,
+    ) -> list[SearchHit]:
+        """Pages similar to ``url`` (``supports_find_similar`` providers only)."""
+        raise FetchError(f"{self.name}: find_similar not supported")
+
 
 PROVIDERS: dict[str, type[SearchProvider]] = {}
 
@@ -196,7 +209,7 @@ def register(name: str) -> Callable[[type[SearchProvider]], type[SearchProvider]
 
 
 def create_provider(config: SearchProviderConfig, client: httpx.AsyncClient) -> SearchProvider:
-    from app.search import providers, tinyfish  # noqa: F401  (registers the built-in providers)
+    from app.search import exa, providers, tinyfish  # noqa: F401  (registers the built-in providers)
 
     try:
         cls = PROVIDERS[config.name]

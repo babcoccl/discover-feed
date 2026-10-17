@@ -13,7 +13,9 @@ from app.cluster.base import ArticleDoc, Clusterer, StoryDoc, representative
 from app.events import record
 from app.lifecycle import PRE_CLUSTER, advance_text_states, ensure_stories
 from app.models import (
+    CONTEXT,
     ENRICHMENT,
+    NON_FEED,
     Article,
     Story,
     StoryState,
@@ -105,7 +107,10 @@ def _run(
         session.scalars(
             select(Article)
             .join(Story, Article.story_id == Story.id)
-            .where(Story.state == StoryState.TEXT_FINAL, Article.origin != ENRICHMENT)
+            .where(
+                Story.state == StoryState.TEXT_FINAL,
+                Article.origin.not_in(NON_FEED),
+            )
             .order_by(Article.id)
         )
     )
@@ -179,9 +184,9 @@ def _merge(session: Session, old_id: int | None, target_id: int) -> None:
             select(Article.source_id).where(Article.story_id.in_([old_id, target_id])).distinct()
         )
         record(session, "story.retracted", old_id, old.published_version, list(sources))
-    session.execute(  # enrichment members stay with their story
+    session.execute(  # enrichment/context members stay with their story
         update(Article)
-        .where(Article.story_id == old_id, Article.origin == ENRICHMENT)
+        .where(Article.story_id == old_id, Article.origin.in_(NON_FEED))
         .values(story_id=target_id, discovered_for_story_id=target_id)
     )
     old.state, old.merged_into = StoryState.MERGED.value, target_id
@@ -202,7 +207,7 @@ def _candidate_stories(
             Story.last_updated_at >= earliest,
             Story.first_seen_at <= latest,
             Story.state.not_in([s.value for s in PRE_CLUSTER] + [StoryState.MERGED.value]),
-            Article.origin != ENRICHMENT,
+            Article.origin.not_in(NON_FEED),
         )
         .order_by(Article.published_at, Article.id)
     )
@@ -227,26 +232,28 @@ def refresh_stories(session: Session, story_ids: set[int]) -> None:
         articles = members.get(story_id)
         if story is None or story.state == StoryState.MERGED:
             continue
-        if not articles:
+        # context links are not sources of the event
+        counted = [a for a in articles or [] if a.origin != CONTEXT]
+        if not counted:
             session.delete(story)
             continue
-        feed = [a for a in articles if a.origin != ENRICHMENT] or articles
+        feed = [a for a in counted if a.origin != ENRICHMENT] or counted
         rep_id = representative([doc(a) for a in feed]).id
-        rep = next(a for a in articles if a.id == rep_id)
+        rep = next(a for a in counted if a.id == rep_id)
         story.representative_article_id = rep.id
         story.title = rep.title
-        story.first_seen_at = min(a.published_at for a in articles)
-        story.last_updated_at = max(a.published_at for a in articles)
-        story.article_count = len(articles)
-        story.source_count = len({a.source_id for a in articles})
+        story.first_seen_at = min(a.published_at for a in counted)
+        story.last_updated_at = max(a.published_at for a in counted)
+        story.article_count = len(counted)
+        story.source_count = len({a.source_id for a in counted})
 
 
 def _repin_enrichment(session: Session, now) -> set[int]:
-    """After a rebuild: every enrichment member rejoins its anchor's (new) story."""
+    """After a rebuild: every enrichment/context member rejoins its anchor's (new) story."""
     session.flush()
     stories: set[int] = set()
     pinned = session.scalars(
-        select(Article).where(Article.origin == ENRICHMENT, Article.story_id.is_(None))
+        select(Article).where(Article.origin.in_(NON_FEED), Article.story_id.is_(None))
     )
     for article in list(pinned):
         anchor = session.get(Article, article.anchor_article_id or 0)
