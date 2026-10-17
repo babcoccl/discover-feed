@@ -479,7 +479,13 @@ How it works (`app/context/`):
    `context.min_publishers` distinct publishers. The finder runs in a background
    thread after the enrichment pass inside `cluster()` — it never blocks briefs and
    runs once per story (`context_attempts`, `context_next_attempt_at`); provider
-   failures leave it in `retry` with backoff (2 min → 60 min), never `done`.
+   failures leave it in `retry` with backoff (2 min → 60 min), never `done`. The
+   worker waits for the enrichment pass to finish and for provider cooldowns to end
+   (provider slots and cooldowns are shared state) before touching a story — up to
+   15 minutes, otherwise the pass pauses and stories stay `pending` rather than
+   burning into `retry`. Every story that kept nothing gets a `context_reason`
+   (`no_angles`, `skipped_cooldown`, `provider_errors:<kind>`, `no_hits`,
+   `all_rejected`), logged per story and counted in `last_run.zero_candidates`.
 2. `app/context/angles.py` asks the summarizer LLM for up to `max_angles` (3) search
    angles — `label` + a 3-5 term keyword query (entities quoted). If the LLM is absent
    or answers unparseably, the heuristic fallback pairs the top story entity with
@@ -495,14 +501,19 @@ How it works (`app/context/`):
    near-duplicates of any member or accepted page (5-word shingle overlap). The page
    must share `min_shared_entities` (1; 2 when the angle was heuristic) names/numbers
    with the story and land inside the TF-IDF band
-   `similarity_floor` (0.10) ≤ score < `similarity_ceiling` (0.60): below is off
-   topic, at or above is the same event — both rejected.
+   `similarity_floor` (0.10) ≤ score < `similarity_ceiling` (0.45): below is off
+   topic, at or above is the same event — both rejected. At most `max_per_domain`
+   (1) accepted links per story may come from one domain; further accepted pages on
+   it are rejected `domain_cap`.
 5. With `llm_judge` on (default when a summarizer role is configured) each surviving
    page is judged by the LLM on the brief + title + first 1500 chars:
-   `{"adds_context": 0|1|2, "note": "<=25 words"}` — 0 = off topic, 1 = same event,
-   2 = adds background. Only 2 is kept, with `note` stored as `context_note`.
-   Failures and unparsable answers reject the candidate (`judge_failed`) — notes are
-   never fabricated. With the judge off, accepted pages carry no note.
+   `{"adds_context": 0|1|2, "is_substantive_article": 0|1, "note": "<=25 words"}` —
+   0 = off topic, 1 = primarily reporting the same news event, 2 = adds background;
+   `is_substantive_article` 0 = mostly a list of links, a landing/section page or a
+   product page (`not_article`). Only a substantive article scored 2 is kept, with
+   `note` stored as `context_note`. Failures and unparsable answers reject the
+   candidate (`judge_failed`) — notes are never fabricated. With the judge off,
+   accepted pages carry no note.
 6. Accepted pages become `origin="context"` articles pinned to the story
    (`discovered_for_story_id` + `anchor_article_id`), shown on the story page with
    their domain, angle label and note, and exposed in API v1 as

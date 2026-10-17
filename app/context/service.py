@@ -14,7 +14,7 @@ import logging
 import threading
 import uuid
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
@@ -53,15 +53,22 @@ BATCH = 6
 STALE_PENDING = timedelta(minutes=30)
 """A ``pending`` story this old is re-picked (crashed run)."""
 UNAVAILABLE = "unavailable:"
+WAIT_CAPACITY_SECONDS = 15 * 60
+"""How long the worker waits for the enrichment pass to finish / provider cooldowns to
+end before pausing the pass (stories stay ``pending`` for the next schedule, not
+``retry`` — waiting on capacity is not a story's failure)."""
+POLL_SECONDS = 5.0
+"""Wait granularity while another worker holds the providers."""
 JUDGE_CHARS = 1500
 """Only the first N characters of a page go to the LLM judge (slow local LLMs)."""
 JUDGE_SCHEMA = {
     "type": "object",
     "properties": {
         "adds_context": {"type": "integer", "enum": [0, 1, 2]},
+        "is_substantive_article": {"type": "integer", "enum": [0, 1]},
         "note": {"type": "string"},
     },
-    "required": ["adds_context", "note"],
+    "required": ["adds_context", "is_substantive_article", "note"],
     "additionalProperties": False,
 }
 
@@ -128,6 +135,8 @@ class ContextFinder:
         llm_role: LLMRole | None = None,
         llm_transport=None,
         now: Callable[[], datetime] = utcnow,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        peer_running: Callable[[], bool] | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.config = config
@@ -142,6 +151,10 @@ class ContextFinder:
         self.llm_role = llm_role
         self.llm_transport = llm_transport
         self.now = now
+        self.sleep = sleep
+        self.peer_running = peer_running
+        """True while another worker (enrichment) holds the shared search providers;
+        wired by ``Pipeline.attach_context``."""
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._again = False
@@ -302,7 +315,15 @@ class ContextFinder:
                 ids = self.pending(session)
             if not ids:
                 break
-            for sid in ids:
+            for i, sid in enumerate(ids):
+                if not await self._await_capacity():
+                    logger.warning(
+                        "context pass paused: providers busy/cooling for >%d s; "
+                        "%d stories stay pending",
+                        WAIT_CAPACITY_SECONDS,
+                        len(ids) - i,
+                    )
+                    return results
                 results.append(await self.find_story(sid))
         if results:
             self.last_run = summarize_run(results)
@@ -313,6 +334,30 @@ class ContextFinder:
             except Exception:
                 logger.exception("could not record the context run")
         return results
+
+    async def _await_capacity(self) -> bool:
+        """Wait until the providers are usable: the enrichment worker is done and not
+        every provider is cooling down. Both share provider slots and cooldowns through
+        ``search_provider_state`` — running anyway would skip every search and burn the
+        batch into ``retry``. False after ``WAIT_CAPACITY_SECONDS`` (leave pending)."""
+        waited = 0.0
+        why = ""
+        while True:
+            busy = self.peer_running is not None and self.peer_running()
+            cooling = {
+                p.name: self.search.cooldown_remaining(p.name) for p in self.config.providers
+            }
+            all_cooling = bool(cooling) and all(v > 0 for v in cooling.values())
+            if not busy and not all_cooling:
+                if waited:
+                    logger.info("context: providers usable again after %.0f s (%s)", waited, why)
+                return True
+            if waited >= WAIT_CAPACITY_SECONDS:
+                return False
+            why = "enrichment running" if busy else "providers cooling down"
+            step = POLL_SECONDS if busy else max(1.0, min(POLL_SECONDS, min(cooling.values())))
+            await self.sleep(step)
+            waited += step
 
     # --- one story --------------------------------------------------------------------
 
@@ -374,6 +419,15 @@ class ContextFinder:
             result.status, result.reason = "failed", f"{type(exc).__name__}: {exc}"[:500]
             if not dry_run:
                 self._finish(result)
+        logger.info(
+            "context story %s: %s%s, %d candidate(s), %d accepted%s",
+            story_id,
+            result.status or "running",
+            f" ({result.reason})" if result.reason else "",
+            len(result.candidates),
+            len(result.accepted),
+            f", retry at {result.retry_at:%H:%M:%S}" if result.retry_at else "",
+        )
         return result
 
     async def _find(self, result: ContextResult, dry_run: bool) -> None:
@@ -415,6 +469,7 @@ class ContextFinder:
         result.candidates = candidates
         self._prescreen(candidates, story, deny)
         await self._fetch_judge(candidates, story, brief, result)
+        result.reason = result.reason or coverage_reason(result)
         if not dry_run:
             self._finish(result, anchor_id=anchor.id)
 
@@ -469,6 +524,18 @@ class ContextFinder:
                 for h in outcome.hits:
                     out.append((h, provider.name, angle.query, angle))
             outcome = await self._find_similar(provider, anchor)
+            if outcome is not None:
+                result.searches.append(
+                    {
+                        "provider": provider.name,
+                        "query": outcome.query,
+                        "angle": "related",
+                        "hits": len(outcome.hits),
+                        "error": outcome.error,
+                        "kind": outcome.kind,
+                        "requests": outcome.requests,
+                    }
+                )
             if outcome is not None and outcome.hits:
                 similar = _similar_angle()
                 for h in outcome.hits:
@@ -559,6 +626,7 @@ class ContextFinder:
 
         cfg = self.config
         accepted_texts: list[str] = []
+        kept_domains: Counter[str] = Counter()
         kept = 0
         for c in candidates:
             if c.reason or kept >= cfg.max_items:
@@ -598,18 +666,30 @@ class ContextFinder:
                 c.reason = "judge_failed"  # never fabricate a note
                 continue
             if judge is not None:
-                c.judge, c.note = judge
+                c.judge, c.note, substantive = judge
+                if not substantive:
+                    c.reason = "not_article"
+                    continue
                 if c.judge != 2:
                     c.reason = "judge_rejected"
                     continue
+            domain = canonical_domain(c.hit.url, self.enrichment.publisher_aliases)
+            if kept_domains[domain] >= cfg.max_per_domain:
+                # the first judge-passing page per domain wins (hits arrive in provider
+                # relevance order and all kept pages score 2 — there is no higher score)
+                c.reason = "domain_cap"
+                continue
             c.decision = "accepted"
+            kept_domains[domain] += 1
             accepted_texts.append(c.page.text)
             kept += 1
         result.answered = result.answered or bool(candidates)
 
-    async def _judge(self, title: str, brief: str, c: Candidate) -> tuple[int, str] | None:
-        """0 = off topic, 1 = same event (coverage), 2 = adds background. Returns None on
-        failure/unparsable output — the caller then rejects (never fabricates a note)."""
+    async def _judge(self, title: str, brief: str, c: Candidate) -> tuple[int, str, int] | None:
+        """``(adds_context, note, is_substantive_article)``: 0 = off topic, 1 = same event
+        (coverage), 2 = adds background; substantive 0 = link list / landing / product
+        page. Returns None on failure/unparsable output — the caller then rejects
+        (never fabricates a note)."""
         if self.llm_role is None or not self.config.llm_judge:
             return None
         role = self.llm_role.model_copy(update={"disable_thinking": True, "max_tokens": 200})
@@ -619,10 +699,15 @@ class ContextFinder:
                 "role": "system",
                 "content": (
                     "Decide whether a web page adds useful background/context to a news "
-                    "story: history, context, data, or an opposing view. It must NOT be "
-                    'coverage of the same event. Answer JSON {"adds_context": 0|1|2, '
-                    '"note": "<=25 words for a reader explaining what it adds"}: '
-                    "0 off-topic, 1 same event, 2 good background."
+                    'story. Answer JSON: {"adds_context": 0|1|2, '
+                    '"is_substantive_article": 0|1, "note": "<=25 words for a '
+                    'reader explaining what it adds"}. adds_context: 0 = off topic; '
+                    "1 = the page is primarily reporting the same news event (reject it "
+                    "even when it is well written); 2 = the page adds background, "
+                    "history, data, or a different angle the story does not cover — "
+                    "only 2 is kept. is_substantive_article: 0 when the page is mostly "
+                    "a list of links, a landing or section/tag page, or a product or "
+                    "promotional page rather than a substantive article; 1 otherwise."
                 ),
             },
             {
@@ -640,8 +725,11 @@ class ContextFinder:
             )
             data = json.loads(result.content)
             score = int(data["adds_context"])
+            substantive = int(data["is_substantive_article"])
             note = str(data.get("note") or "")[:280]
-            return (score, note) if score in (0, 1, 2) else None
+            if score not in (0, 1, 2) or substantive not in (0, 1):
+                return None
+            return (score, note, substantive)
         except Exception as exc:
             logger.info("context judge failed for %s: %s", c.hit.url, exc)
             return None
@@ -834,9 +922,33 @@ class ContextFinder:
         }
 
 
+def coverage_reason(result: ContextResult) -> str | None:
+    """Why a story kept nothing — provider cooldown/budget, provider errors, no hits,
+    or every candidate rejected. Logged per run and persisted in ``context_reason``
+    (the per-candidate reasons in ``ContextCandidate`` carry the detail when any hit
+    was considered)."""
+    if result.reason:
+        return result.reason
+    searched = [s for s in result.searches if not s.get("skipped")]
+    if not searched:
+        skipped = {s.get("skipped") for s in result.searches} - {None}
+        if skipped:
+            return "skipped_" + "_".join(sorted(skipped))  # skipped_cooldown / _budget
+        return "not_searched" if result.searches else None
+    if all(s.get("error") for s in searched):
+        kinds = sorted({s.get("kind") or "error" for s in searched})
+        return "provider_errors:" + "_".join(kinds)  # timeout, rate_limited, ...
+    if not result.candidates:
+        return "no_hits"
+    if not result.accepted:
+        return "all_rejected"
+    return None
+
+
 def summarize_run(results: list[ContextResult]) -> dict:
     reasons = Counter(c.reason for r in results for c in r.candidates if c.decision == "rejected")
     errors = [s["error"] for r in results for s in r.searches if s.get("error")]
+    zero = Counter(coverage_reason(r) for r in results if not r.candidates)
     return {
         "stories": len(results),
         "with_links": sum(1 for r in results if r.added),
@@ -844,6 +956,9 @@ def summarize_run(results: list[ContextResult]) -> dict:
         "failed": sum(1 for r in results if r.status == "failed"),
         "retry": sum(1 for r in results if r.status == "retry"),
         "candidates": sum(len(r.candidates) for r in results),
+        "zero_candidates": {
+            k: n for k, n in zero.most_common() if k
+        },  # why each story found nothing
         "angles": sum(len(r.angles) for r in results),
         "reject_reasons": dict(reasons.most_common(8)),
         "provider_errors": len(errors),

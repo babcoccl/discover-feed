@@ -108,16 +108,19 @@ profiles:
       # max_angles: 3              # LLM search angles per story (heuristic fallback:
       #                            # top entity + history/explained/background)
       # max_items: 3               # accepted links per story
+      # max_per_domain: 1          # accepted links per story from one domain
+      #                            # (extras rejected "domain_cap")
       # min_words: 300             # fetched page must extract this much real text
       # similarity_floor: 0.10     # below: off topic (reject)
-      # similarity_ceiling: 0.60   # at or above: same event / coverage (reject)
+      # similarity_ceiling: 0.45   # at or above: same event / coverage (reject)
       # min_shared_entities: 1     # names/numbers the page must share with the story
       # min_shared_entities_heuristic: 2  # when the angle query was heuristic
       # min_priority: 0            # eligible: priority > this
       # min_publishers: 2          #          OR this many distinct publishers
       # daily_request_budget: 30   # context's own cap on top of shared search budgets
-      # llm_judge: true            # summarizer role scores each page 0/1/2 (keep only 2;
-      #                            # failures/unparsable reject — notes are never fabricated)
+      # llm_judge: true            # summarizer role scores each page 0/1/2 + flags
+      #                            # non-articles (keep only 2; failures/unparsable
+      #                            # reject — notes are never fabricated)
       # language: en               # hit language must match when the provider reports it
     # Topics become feed tabs. Keywords are whole-word and case-insensitive; an empty
     # include list means "every article from the topic's sources".

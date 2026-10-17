@@ -330,7 +330,12 @@ update it when fixtures or defaults change. README "Tuning clustering" has the f
   each profile (`ContextConfig`, off by default); per-profile toggle = `profiles.context_enabled`
   (Settings > Pipeline). Runs inside `Pipeline.cluster()` right after `enrich()`; never
   blocks briefs; once per story via `context_status|context_at|context_attempts|
-  context_next_attempt_at`; `POST /api/admin/context[?story_id=N]`.
+  context_next_attempt_at`; `POST /api/admin/context[?story_id=N]`. The worker waits
+  for the enrichment pass (`peer_running`, wired by `attach_context`) and for shared
+  provider cooldowns to end before touching a story — up to `WAIT_CAPACITY_SECONDS`
+  (15 min), else the pass pauses leaving stories `pending`. Stories that kept nothing
+  get a `context_reason` (`no_angles`/`skipped_cooldown`/`provider_errors:<kind>`/
+  `no_hits`/`all_rejected`), counted in `last_run.zero_candidates`.
 - Eligibility: published story (`published_version` set, state `published`) AND
   (`priority > min_priority` OR distinct publishers >= `min_publishers`), newest first.
   Provider failures => `retry` with backoff, never `done`. Skipped stories
@@ -343,14 +348,16 @@ update it when fixtures or defaults change. README "Tuning clustering" has the f
   (ENRICHMENT, CONTEXT)` covers the shared exclusion spots (clustering counts,
   alert candidate updates, `refresh_stories` rep/counts/timestamps — context pages can
   be years old and must not move `first_seen_at`/`last_updated_at`).
-- Acceptance band: `similarity_floor` 0.10 <= TF-IDF score < `similarity_ceiling` 0.60
+- Acceptance band: `similarity_floor` 0.10 <= TF-IDF score < `similarity_ceiling` 0.45
   (below = `off_topic`, at/above = `same_event`); `min_shared_entities` 1 (2 when the
   angle query was heuristic); `min_words` 300; shingle `near_duplicate` vs members and
-  already-accepted pages; optional `llm_judge` (default on with a summarizer role)
-  keeps only `adds_context: 2`, `judge_failed`/`judge_rejected` reject — never
-  fabricate notes. Cheap rejects before any fetch: `same_domain` (vs ALL member
-  domains incl. enrichment members), `social`/`aggregator`/`denied`/`bad_url`/
-  `duplicate_url`/`already_ingested`/`language`.
+  already-accepted pages; `max_per_domain` (1) caps accepted links from one domain
+  (`domain_cap`, first judge-passing hit wins). Optional `llm_judge` (default on with
+  a summarizer role) keeps only `adds_context: 2` + `is_substantive_article: 1`
+  (`not_article` = link list / landing / product page), `judge_failed`/
+  `judge_rejected` reject — never fabricate notes. Cheap rejects before any fetch:
+  `same_domain` (vs ALL member domains incl. enrichment members), `social`/
+  `aggregator`/`denied`/`bad_url`/`duplicate_url`/`already_ingested`/`language`.
 - Budget: shared `search:<name>` usage via `SearchService` plus context's own
   `daily_request_budget` counted as `context:<name>` `source_usage` rows.
 - Providers: reuse `SearchService`; `SearchProvider.supports_find_similar` + default
@@ -360,7 +367,8 @@ update it when fixtures or defaults change. README "Tuning clustering" has the f
   `python -m app.context.evaluate --stories 30 --markdown`
   (Windows: `.venv\Scripts\python -m app.context.evaluate ...`). Dry runs write nothing.
 - Tests: `tests/test_context.py` (fakes everywhere — `FakeSearch`, `page_transport`,
-  `Guard(resolver)`, no real LLM). Docker E2E: fixture server `--context-wire-base
+  `Guard(resolver)`, no real LLM; judge fakes must emit `is_substantive_article` too).
+  Docker E2E: fixture server `--context-wire-base
   http://contextwire:8081` serves a TinyFish-shaped `/context-search` whose hits are
   generated `/context/<id>` backgrounder pages (shares title entities + some content
   words -> lands in the similarity band; `llm_judge: false` in

@@ -48,6 +48,7 @@ def _summary(results: list[ContextResult], markdown: bool) -> str:
         f"- stories with links: {sum(1 for r in results if r.accepted)}",
         f"- links accepted: {sum(len(r.accepted) for r in results)}",
         f"- candidates considered: {sum(len(r.candidates) for r in results)}",
+        f"- stories with 0 candidates: {sum(1 for r in results if not r.candidates)}",
         "- providers unanswered (retried): "
         f"{sum(1 for r in results if not r.answered and r.status != 'done')}",
         f"- failed: {sum(1 for r in results if r.status == 'failed')}",
@@ -98,6 +99,7 @@ def _summary(results: list[ContextResult], markdown: bool) -> str:
                         c.reason for c in r.candidates if c.decision == "rejected"
                     ).most_common(3)
                 )
+                or r.reason
                 or "-",
             ]
             for r in results

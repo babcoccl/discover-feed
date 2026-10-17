@@ -767,11 +767,14 @@ class ContextConfig(_Model):
     """Search angles (history / data / opposing view ...) generated per story."""
     max_items: int = Field(default=3, ge=1, le=10)
     """Context links kept per story."""
+    max_per_domain: int = Field(default=1, ge=1, le=10)
+    """Accepted links per story from a single domain; extra accepted candidates on an
+    already-kept domain are rejected ``domain_cap``."""
     min_words: int = Field(default=300, ge=0)
     """Extracted pages below this are rejected."""
     similarity_floor: float = Field(default=0.10, ge=0, le=1)
     """Below: the page is off topic."""
-    similarity_ceiling: float = Field(default=0.60, ge=0, le=1)
+    similarity_ceiling: float = Field(default=0.45, ge=0, le=1)
     """At/above: the page is coverage of the same event (that's enrichment's job)."""
     min_shared_entities: int = Field(default=1, ge=0, le=10)
     min_shared_entities_heuristic: int = Field(default=2, ge=0, le=10)
