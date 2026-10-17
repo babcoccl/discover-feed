@@ -697,6 +697,8 @@ class EnrichmentCandidate(Base):
     decision: Mapped[str] = mapped_column(String(10))
     """``accepted`` | ``rejected`` | ``link_only`` (a member stored without its text)."""
     reason: Mapped[str] = mapped_column(String(40), default="")
+    flagged: Mapped[str] = mapped_column(String(40), default="")
+    """Source-quality flag (``tld:``/``name:``) — flagged, not rejected."""
     similarity: Mapped[float | None] = mapped_column(Float)
     """Title + snippet vs. headlines (NULL when the hit had no snippet)."""
     title_similarity: Mapped[float | None] = mapped_column(Float)

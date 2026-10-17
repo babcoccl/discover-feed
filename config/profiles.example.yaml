@@ -30,10 +30,31 @@ profiles:
       max_added_sources: 3
       wait_seconds: 180
       deny_domains:
-        # Confirmed content farm (SEO-stuffed articles, paid-backlink placements,
-        # Tech-Insider brand mimicry; origin currently hangs). Checked 2026-10-17:
-        # superpowerdaily.com and hyper.ai are legitimate publishers — kept.
-        - tech-insider.org
+        # Hard-deny specific publishers. Confirmed content farms live in
+        # enrichment.quality.deny_domains below instead.
+        []
+      # Source-quality gate: accepted candidates whose domain looks like a content
+      # farm are FLAGGED, never rejected — recorded in enrichment_candidates.flagged,
+      # counted in Settings > Pipeline ("flagged sources") and badged "source quality
+      # uncertain" on the story page. Review the flagged list and move confirmed
+      # farms to deny_domains (or use the story page's "block domain").
+      quality:
+        # Confirmed content farms from the live eval (hard-denied like deny_domains;
+        # the DB block list still wins when they disagree):
+        deny_domains:
+          - tech-insider.org  # SEO-stuffed rewrites, paid-backlink placements
+          - qwe.edu.pl        # .edu.pl host serving English SEO rewrites
+          - datagrom.com      # scraper/SEO rewrite network
+          - relvehq.com       # scraper/SEO rewrite network
+        # Checked 2026-10-17 and kept: superpowerdaily.com, hyper.ai — legitimate
+        # publishers whose names match the name heuristics below.
+        # suspicious_tlds:    # domain endings commonly used by scraper pages
+        #   [edu.pl, club, shop, online, site, xyz, top, icu, info, biz,
+        #    click, link, work, buzz, vip, website, space, today, live]
+        # suspicious_patterns:  # regexes on the domain name (keyword-stuffed farms);
+        #   ['(^|[.-])(news|wire|daily|hub|insider|feed)\d*([.-]|$)']
+        #                     # matches tech-insider.org, news24.site — not fused
+        #                     # names like thenews.com.pk, wired.com, superpowerdaily.com
       # Similarity thresholds (TF-IDF cosine). Starting points from one live evaluation;
       # tune them with `python -m app.enrich.evaluate` as more live data comes in.
       # min_snippet_similarity: 0.25  # hit title + snippet vs. the headlines

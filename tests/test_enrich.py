@@ -1581,3 +1581,129 @@ def test_backtest_story_picker_needs_three_publishers(session_factory):
         assert [p[0] for p in picks] == [story_id]
         _id, _title, anchor, expected = picks[0]
         assert anchor == "news.example" and expected == {"wire.example", "other.example"}
+
+
+# --- Phase 10.7: source-quality gate (flag suspicious domains, deny confirmed farms) ------
+
+
+def test_flag_reason_marks_content_farm_domains():
+    """Throwaway TLDs and keyword-stuffed names flag; fused names do not."""
+    from app.enrich.quality import flag_reason
+
+    for url, flag in [
+        ("https://qwe.edu.pl/x", "tld:edu.pl"),
+        ("https://news24.site/x", "tld:site"),
+        ("https://anything.club/x", "tld:club"),
+        ("https://store.xyz/x", "tld:xyz"),
+    ]:
+        assert flag_reason(url) == flag, url
+    # a news-word as its own token (hyphen/dot separated, or before digits)
+    assert flag_reason("https://tech-insider.org/x") == "name:insider"
+    assert flag_reason("https://news-feed.example/x") == "name:news"
+    assert flag_reason("https://wire.example/x") == "name:wire"
+    assert flag_reason("https://hub24.example/x") == "name:hub24"
+    # fused names are real publications: no flag
+    for url in (
+        "https://thenews.com.pk/x",
+        "https://wired.com/x",
+        "https://dailynews.com/x",
+        "https://superpowerdaily.com/x",
+        "https://hyper.ai/x",
+        "https://nytimes.com/x",
+        "https://bbc.co.uk/x",
+    ):
+        assert flag_reason(url) is None, url
+
+
+def test_flag_reason_is_configurable():
+    from app.enrich.quality import flag_reason
+
+    assert flag_reason("https://qwe.edu.pl/x", tlds=()) is None
+    assert flag_reason("https://tech-insider.org/x", patterns=()) is None
+    cfg = EnrichmentConfig(quality={"suspicious_tlds": ["museum"]})
+    assert cfg.quality.suspicious_tlds == ["museum"]
+    with pytest.raises(ValueError, match="suspicious_patterns"):
+        EnrichmentConfig(quality={"suspicious_patterns": ["["]})
+
+
+def test_quality_deny_domains_reject_before_fetch(session_factory):
+    """enrichment.quality.deny_domains hard-denies like the base list: no fetch,
+    decision rejected/denied — flagged is only for domains not yet confirmed."""
+    story_id = seed(session_factory)
+    hits = [("https://datagrom.com/buses", "Springfield council approves electric buses plan")]
+    fake = FakeSearch(hits=hits)
+    enricher = make_enricher(
+        session_factory, fake, config(quality={"deny_domains": ["datagrom.com"]})
+    )
+    result = asyncio.run(enricher.enrich_story(story_id))
+    assert result.added == 0
+    c = result.candidates[0]
+    assert c.decision == "rejected" and c.reason == "denied" and c.page is None
+    with session_factory() as session:
+        assert "datagrom.com" in enricher._denied(session)
+
+
+def test_flagged_candidates_still_accepted_recorded_and_counted(session_factory):
+    """The gate flags, never rejects: wire.example (name:wire) is still added, and its
+    flag reaches enrichment_candidates, the member's raw_json and the panel stats."""
+    story_id = seed(session_factory)
+    enricher = make_enricher(session_factory, FakeSearch())
+    result = asyncio.run(enricher.enrich_story(story_id))
+    assert result.added == 1
+    c = next(c for c in result.candidates if c.decision == "accepted")
+    assert c.hit.domain == "wire.example" and c.flag == "name:wire"
+    with session_factory() as session:
+        row = session.scalar(
+            select(EnrichmentCandidate).where(EnrichmentCandidate.decision == "accepted")
+        )
+        assert row.domain == "wire.example" and row.flagged == "name:wire"
+        member = session.scalar(select(Article).where(Article.origin == ENRICHMENT))
+        assert member.raw_json["flag"] == "name:wire"
+        stats = enricher.stats(session)
+        assert stats["flagged"] == 1 and stats["flagged_domains"] == [("wire.example", 1)]
+
+
+def test_flagged_member_badged_on_the_story_page(settings, session_factory):
+    """Published view carries the flag; story.html shows the "source quality uncertain"
+    badge while the member stays shown (still topically correct)."""
+    from fastapi.testclient import TestClient
+
+    from app.llm.client import LLMClient
+    from app.main import create_app
+    from app.publish import Policy
+    from app.story_views import published_story
+    from app.summarize.fake import FakeLLM
+    from app.summarize.service import Summarizer
+
+    story_id = seed(session_factory)
+    enricher = make_enricher(session_factory, FakeSearch())
+    run(enricher, story_id)
+    role = LLMRole(base_url="http://llm.test:8080/v1", model="fake-llm", api_key="sk-t")
+    clock = Clock()
+    worker = SummaryWorker(
+        session_factory,
+        Summarizer(LLMClient(role, transport=FakeLLM().transport()), clock=clock),
+        clock=clock,
+        policy=Policy(),
+    )
+    asyncio.run(worker.run())
+    with session_factory() as session:
+        story = published_story(session, story_id)
+        member = next(m for m in story.members if m.found_by_search)
+        assert member.flag == "name:wire"
+    with TestClient(create_app(settings)) as client:
+        client.app.state.session_factory = session_factory
+        client.app.state.pipeline.enricher = enricher
+        page = client.get(f"/story/{story_id}")
+        assert page.status_code == 200
+        assert "data-quality-flag" in page.text and "source quality uncertain" in page.text
+        assert "name:wire" in page.text  # the tooltip's flag reason
+
+
+def test_evaluate_lists_flagged_sources(session_factory):
+    from app.enrich.evaluate import summary
+
+    story_id = seed(session_factory)
+    result = asyncio.run(make_enricher(session_factory, FakeSearch()).enrich_story(story_id))
+    out = summary([("Springfield mayor Ortiz wins bus vote", result)], markdown=False)
+    assert "flagged sources" in out and "wire.example x1" in out and "name:wire" in out

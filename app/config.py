@@ -23,6 +23,8 @@ from pydantic import (
     model_validator,
 )
 
+from app.enrich.quality import DEFAULT_SUSPICIOUS_PATTERNS, DEFAULT_SUSPICIOUS_TLDS
+
 logger = logging.getLogger(__name__)
 
 _SLUG = r"^[a-z0-9][a-z0-9_-]*$"
@@ -612,6 +614,35 @@ class ExtraRulesConfig(_Model):
     """... and extracted text at least this similar."""
 
 
+class EnrichmentQualityConfig(_Model):
+    """Source-quality gate: flag (never reject) accepted candidates whose domain looks
+    like a content farm, and hard-deny confirmed ones. Flagged members are still shown
+    and cited — the relevance checks already passed — but counted in Settings > Pipeline
+    and badged "source quality uncertain" on the story page."""
+
+    suspicious_tlds: list[str] = Field(default_factory=lambda: list(DEFAULT_SUSPICIOUS_TLDS))
+    """Domain endings commonly used by scraper/SEO pages; accepted hits on them are flagged."""
+    suspicious_patterns: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_SUSPICIOUS_PATTERNS)
+    )
+    """Regexes on the registrable domain name for keyword-stuffed farm names
+    (``tech-insider``, ``news24``); accepted hits matching one are flagged."""
+    deny_domains: list[str] = Field(default_factory=list)
+    """Confirmed content-farm domains — hard-denied like ``enrichment.deny_domains``
+    and the DB block list; review the pipeline panel's flagged domains to fill it."""
+
+    @model_validator(mode="after")
+    def _check(self) -> "EnrichmentQualityConfig":
+        self.suspicious_tlds = [t.strip().lower().lstrip(".") for t in self.suspicious_tlds if t]
+        self.deny_domains = [d.strip().lower().lstrip(".") for d in self.deny_domains if d]
+        for pattern in self.suspicious_patterns:
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                raise ValueError(f"invalid suspicious_patterns entry {pattern!r}: {exc}") from None
+        return self
+
+
 class EnrichmentConfig(_Model):
     """Web-search enrichment: find other publishers' coverage of single-sourced stories."""
 
@@ -657,6 +688,7 @@ class EnrichmentConfig(_Model):
     """Domains that are the same publisher (``bbc.co.uk`` -> ``bbc.com``): they count as
     one in the same-domain and publisher-count checks, before any fetch."""
     extra_rules: ExtraRulesConfig = Field(default_factory=ExtraRulesConfig)
+    quality: EnrichmentQualityConfig = Field(default_factory=EnrichmentQualityConfig)
     reenrich_hours: float = Field(default=24, ge=0)
     query_mode: QueryMode = QueryMode.HEURISTIC
     resummarize_on_enrichment: bool = True

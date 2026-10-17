@@ -169,6 +169,7 @@ def _members(item: repo.StoryItem, names: dict[str, str]) -> list[dict]:
             "text_status": m.text_status,
             "words": m.word_count or 0,
             "origin": m.origin or "feed",
+            "flag": (m.raw_json or {}).get("flag") or "",
         }
         for m in item.members
     ]

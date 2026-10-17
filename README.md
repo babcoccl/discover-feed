@@ -362,6 +362,21 @@ How it works (`app/search/`, `app/enrich/`):
    every later pass, including publisher aliases — removes every enrichment member on it
    and queues the affected stories for one regeneration. Settings > Pipeline lists the
    domains accepted most often in the last 7 days so scraper sites are visible at a glance.
+   The **source-quality gate** (`enrichment.quality`) flags — never rejects — accepted
+   candidates whose domain looks like a content farm: throwaway TLDs
+   (`quality.suspicious_tlds`: edu.pl, club, shop, online, site, xyz, top, icu, info,
+   biz, click, link, work, buzz, vip, website, space, today, live) or keyword-stuffed
+   names (`quality.suspicious_patterns`: a `news`/`wire`/`daily`/`hub`/`insider`/`feed`
+   token, so `tech-insider.org` and `news24.site` flag but fused names like
+   `thenews.com.pk`, `wired.com` and `dailynews.com` do not). The flag
+   (`tld:<suffix>` / `name:<token>`) is recorded in `enrichment_candidates.flagged`,
+   counted under "flagged sources" in Settings > Pipeline with the top flagged domains
+   of the last 7 days, and shown as a "source quality uncertain" badge (reason in the
+   tooltip) on the member — still displayed and cited, since it passed every relevance
+   check. `evaluate` prints the flagged count and domains plus a `flag` column.
+   Confirmed farms go in `quality.deny_domains` (hard-denied like `deny_domains` and
+   the DB block list, in enrichment and context links alike) or are blocked from the
+   story page.
 8. Sources found after a story was published regenerate it once (`enrich_regens`); the
    published version stays visible until the new one passes the publish gate. At most
    `late_regen_max_per_hour` (default 6) stories are regenerated that way per hour, so

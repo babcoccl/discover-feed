@@ -300,9 +300,22 @@ update it when fixtures or defaults change. README "Tuning clustering" has the f
   (/opinion/, /commentisfree/ ...). TinyFish snippet parsing falls back to
   content/description/summary/text/excerpt and reports per-search field coverage:
   known keys count non-empty (`key:empty` for blank values), every other raw key counts
-  by presence, so a missing/emptied/renamed field is visible. Confirmed content farms
-  go in `deny_domains` (tech-insider.org is in the example profile; superpowerdaily.com
-  and hyper.ai were checked and are legitimate publishers).
+  by presence, so a missing/emptied/renamed field is visible.
+- Quality gate (`enrichment.quality`, `app/enrich/quality.py` `flag_reason`): accepted /
+  link-only candidates whose domain looks like a content farm are FLAGGED, never
+  rejected — `suspicious_tlds` (edu.pl, club, shop, online, site, xyz, top, icu, info,
+  biz, click, link, work, buzz, vip, website, space, today, live) and
+  `suspicious_patterns` (a `news|wire|daily|hub|insider|feed` token on the registrable
+  domain; fused names like thenews.com.pk / wired.com / superpowerdaily.com / hyper.ai
+  do NOT match — checked 2026-10-17, they are legitimate). `Candidate.flag` ->
+  `enrichment_candidates.flagged` + member `raw_json["flag"]` -> publish doc `flag` ->
+  `Member.flag` -> story.html `data-quality-flag` badge ("source quality uncertain",
+  still shown and cited); `Enricher.stats()` returns `flagged` / `flagged_domains` for
+  the pipeline panel; `evaluate` prints the flagged count + domains and a `flag` column.
+  Confirmed farms go in `enrichment.quality.deny_domains` (tech-insider.org, qwe.edu.pl,
+  datagrom.com, relvehq.com in the example profile) — hard-denied in `_denied()` like
+  `deny_domains` / the `blocked_domains` table, for enrichment and context links alike.
+  The `wire.example` test fixture legitimately flags as `name:wire` (still accepted).
   9to5linux.com's robots.txt allows named crawlers only (`User-agent: * Disallow: /`,
   confirmed live), so its pages are `robots`, not an extractor bug — and not link_only
   either (do not spoof a crawler User-Agent).
