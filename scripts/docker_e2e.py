@@ -110,15 +110,26 @@ def poll(base: str, tl: Timeline, assert_published: bool) -> None:
                 tl.mark(row, "brief")
                 if not any(e[1].startswith("first story published") for e in tl.events):
                     tl.event(f"first story published: {item['title'][:60]}")
-                if "enriched" not in row:
+                if "enriched" not in row or "context" not in row:
                     v1 = get(base, f"/api/v1/stories/{key}") or {}
                     web = [s for s in v1.get("sources", []) if s.get("origin") == "enrichment"]
-                    if web:
+                    if "enriched" not in row and web:
                         tl.mark(row, "enriched", len(web))
                         if any("tinywire" in json.dumps(s) for s in web):
                             tl.mark(row, "tinyfish", 1)
                         if not any(e[1].startswith("first web-search") for e in tl.events):
                             tl.event(f"first web-search source on: {item['title'][:60]}")
+                    ctx = v1.get("context") or []
+                    if "context" not in row and ctx:
+                        tl.mark(row, "context", len(ctx))
+                        # context links must never leak into sources/brief
+                        if any(s.get("origin") == "context" for s in v1.get("sources", [])):
+                            tl.violations.append(f"context link leaked into sources of story {key}")
+                        if not any(e[1].startswith("first context") for e in tl.events):
+                            tl.event(
+                                f"first context link on: {item['title'][:60]} "
+                                f"({ctx[0].get('domain', '?')})"
+                            )
             state = report_state(item.get("report"))
             if state is None and "brief" in row and "report" not in row:
                 story = get(base, f"/api/stories/{key}") or {}
@@ -132,16 +143,19 @@ def poll(base: str, tl: Timeline, assert_published: bool) -> None:
 
 def settled(tl: Timeline) -> bool:
     """At least 5 published stories with a final report, every shown card has a brief, and
-    at least one story gained a web-search source from the fake TinyFish (the primary), and
+    at least one story gained a web-search source from the fake TinyFish (the primary),
+    at least one story gained a background-and-context link from /context-search, and
     both fakes served their failure modes and then answered (TinyFish failures fell back to
     GDELT; GDELT failures were retried)."""
     rows = [r for r in tl.stories.values() if "clustered" in r]
     final = [r for r in rows if "report" in r]
     from_tinyfish = [r for r in rows if "tinyfish" in r]
+    with_context = [r for r in rows if "context" in r]
     return (
         len(final) >= 5
         and all("brief" in r for r in rows)
         and bool(from_tinyfish)
+        and bool(with_context)
         and faults_served(tl)
     )
 
@@ -158,6 +172,8 @@ def render(tl: Timeline) -> str:
         f"stories with web-search (enrichment) sources: "
         f"{sum(1 for r in tl.stories.values() if 'enriched' in r)} "
         f"({sum(1 for r in tl.stories.values() if 'tinyfish' in r)} from the fake TinyFish)",
+        f"stories with background/context links: "
+        f"{sum(1 for r in tl.stories.values() if 'context' in r)}",
         f"publish-gate violations: {len(tl.violations)}",
     ]
     lines += [f"  - {v}" for v in tl.violations[:20]]

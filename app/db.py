@@ -37,6 +37,7 @@ def init_db(engine: Engine) -> None:
     _add_source_management_columns(engine)
     _add_image_columns(engine)
     _add_enrichment_columns(engine)
+    _add_context_columns(engine)
 
 
 def _add_article_url(engine: Engine) -> None:
@@ -276,4 +277,34 @@ def _add_enrichment_columns(engine: Engine) -> None:
         )
         conn.execute(
             text("CREATE INDEX IF NOT EXISTS ix_stories_enrich_status ON stories (enrich_status)")
+        )
+
+
+_CONTEXT_COLUMNS = {
+    "articles": {
+        "context_note": "VARCHAR(300)",
+        "context_angle": "VARCHAR(120)",
+    },
+    "stories": {
+        "context_status": "VARCHAR(10)",
+        "context_at": "DATETIME",
+        "context_attempts": "INTEGER NOT NULL DEFAULT 0",
+        "context_next_attempt_at": "DATETIME",
+        "context_reason": "TEXT",
+    },
+    "profiles": {"context_enabled": "BOOLEAN"},
+}
+
+
+def _add_context_columns(engine: Engine) -> None:
+    """Pre-context DBs: article note/angle, story context state, profile toggle
+    (``context_candidates`` is created by ``Base.metadata.create_all``)."""
+    with engine.begin() as conn:
+        for table, columns in _CONTEXT_COLUMNS.items():
+            existing = {c["name"] for c in inspect(conn).get_columns(table)}
+            for name, ddl in columns.items():
+                if name not in existing:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_stories_context_status ON stories (context_status)")
         )

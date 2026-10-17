@@ -42,7 +42,9 @@ from app.enrich.query import (
 )
 from app.lifecycle import PRE_CLUSTER
 from app.models import (
+    CONTEXT,
     ENRICHMENT,
+    NON_FEED,
     Article,
     BlockedDomain,
     EnrichmentCandidate,
@@ -222,7 +224,7 @@ class Enricher:
             select(Article.id)
             .where(
                 Article.story_id == Story.id,
-                Article.origin != ENRICHMENT,
+                Article.origin.not_in(NON_FEED),
                 Article.source_id.in_(followed),
             )
             .exists()
@@ -316,7 +318,9 @@ class Enricher:
         same publisher (``bbc.com`` / ``bbc.co.uk``) counted once via
         ``publisher_aliases``."""
         aliases = self.config.publisher_aliases
-        urls = session.scalars(select(Article.url).where(Article.story_id == story_id))
+        urls = session.scalars(
+            select(Article.url).where(Article.story_id == story_id, Article.origin != CONTEXT)
+        )
         return len({canonical_domain(u, aliases) for u in urls if u})
 
     # --- scheduling -------------------------------------------------------------------
@@ -505,7 +509,7 @@ class Enricher:
         members = list(
             session.scalars(
                 select(Article)
-                .where(Article.story_id == story_id)
+                .where(Article.story_id == story_id, Article.origin != CONTEXT)
                 .order_by(Article.published_at, Article.id)
             )
         )

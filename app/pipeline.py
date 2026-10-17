@@ -11,7 +11,7 @@ from sqlalchemy.orm import sessionmaker
 from app import images
 from app.cluster import Clusterer, TfidfClusterer
 from app.cluster.service import ClusterRunResult, run_clustering
-from app.config import AppConfig, EnrichmentConfig, LLMRole, Profile, SummariesConfig
+from app.config import AppConfig, ContextConfig, EnrichmentConfig, LLMRole, Profile, SummariesConfig
 from app.extract import Extractor, ExtractRunResult
 from app.images.service import ImageRunResult, ImageWorker
 from app.ingest import USER_AGENT, build_user_agent
@@ -24,6 +24,7 @@ from app.summarize.service import Summarizer, summarizer_options
 from app.summarize.worker import SummaryWorker
 
 if TYPE_CHECKING:
+    from app.context.service import ContextFinder
     from app.enrich.service import Enricher
 
 logger = logging.getLogger(__name__)
@@ -164,6 +165,50 @@ def enricher_from_settings(
     )
 
 
+def context_from_settings(
+    session_factory: sessionmaker,
+    settings: Settings,
+    config: AppConfig,
+    *,
+    search_transport: httpx.AsyncBaseTransport | None = None,
+    page_transport: httpx.AsyncBaseTransport | None = None,
+    llm_transport: httpx.AsyncBaseTransport | None = None,
+    resolver=None,
+) -> "ContextFinder":
+    """Background-and-context links with the summarize profile's ``context`` settings;
+    each profile's ``context.enabled`` is its default (the Settings toggle overrides it).
+    Domain deny/social/aggregator/alias rules come from the ``enrichment`` block."""
+    from app.context.service import ContextFinder
+    from app.enrich.fetch import CandidateFetcher
+    from app.images.safety import Guard, system_resolver
+    from app.search.service import SearchService
+
+    profile = summarize_profile(config, settings)
+    cfg = profile.context if profile else ContextConfig()
+    enrich_cfg = profile.enrichment if profile else EnrichmentConfig()
+    allow = [h for h in settings.images_allow_hosts.split(",") if h.strip()]
+    fetcher = CandidateFetcher(
+        session_factory,
+        guard=Guard(resolver or system_resolver, allow_hosts=allow),
+        user_agent=build_user_agent(settings.contact_email),
+        timeout=settings.extract_timeout_seconds,
+        max_bytes=settings.extract_max_bytes,
+        min_words=settings.extract_min_words,
+        domain_delay=settings.extract_domain_delay_seconds,
+        transport=page_transport,
+    )
+    return ContextFinder(
+        session_factory,
+        cfg,
+        enrichment=enrich_cfg,
+        profile_defaults={p.id: p.context.enabled for p in config.profiles},
+        search=SearchService(session_factory, transport=search_transport),
+        fetcher=fetcher,
+        llm_role=profile.llm.summarizer if profile else None,
+        llm_transport=llm_transport,
+    )
+
+
 class Pipeline:
     def __init__(
         self,
@@ -182,6 +227,8 @@ class Pipeline:
         """Checks new articles' images after clustering (``app.images``)."""
         self.enricher: Enricher | None = None
         """Web-search enrichment between clustering and the brief (``app.enrich``)."""
+        self.context: ContextFinder | None = None
+        """Background-and-context links after the brief (``app.context``); never blocks."""
 
     def attach_enricher(self, enricher: "Enricher") -> "Enricher":
         self.enricher = enricher
@@ -190,6 +237,21 @@ class Pipeline:
             self.summaries.enrich_wait = timedelta(seconds=enricher.config.wait_seconds)
             enricher.backfill = self.summaries.backfill
         return enricher
+
+    def attach_context(self, finder: "ContextFinder") -> "ContextFinder":
+        self.context = finder
+        return finder
+
+    def find_context(self, story_ids: list[int] | None = None, *, force: bool = False) -> int:
+        """Queue the background-and-context search (published stories only); never
+        blocks the brief — it only schedules work for already-published stories."""
+        if self.context is None:
+            return 0
+        try:
+            return self.context.schedule(story_ids, force=force)
+        except Exception:
+            logger.exception("could not schedule context search")
+            return 0
 
     def _enriched(self, story_ids: list[int]) -> None:
         if self.summaries is not None and self.summaries.enabled:
@@ -263,6 +325,7 @@ class Pipeline:
             self._record("cluster", result.model_dump(exclude={"joins", "story_ids"}))
             self._alert("on_clustered", list(result.story_ids))
             self.enrich()  # before the worker looks: new stories' briefs wait for it
+            self.find_context()  # published stories only; never blocks the brief
             self._queue_summaries(result)
         return result
 

@@ -695,6 +695,55 @@
         "title": "CitedTextOut",
         "type": "object"
       },
+      "ContextLinkV1": {
+        "description": "A background/context link found by web search — related, never coverage of the\nsame event; not a source of the story, never summarized or alerted on.",
+        "properties": {
+          "angle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The search angle that surfaced it (`history`, `opposing view`...).",
+            "title": "Angle"
+          },
+          "domain": {
+            "description": "The page's registrable domain (`wikipedia.org`).",
+            "title": "Domain",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What it adds (the LLM judge's <=25-word note).",
+            "title": "Note"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "title",
+          "domain"
+        ],
+        "title": "ContextLinkV1",
+        "type": "object"
+      },
       "ConversationV1": {
         "examples": [
           {
@@ -2593,6 +2642,15 @@
               "status": "ok",
               "style": "brief"
             },
+            "context": [
+              {
+                "angle": "explained",
+                "domain": "wikipedia.org",
+                "note": "Background on the packaging technique the story mentions",
+                "title": "Chiplet - Wikipedia",
+                "url": "https://en.wikipedia.org/wiki/Chiplet"
+              }
+            ],
             "first_seen_at": "2026-10-12T08:30:00Z",
             "id": 42,
             "last_updated_at": "2026-10-12T08:30:00Z",
@@ -2630,6 +2688,14 @@
                 "type": "null"
               }
             ]
+          },
+          "context": {
+            "description": "Background/context links (related, not the same event). Empty until the context search runs or when it is off.",
+            "items": {
+              "$ref": "#/components/schemas/ContextLinkV1"
+            },
+            "title": "Context",
+            "type": "array"
           },
           "first_seen_at": {
             "format": "date-time",

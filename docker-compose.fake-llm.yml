@@ -10,7 +10,7 @@ services:
       DISCOVER_EXTRACT_DOMAIN_DELAY_SECONDS: "0.2"
       DISCOVER_EXTRACT_MAX_ARTICLES: "100"
       # The fixture service is on the private compose network; the image SSRF guard allows it.
-      DISCOVER_IMAGES_ALLOW_HOSTS: fixtures,otherwire,tinywire
+      DISCOVER_IMAGES_ALLOW_HOSTS: fixtures,otherwire,tinywire,contextwire
     volumes:
       - ./tests/fixtures:/fixtures:ro
     depends_on:
@@ -30,11 +30,14 @@ services:
               # so the looser second query must run to find the wire pages.
               "--tinyfish-faults", "malformed,malformed,empty,empty,429",
               "--tinyfish-own-first", "1",
-              "--gdelt-faults", "429,limit,timeout,empty,429"]
+              "--gdelt-faults", "429,limit,timeout,empty,429",
+              # Context-finder E2E: /context-search hits live on a fourth host so they
+              # are never same_domain with feed or enrichment (wire) pages.
+              "--context-wire-base", "http://contextwire:8081"]
     networks:
       default:
         # More host names: the fake web-search hits look like other publishers.
-        aliases: [otherwire, tinywire]
+        aliases: [otherwire, tinywire, contextwire]
     volumes:
       - ./tests/fixtures:/fixtures:ro
     ports:

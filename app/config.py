@@ -479,7 +479,7 @@ TINYFISH_MIN_INTERVAL = 2.0
 class SearchProviderConfig(_Model):
     """One web-search provider used by enrichment (``enrichment.providers``)."""
 
-    name: str = Field(pattern=r"^(tinyfish|gdelt|searxng|guardian|newsdata|brave)$")
+    name: str = Field(pattern=r"^(tinyfish|gdelt|searxng|guardian|newsdata|brave|exa)$")
     base_url: str | None = None
     """API root (required for ``searxng``: your instance, with ``json`` in search.formats)."""
     api_key: str | None = None
@@ -720,6 +720,59 @@ class EnrichmentConfig(_Model):
         return self
 
 
+class ContextConfig(_Model):
+    """Background-and-context links (``app.context``): 1-3 pages from other sources that
+    add history, context, data or opposing views — never coverage of the same event, never
+    a source of the story, never summarized or alerted on. Domain rules (``deny_domains``,
+    ``social_domains``, ``aggregator_domains``, ``publisher_aliases``) come from the
+    profile's ``enrichment`` block."""
+
+    enabled: bool = False
+    providers: list[SearchProviderConfig] = Field(default_factory=_default_providers)
+    """Same provider registry/budget keys as enrichment (``search:tinyfish`` is shared);
+    ``exa`` additionally supports ``find_similar`` on the anchor URL."""
+    max_angles: int = Field(default=3, ge=1, le=8)
+    """Search angles (history / data / opposing view ...) generated per story."""
+    max_items: int = Field(default=3, ge=1, le=10)
+    """Context links kept per story."""
+    min_words: int = Field(default=300, ge=0)
+    """Extracted pages below this are rejected."""
+    similarity_floor: float = Field(default=0.10, ge=0, le=1)
+    """Below: the page is off topic."""
+    similarity_ceiling: float = Field(default=0.60, ge=0, le=1)
+    """At/above: the page is coverage of the same event (that's enrichment's job)."""
+    min_shared_entities: int = Field(default=1, ge=0, le=10)
+    min_shared_entities_heuristic: int = Field(default=2, ge=0, le=10)
+    """Shared entities required for hits found via a heuristic (non-LLM) angle."""
+    min_priority: int = Field(default=0, ge=0)
+    """Eligible when ``story.priority`` is above this ..."""
+    min_publishers: int = Field(default=2, ge=1)
+    """... or the story has at least this many distinct publishers."""
+    daily_request_budget: int | None = Field(default=30, ge=0)
+    """Context searches/day across all providers, on top of each provider's own budget."""
+    llm_judge: bool = True
+    """LLM scores each surviving page 0/1/2 for added context (kept only at 2; off: keep
+    pages without a note). Failures reject the candidate — nothing is fabricated."""
+    language: str = "en"
+    cache_hours: float = Field(default=24, ge=0)
+    empty_cache_minutes: float = Field(default=10, ge=0)
+    max_age_hours: float = Field(default=168, gt=0)
+    """Stories are eligible while published within this window."""
+    concurrency: int = Field(default=2, ge=1, le=8)
+
+    @model_validator(mode="after")
+    def _check(self) -> "ContextConfig":
+        names = [p.name for p in self.providers]
+        if len(names) != len(set(names)):
+            raise ValueError("duplicate context providers")
+        for p in self.providers:
+            if p.name == "searxng" and not p.base_url:
+                raise ValueError("the searxng provider needs base_url")
+        if self.similarity_floor >= self.similarity_ceiling:
+            raise ValueError("context.similarity_floor must be below similarity_ceiling")
+        return self
+
+
 class TopicConfig(_Model):
     """A feed tab: articles matching any `include` keyword and no `exclude` keyword."""
 
@@ -746,6 +799,7 @@ class Profile(_Model):
     llm: LLMConfig
     summaries: SummariesConfig = Field(default_factory=SummariesConfig)
     enrichment: EnrichmentConfig = Field(default_factory=EnrichmentConfig)
+    context: ContextConfig = Field(default_factory=ContextConfig)
 
     @model_validator(mode="after")
     def _check_references(self) -> "Profile":

@@ -680,6 +680,31 @@ async def enrich(
     return EnrichOut(queued=queued)
 
 
+class ContextOut(BaseModel):
+    queued: int = Field(description="Stories marked for the background/context search.")
+
+
+@router.post(
+    "/admin/context",
+    response_model=ContextOut,
+    tags=["admin"],
+    summary="Search the web for background/context links for eligible stories (or one story) now",
+)
+async def context(
+    request: Request,
+    story_id: Annotated[
+        int | None,
+        Query(description="Find context links only for this story (re-runs even if done)."),
+    ] = None,
+) -> ContextOut:
+    pipeline = request.app.state.pipeline
+    if pipeline.context is None:
+        raise HTTPException(status_code=409, detail="context search is not configured")
+    ids = [story_id] if story_id is not None else None
+    queued = await run_in_threadpool(pipeline.find_context, ids, force=story_id is not None)
+    return ContextOut(queued=queued)
+
+
 @router.post(
     "/admin/summarize",
     response_model=SummarizeOut,

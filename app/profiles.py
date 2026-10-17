@@ -426,7 +426,7 @@ def story_item(story_id: int | None, members: Sequence[Article]) -> StoryItem:
     from app.cluster.service import doc
 
     ordered = sorted(members, key=lambda m: (m.published_at, m.id))
-    feed = [m for m in ordered if m.origin != "enrichment"] or ordered
+    feed = [m for m in ordered if m.origin not in ("enrichment", "context")] or ordered
     rep_id = representative([doc(m) for m in feed]).id
     return StoryItem(
         story_id=story_id,
@@ -437,7 +437,11 @@ def story_item(story_id: int | None, members: Sequence[Article]) -> StoryItem:
 
 def get_story(session: Session, story_id: int, profile: ProfileRecord | None = None):
     """A story with all its members, or only the profile's members (None if none are left)."""
-    members = list(session.scalars(select(Article).where(Article.story_id == story_id)))
+    members = list(
+        session.scalars(
+            select(Article).where(Article.story_id == story_id, Article.origin != "context")
+        )
+    )
     if profile is not None:  # web-search members ride along with followed ones, never alone
         followed = {s.id for s in profile.sources}
         if not any(m.source_id in followed and m.origin != "enrichment" for m in members):

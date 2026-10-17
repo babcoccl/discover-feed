@@ -28,6 +28,7 @@ from app.models import ProfileRecord
 from app.pipeline import (
     Pipeline,
     clusterer_from_settings,
+    context_from_settings,
     enricher_from_settings,
     extractor_from_settings,
     images_from_settings,
@@ -171,6 +172,15 @@ def create_app(
         app.state.summaries = app.state.pipeline.summaries
         app.state.pipeline.attach_enricher(
             enricher_from_settings(
+                app.state.session_factory,
+                settings,
+                app.state.config,
+                llm_transport=llm_transport,
+                **getattr(app.state, "enrich_transports", {}),
+            )
+        )
+        app.state.pipeline.attach_context(
+            context_from_settings(
                 app.state.session_factory,
                 settings,
                 app.state.config,
