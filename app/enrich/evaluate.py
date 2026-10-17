@@ -125,6 +125,14 @@ def summary(results: list[tuple[str, StoryEnrichment]], *, markdown: bool) -> st
     link_only = sum(len(r.link_only) for _, r in results)
     if link_only:
         lines.append(f"- link-only members (enrichment.link_only): {link_only}")
+    flagged = [c for _, r in results for c in [*r.accepted, *r.link_only] if c.flag]
+    if flagged:
+        flag_domains = Counter(c.hit.domain or "?" for c in flagged)
+        lines.append(
+            f"- flagged sources (domain looks like a content farm; review for "
+            f"enrichment.quality.deny_domains): {len(flagged)} "
+            f"({', '.join(f'{d} x{n}' for d, n in flag_domains.most_common())})"
+        )
     by_rule = Counter(_via(c) for _, r in results for c in r.accepted)
     extra = {k: v for k, v in sorted(by_rule.items()) if k not in ("text", "link")}
     if extra:
@@ -171,13 +179,14 @@ def summary(results: list[tuple[str, StoryEnrichment]], *, markdown: bool) -> st
             _f(c.similarity),
             _f(c.title_similarity),
             _f(c.text_similarity),
+            c.flag or "-",
             c.hit.title[:70],
         ]
         for _, r in results
         for c in r.accepted
     ]
     lines += _table(
-        ["story", "provider", "domain", "via", "snippet", "title", "text", "headline"],
+        ["story", "provider", "domain", "via", "snippet", "title", "text", "flag", "headline"],
         rows,
         markdown,
     )

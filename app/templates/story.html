@@ -20,6 +20,7 @@
 {%- set numbered_members = story.members | rejectattr("link_only") | list -%}
 {%- set link_only_members = story.members | selectattr("link_only") | list -%}
 {%- macro web_badge() -%}<span class="ml-1 inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[0.7rem] font-medium text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" data-web-search title="Not one of your sources: found via web search to add independent coverage">found via web search</span>{%- endmacro -%}
+{%- macro flag_badge(flag) -%}<span class="ml-1 inline-flex items-center rounded-full border border-amber-300 px-1.5 py-0.5 text-[0.7rem] font-medium text-amber-700 dark:border-amber-700 dark:text-amber-400" data-quality-flag title="Source quality uncertain: the domain was flagged by a content-farm heuristic ({{ flag }}). Kept because it passed every relevance check — block the domain below if it is a confirmed farm.">source quality uncertain</span>{%- endmacro -%}
 {%- macro block_button(article_id, target) -%}{% if can_block %}<button type="button" hx-post="/story/{{ story.story_id }}/members/{{ article_id }}/block-domain" hx-target="{{ target }}" hx-swap="outerHTML" hx-confirm="Block this domain? Every member it added via web search is removed from all stories and it is never accepted again." class="ml-1.5 text-[0.7rem] font-normal text-slate-400 underline decoration-dotted hover:text-rose-600 dark:hover:text-rose-400" data-block-domain title="Deny-list this domain and remove its web-search coverage">block domain</button>{% endif %}{%- endmacro -%}
 <a href="{{ back }}" class="mb-4 inline-flex items-center gap-1 text-sm font-medium text-sky-700 hover:underline dark:text-sky-400"><span aria-hidden="true">←</span> Back to feed</a>
 <h1 class="mb-1 max-w-3xl text-2xl font-bold leading-tight tracking-tight">{{ story.title }}</h1>
@@ -55,7 +56,7 @@
   <h2 id="sources-heading" class="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Sources</h2>
   <ol class="divide-y divide-slate-200 overflow-hidden rounded-xl border border-slate-200 bg-white text-sm dark:divide-slate-800 dark:border-slate-800 dark:bg-slate-900" aria-label="Cited sources">
     {% for c in numbered %}
-    <li id="source-{{ c.index }}" class="flex gap-2 p-3"><span class="shrink-0 font-semibold text-sky-700 dark:text-sky-400">[{{ c.index }}]</span><span><a href="{{ c.url }}" target="_blank" rel="noopener noreferrer" class="font-medium hover:underline">{{ c.headline }} <span aria-hidden="true" class="text-sky-700 dark:text-sky-400">↗</span></a> <span class="text-slate-500 dark:text-slate-400">· <span data-publisher>{{ c.publisher or c.source }}</span>{% if c.via %} <span class="text-xs" data-via>via {{ c.via }}</span>{% endif %}{% if c.article_id in web_ids %}{{ web_badge() }}{{ block_button(c.article_id, "closest li") }}{% endif %}</span></span></li>
+    <li id="source-{{ c.index }}" class="flex gap-2 p-3"><span class="shrink-0 font-semibold text-sky-700 dark:text-sky-400">[{{ c.index }}]</span><span><a href="{{ c.url }}" target="_blank" rel="noopener noreferrer" class="font-medium hover:underline">{{ c.headline }} <span aria-hidden="true" class="text-sky-700 dark:text-sky-400">↗</span></a> <span class="text-slate-500 dark:text-slate-400">· <span data-publisher>{{ c.publisher or c.source }}</span>{% if c.via %} <span class="text-xs" data-via>via {{ c.via }}</span>{% endif %}{% if c.article_id in web_ids %}{{ web_badge() }}{% set cm = story.members | selectattr("id", "equalto", c.article_id) | first %}{% if cm.flag %}{{ flag_badge(cm.flag) }}{% endif %}{{ block_button(c.article_id, "closest li") }}{% endif %}</span></span></li>
     {% endfor %}
   </ol>
 </section>
@@ -67,7 +68,7 @@
   {% for article in others %}
   <li class="p-4">
     <div class="mb-1 flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
-      <span class="font-medium text-slate-700 dark:text-slate-300" data-publisher>{{ article.publisher or article.source }}</span>{% if article.via %}<span data-via>via {{ article.via }}</span>{% endif %}{% if article.found_by_search %}{{ web_badge() }}{{ block_button(article.id, "closest li") }}{% endif %}
+      <span class="font-medium text-slate-700 dark:text-slate-300" data-publisher>{{ article.publisher or article.source }}</span>{% if article.via %}<span data-via>via {{ article.via }}</span>{% endif %}{% if article.found_by_search %}{{ web_badge() }}{% if article.flag %}{{ flag_badge(article.flag) }}{% endif %}{{ block_button(article.id, "closest li") }}{% endif %}
       <span aria-hidden="true">·</span>
       <time datetime="{{ article.published_at.isoformat() }}" title="{{ article.published_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ article.published_at | reltime }}</time>
     </div>
@@ -83,7 +84,7 @@
 <p class="mt-2 max-w-3xl text-sm text-slate-500 dark:text-slate-400" data-link-only>
   Also reported by
   {%- for m in link_only_members -%}
-    <span class="inline-block"><a href="{{ m.url }}" target="_blank" rel="noopener noreferrer" class="font-medium text-slate-600 hover:underline dark:text-slate-300" data-publisher>{{ m.publisher or m.source }}</a>{{ block_button(m.id, "closest span") }}</span>{{ ", " if not loop.last }}
+    <span class="inline-block"><a href="{{ m.url }}" target="_blank" rel="noopener noreferrer" class="font-medium text-slate-600 hover:underline dark:text-slate-300" data-publisher>{{ m.publisher or m.source }}</a>{% if m.flag %}{{ flag_badge(m.flag) }}{% endif %}{{ block_button(m.id, "closest span") }}</span>{{ ", " if not loop.last }}
   {%- endfor -%}
   (link only: the page could not be fetched, so it is not counted or summarized)
 </p>

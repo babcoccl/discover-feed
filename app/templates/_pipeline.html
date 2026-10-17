@@ -114,6 +114,7 @@
       {% if en.top_domains %}<ul class="space-y-0.5 text-sm" data-enrich-top-domains>
         {% for domain, n in en.top_domains %}<li class="flex justify-between gap-4"><code>{{ domain }}</code><span class="font-medium tabular-nums">{{ n }}</span></li>{% endfor %}
       </ul><p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Scrapers here? Block them from the story page ("block domain").</p>{% else %}<p class="text-sm text-slate-500 dark:text-slate-400">None yet.</p>{% endif %}
+      {% if en.flagged %}<p class="mt-2 text-xs text-amber-800 dark:text-amber-300" data-enrich-flagged>{{ en.flagged }} flagged source{{ "s" if en.flagged != 1 }} (domain looks like a content farm): {% for d, n in en.flagged_domains %}<code>{{ d }}</code>&nbsp;{{ n }}{% if not loop.last %}, {% endif %}{% endfor %}. Review: confirmed farms go in <code>enrichment.quality.deny_domains</code> or "block domain".</p>{% endif %}
       {% if en.blocked_domains %}<p class="mt-2 text-xs text-slate-500 dark:text-slate-400" data-enrich-blocked>Blocked: {% for d in en.blocked_domains %}<code>{{ d }}</code>{% if not loop.last %}, {% endif %}{% endfor %}</p>{% endif %}
     </div>
   </div>

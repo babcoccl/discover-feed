@@ -389,6 +389,7 @@ class ContextFinder:
             brief = self._brief_text(session, result.story_id)
             deny = [
                 *self.enrichment.deny_domains,
+                *self.enrichment.quality.deny_domains,
                 *session.scalars(select(BlockedDomain.domain)),
                 *session.scalars(select(BlockedDomain.canonical)),
             ]

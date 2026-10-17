@@ -33,6 +33,7 @@ from app.enrich.filters import (
     text_check,
     title_check,
 )
+from app.enrich.quality import flag_reason
 from app.enrich.query import (
     build_queries,
     drop_short_terms,
@@ -105,6 +106,9 @@ class Candidate:
     rule: str = ""
     """Which acceptance rule passed: ``""`` for rule A, ``b`` / ``c`` / ``d`` for the
     extra rules (the candidate's ``via``)."""
+    flag: str = ""
+    """Source-quality flag (``tld:``/``name:``) on accepted candidates whose domain
+    looks like a content farm — flagged, never rejected, still added and cited."""
     fetch_detail: str = ""
     """Why the fetch failed (HTTP status, timeout, size cap, extraction, robots) —
     for the ``fetch_failed`` breakdown in evaluate."""
@@ -122,6 +126,7 @@ class Candidate:
             "shared_entities": self.shared_entities,
             "text_similarity": self.text_similarity,
             "rule": self.rule,
+            "flag": self.flag,
             "fetch_detail": self.fetch_detail,
         }
 
@@ -726,13 +731,21 @@ class Enricher:
         return outcome
 
     def _denied(self, session: Session) -> list[str]:
-        """The effective deny list: ``enrichment.deny_domains`` plus every domain the
-        admin blocked (the database wins — a YAML entry cannot unblock one)."""
+        """The effective deny list: ``enrichment.deny_domains``, confirmed content farms
+        (``enrichment.quality.deny_domains``) plus every domain the admin blocked
+        (the database wins — a YAML entry cannot unblock one)."""
         return [
             *self.config.deny_domains,
+            *self.config.quality.deny_domains,
             *session.scalars(select(BlockedDomain.domain)),
             *session.scalars(select(BlockedDomain.canonical)),
         ]
+
+    def _flag(self, c: Candidate) -> str:
+        """The source-quality flag for an accepted/link-only candidate, ``""`` when its
+        domain looks fine (``enrichment.quality``)."""
+        q = self.config.quality
+        return flag_reason(c.hit.url, tlds=q.suspicious_tlds, patterns=q.suspicious_patterns) or ""
 
     def _prescreen(self, candidates: list[Candidate], story: StoryContext) -> int:
         """The cheap rejections, before any fetch: same domain, deny / social / aggregator
@@ -809,6 +822,7 @@ class Enricher:
                     and (c.shared_entities or 0) >= cfg.min_shared_entities
                 ):
                     c.decision, c.reason = "link_only", reason
+                    c.flag = self._flag(c)
                     continue
                 c.reason = reason
                 continue
@@ -835,6 +849,7 @@ class Enricher:
                 continue
             c.decision = "accepted"
             c.reason = f"accepted_rule_{c.rule}" if c.rule else "accepted"
+            c.flag = self._flag(c)
             accepted_texts.append(c.page.text)
             story.domains.add(domain)
             need -= 1
@@ -879,6 +894,7 @@ class Enricher:
                         title=c.hit.title,
                         decision=c.decision,
                         reason=c.reason[:40],
+                        flagged=c.flag[:40],
                         similarity=c.similarity,
                         title_similarity=c.title_similarity,
                         shared_entities=c.shared_entities,
@@ -986,7 +1002,12 @@ class Enricher:
             fetched_at=now,
             image_url=c.hit.image_url or (page.image_url if page else None),
             content_hash=content_hash(c.hit.title or "", url),
-            raw_json={"provider": c.provider, "query": c.query, "similarity": c.similarity},
+            raw_json={
+                "provider": c.provider,
+                "query": c.query,
+                "similarity": c.similarity,
+                "flag": c.flag,
+            },
             text=None if link_only else (page.text if page else None),
             text_status=TextStatus.NONE.value if link_only else TextStatus.OK.value,
             text_fetched_at=now,
@@ -1101,6 +1122,15 @@ class Enricher:
             )
             if url
         )
+        flagged_rows = session.execute(
+            select(EnrichmentCandidate.url, EnrichmentCandidate.flagged).where(
+                EnrichmentCandidate.created_at >= since,
+                EnrichmentCandidate.flagged != "",
+            )
+        ).all()
+        flagged_domains = Counter(
+            canonical_domain(url, self.config.publisher_aliases) for url, _ in flagged_rows
+        )
         waiting = (pending or 0) + (retry or 0)
         providers = []
         for row in budget_use(session, self.config.providers, self.now()):
@@ -1138,6 +1168,8 @@ class Enricher:
             ],
             "reject_reasons": reasons.most_common(8),
             "top_domains": top_domains.most_common(10),
+            "flagged": len(flagged_rows),
+            "flagged_domains": flagged_domains.most_common(10),
             "blocked_domains": [d for (d,) in session.execute(select(BlockedDomain.domain)).all()],
             "providers": providers,
             "days": days,
@@ -1152,6 +1184,7 @@ def summarize_run(results: list[StoryEnrichment]) -> dict:
         "enriched": sum(1 for r in results if r.added),
         "added": sum(r.added for r in results),
         "link_only": sum(len(r.link_only) for r in results),
+        "flagged": sum(1 for r in results for c in r.candidates if c.flag),
         "failed": sum(1 for r in results if r.status == "failed"),
         "retry": sum(1 for r in results if r.status == "retry"),
         "candidates": sum(len(r.candidates) for r in results),

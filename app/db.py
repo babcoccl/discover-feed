@@ -256,7 +256,11 @@ _ENRICHMENT_COLUMNS = {
         "enrich_passes": "INTEGER NOT NULL DEFAULT 0",
         "enrich_regen_at": "DATETIME",
     },
-    "enrichment_candidates": {"title_similarity": "FLOAT", "shared_entities": "INTEGER"},
+    "enrichment_candidates": {
+        "title_similarity": "FLOAT",
+        "shared_entities": "INTEGER",
+        "flagged": "VARCHAR(40) NOT NULL DEFAULT ''",
+    },
     "profiles": {"enrichment_enabled": "BOOLEAN"},
 }
 

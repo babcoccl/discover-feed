@@ -128,6 +128,9 @@ class Member:
     via: str | None = None
     origin: str = "feed"
     """``feed`` | ``enrichment`` (found by web search; shown with a badge)."""
+    flag: str = ""
+    """Source-quality flag (``tld:``/``name:``): enrichment member whose domain looks
+    like a content farm — still shown and cited, with a "quality uncertain" badge."""
 
     @property
     def link_only(self) -> bool:
@@ -262,6 +265,7 @@ def load(view: StoryView, source_ids: Sequence[str] | None = None) -> PublishedS
             publisher=m.get("publisher") or publisher_of(m["url"], m["source"]),
             via=m.get("via"),
             origin=m.get("origin") or "feed",
+            flag=m.get("flag") or "",
         )
         for m in doc.get("members", [])
     ]
