@@ -266,7 +266,10 @@ How it works (`app/search/`, `app/enrich/`):
    stays available but is opt-in (on a live eval it rate-limited 32 of 37 requests and
    found nothing; when TinyFish cools down stories are retried rather than handed to a
    fallback that keeps failing). TinyFish is sent `exclude_domains` with the story's own
-   publishers so their hits do not use up result slots.
+   publishers plus the social networks (built-in list + `social_domains`) so their hits
+   do not use up result slots — social links were 116 of 260 candidates on one live
+   eval; fediverse hosts on arbitrary domains cannot be enumerated and stay
+   post-filtered.
    Supported: `tinyfish` ([TinyFish Search API](https://docs.tinyfish.ai/search-api/reference):
    titles, snippets and dates; key in `TINYFISH_API_KEY`, free up to 12,000 requests a day,
    `search_type: news|web`), `gdelt` (free, no key, titles only), `searxng` (your instance;
@@ -276,8 +279,10 @@ How it works (`app/search/`, `app/enrich/`):
    rests TinyFish for an hour (GDELT serves meanwhile) instead of failing every story.
    When a result has no `snippet` the parser also accepts `content`, `description`,
    `summary`, `text` and `excerpt`; each search reports how many results carried each field
-   ("result fields" in `evaluate`, `fields:` in `diagnose`), so a shape change is visible
-   instead of every snippet silently being `-`.
+   ("result fields" in `evaluate`, `fields:` in `diagnose`) — known keys that come back
+   blank count separately (e.g. `snippet:empty`) and every other raw key is counted by
+   presence, so a missing, emptied or renamed field is visible instead of every snippet
+   silently being `-`.
    `min_interval_seconds` defaults to 2 for tinyfish (30 requests / minute; lower values are
    raised to 2 unless `override_min_interval: true`), 10 for gdelt (GDELT documents one request
    per 5 s but rate-limits at 6 s spacing in practice, so it is an unreliable fallback; values
@@ -335,7 +340,7 @@ How it works (`app/search/`, `app/enrich/`):
    (default 0.25): a precise snippet can carry a page that extracts thinly. Two extra rules
    (`extra_rules`, on by default) accept real coverage that still scores low on text:
    rule C when the page shares `rule_c_entities` (default 5) names and reaches
-   `rule_c_text` (0.25); rule D when the headline matches at `rule_d_title` (0.60) with
+   `rule_c_text` (0.25); rule D when the headline matches at `rule_d_title` (0.55) with
    `rule_d_entities` (3) names and `rule_d_text` (0.22). In all cases
    it must not be a copy (5-word shingle overlap of `duplicate_overlap`
    with a member or an accepted page: syndicated wire copies collapse) or a social /

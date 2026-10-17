@@ -604,7 +604,7 @@ class ExtraRulesConfig(_Model):
     """Rule C: at least this many shared names/numbers ..."""
     rule_c_text: float = Field(default=0.25, ge=0, le=1)
     """... and extracted text at least this similar."""
-    rule_d_title: float = Field(default=0.60, ge=0, le=1)
+    rule_d_title: float = Field(default=0.55, ge=0, le=1)
     """Rule D: the hit's title this similar to the story headlines ..."""
     rule_d_entities: int = Field(default=3, ge=1, le=20)
     """... plus this many shared entities ..."""

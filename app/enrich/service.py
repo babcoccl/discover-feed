@@ -23,7 +23,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import AppConfig, EnrichmentConfig, LLMRole
-from app.enrich.domains import canonical_domain, registrable_domain
+from app.enrich.domains import SOCIAL, canonical_domain, registrable_domain
 from app.enrich.fetch import CandidateFetcher, FetchedPage
 from app.enrich.filters import (
     StoryContext,
@@ -677,15 +677,16 @@ class Enricher:
         down = [s for s in mine if s.get("kind") != "query_rejected"]
         return down[-1]["error"] if down else None
 
-    @staticmethod
-    def _excluded(provider: str, story: StoryContext) -> list[str]:
-        """The story's own publisher domains, when the provider can exclude them
-        server-side (TinyFish ``exclude_domains``); same-domain hits otherwise consume
-        result slots."""
+    def _excluded(self, provider: str, story: StoryContext) -> list[str]:
+        """The story's own publisher domains plus the social networks, when the provider
+        can exclude them server-side (TinyFish ``exclude_domains``); same-domain and
+        social hits are always rejected, so keeping them out of the results frees slots
+        for real coverage. Fediverse hosts on arbitrary domains (``mastodon.`` /
+        ``mstdn.`` substrings) cannot be enumerated and stay post-filtered."""
         cls = PROVIDERS.get(provider)
-        if cls is not None and cls.supports_exclude:
-            return sorted(story.domains)
-        return []
+        if cls is None or not cls.supports_exclude:
+            return []
+        return sorted({*story.domains, *SOCIAL, *self.config.social_domains})
 
     async def _search(
         self,

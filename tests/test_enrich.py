@@ -1369,10 +1369,13 @@ def test_publishers_count_uses_aliases(session_factory):
     [
         # live-eval scores: marktechpost.com on stories 631/632 -> rule D
         ("marktechpost.com", 0.61, 0.24, 3, "d"),
+        # title similarity between 0.55 and the old 0.60 bar is now accepted too
+        ("near.example", 0.56, 0.24, 3, "d"),
         # bbc.com and i24news.tv on story 637 -> rule C
         ("bbc.com", 0.30, 0.27, 6, "c"),
         ("i24news.tv", 0.30, 0.28, 7, "c"),
         # just under each bar stays rejected
+        ("below.example", 0.54, 0.24, 3, None),  # title below rule D's bar
         ("close.example", 0.61, 0.21, 3, None),  # text below rule D's floor
         ("four.example", 0.30, 0.30, 4, None),  # entities below rule C's bar
     ],

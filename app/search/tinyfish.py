@@ -68,6 +68,9 @@ _SNIPPET_KEYS = ("snippet", "content", "description", "summary", "text", "excerp
 ``news`` shape carries ``snippet``; if a future shape renames it the others keep it
 working, and ``fields`` records which keys actually came back."""
 _FIELDS = [*_SNIPPET_KEYS, "date", "publisher", "site_name", "authors"]
+"""Known response keys: counted separately so a key that comes back empty (``snippet:``)
+is visible next to ``snippet`` — and every other raw key is counted by presence anyway,
+so a renamed field shows up in ``fields`` too."""
 
 
 def _error_code(response: httpx.Response) -> str:
@@ -151,9 +154,12 @@ class TinyFishProvider(SearchProvider):
         for r in results:
             if not isinstance(r, dict) or not _str(r.get("url")).startswith("http"):
                 continue
-            for key in _FIELDS:
-                if _str(r.get(key)):
-                    fields[key] = fields.get(key, 0) + 1
+            for key, value in r.items():
+                name = key
+                if key in _FIELDS and not _str(value):
+                    name = f"{key}:empty"  # present but empty, e.g. "snippet": ""
+                fields[name] = fields.get(name, 0) + 1
+            # Every other key counts by presence too, so a renamed/new field shows up.
             hits.append(
                 SearchHit(
                     url=_str(r["url"]),
@@ -165,6 +171,8 @@ class TinyFishProvider(SearchProvider):
                 )
             )
         self.last_fields = fields
-        """Non-empty field counts across the raw results (evaluate prints them so an
-        upstream response-shape change shows up instead of silently losing snippets)."""
+        """Field counts across the raw results: non-empty for the known keys (``key:empty``
+        when they come back blank) plus presence for every other key (evaluate/diagnose
+        print them so an upstream shape change shows up instead of silently losing
+        snippets)."""
         return hits[:limit]

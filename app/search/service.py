@@ -52,9 +52,10 @@ class SearchOutcome:
     requests: int = 0
     """HTTP requests actually sent for this search (0: cached or skipped)."""
     fields: dict[str, int] = field(default_factory=dict)
-    """Non-empty field counts across the provider's raw results (TinyFish records which
-    of the known response keys actually came back — a missing ``snippet`` key then shows
-    up here instead of silently degrading to title-only candidates)."""
+    """Field counts across the provider's raw results (TinyFish counts the known keys,
+    ``key:empty`` for blank values and every other key by presence — a missing, emptied
+    or renamed ``snippet`` field then shows up here instead of silently degrading to
+    title-only candidates)."""
 
     @property
     def ok(self) -> bool:
