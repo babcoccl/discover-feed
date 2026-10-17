@@ -137,6 +137,8 @@ class SearchProvider(ABC):
         self.config = config
         self.client = client
         self.last_raw: str = ""
+        self.last_fields: dict[str, int] = {}
+        """Non-empty field counts across the last raw response's results."""
 
     @property
     def key_env(self) -> str | None:

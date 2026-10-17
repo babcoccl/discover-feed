@@ -26,6 +26,7 @@ from app.lifecycle import ensure_stories
 from app.models import (
     ENRICHMENT,
     Article,
+    BlockedDomain,
     EnrichmentCandidate,
     ProfileRecord,
     SearchCacheEntry,
@@ -339,19 +340,19 @@ def test_threshold_defaults_are_the_tuned_starting_points():
 
 
 @pytest.mark.parametrize(
-    ("site", "snippet", "text", "entities", "reason", "rule_b"),
+    ("site", "snippet", "text", "entities", "reason", "rule"),
     [
         # the live-eval scores: snippets of 0.43-0.48 with text of ~0.25 were dropped
-        ("gamesindustry.biz", 0.48, 0.25, 2, None, True),
-        ("phoronix.com", 0.46, 0.30, 3, None, True),
-        ("shacknews.com", 0.43, 0.30, 2, "low_text_similarity", False),  # weak snippet
-        ("thin.example", 0.48, 0.20, 2, "low_text_similarity", False),  # below the floor
-        ("few.example", 0.48, 0.30, 1, "few_shared_entities", False),
-        ("strong.example", 0.40, 0.60, 2, None, False),  # rule A still wins
+        ("gamesindustry.biz", 0.48, 0.25, 2, None, "b"),
+        ("phoronix.com", 0.46, 0.30, 3, None, "b"),
+        ("shacknews.com", 0.43, 0.30, 2, "low_text_similarity", ""),  # weak snippet
+        ("thin.example", 0.48, 0.20, 2, "low_text_similarity", ""),  # below the floor
+        ("few.example", 0.48, 0.30, 1, "few_shared_entities", ""),
+        ("strong.example", 0.40, 0.60, 2, None, ""),  # rule A still wins
     ],
 )
 def test_combined_rule_b_accepts_strong_snippets(
-    monkeypatch, site, snippet, text, entities, reason, rule_b
+    monkeypatch, site, snippet, text, entities, reason, rule
 ):
     """Rule B: snippet >= 0.45 + entities >= 2 + text >= 0.25 accepts below the
     min_text_similarity threshold; the near-duplicate check still applies."""
@@ -368,7 +369,7 @@ def test_combined_rule_b_accepts_strong_snippets(
     )
     assert verdict.reason == reason and verdict.score == text
     if reason is None:
-        assert verdict.rule_b == rule_b
+        assert verdict.rule == rule
 
 
 @pytest.mark.parametrize(
@@ -1280,3 +1281,300 @@ def test_reenrich_stories_that_ended_with_provider_errors(session_factory):
         story = session.get(Story, story_id)
         assert story.enrich_status == "retry" and story.enrich_next_attempt_at is not None
         assert story_id in enricher.pending(session)
+
+
+# --- Phase 10.4: source quality, publisher aliases, extra rules, block domain -------------
+
+
+def test_domain_lists_cover_social_and_aggregators():
+    assert blocked_reason("https://www.threads.com/@x/post/1") == "social"
+    assert blocked_reason("https://threads.net/@x/post/1") == "social"
+    assert blocked_reason("https://x.com/x/status/1") == "social"
+    for host in ("mastodon.social", "mastodon.online", "mstdn.jp", "fosstodon.org", "hachyderm.io"):
+        assert blocked_reason(f"https://{host}/@user/1") == "social", host
+    # a mastodon-style host on any domain: no fixed list covers them
+    assert blocked_reason("https://mastodon.example.org/@u/1") == "social"
+    assert blocked_reason("https://social.mstdn.example/@u/1") == "social"
+    for host in (
+        "daily.dev",
+        "app.daily.dev",
+        "flipboard.com",
+        "newsbreak.com",
+        "ground.news",
+        "smartnews.com",
+        "msn.com",
+    ):
+        assert blocked_reason(f"https://{host}/item/1") == "aggregator", host
+    # configured extensions behave like the built-ins
+    assert blocked_reason("https://chat.example/post", social=("chat.example",)) == "social"
+    assert blocked_reason("https://scrape.example/x", aggregators=("scrape.example",)) == (
+        "aggregator"
+    )
+
+
+def test_publisher_aliases_collapse_editions():
+    from app.enrich.domains import canonical_domain
+
+    aliases = {"bbc.co.uk": "bbc.com", "guardian.co.uk": "theguardian.com"}
+    assert canonical_domain("https://www.bbc.co.uk/news/x", aliases) == "bbc.com"
+    assert canonical_domain("https://amp.bbc.com/news/x", aliases) == "bbc.com"
+    assert canonical_domain("https://m.theguardian.com/x", aliases) == "theguardian.com"
+    assert canonical_domain("https://uk.Guardian.CO.UK/x", aliases) == "theguardian.com"
+    # and in the cheap same-domain check, before any fetch
+    hit = SearchHit(url="https://www.bbc.co.uk/news/x", title="t")
+    ctx = story_ctx(domains={"bbc.com"})
+    got = pre_filter(hit, ctx, deny=(), max_gap=timedelta(hours=72), language=None, aliases=aliases)
+    assert got == "same_domain"
+    assert (
+        pre_filter(hit, ctx, deny=(), max_gap=timedelta(hours=72), language=None) is None
+    )  # no aliases: different publishers again
+
+
+def test_publishers_count_uses_aliases(session_factory):
+    story_id = seed(session_factory)
+    enricher = make_enricher(session_factory, FakeSearch())
+    with session_factory() as session:
+        assert enricher.publishers(session, story_id) == 1
+        session.add(
+            Article(
+                source_id="b",
+                url="https://www.bbc.co.uk/news/1",
+                canonical_url="https://www.bbc.co.uk/news/1",
+                title="t",
+                published_at=NOW,
+                fetched_at=NOW,
+                content_hash="x1",
+                story_id=story_id,
+            )
+        )
+        session.add(
+            Article(
+                source_id="c",
+                url="https://bbc.com/news/2",
+                canonical_url="https://bbc.com/news/2",
+                title="t2",
+                published_at=NOW,
+                fetched_at=NOW,
+                content_hash="x2",
+                story_id=story_id,
+            )
+        )
+        session.commit()
+        # news.example + bbc (co.uk and .com count once) = 2 publishers
+        assert enricher.publishers(session, story_id) == 2
+
+
+@pytest.mark.parametrize(
+    ("site", "title_sim", "text", "entities", "rule"),
+    [
+        # live-eval scores: marktechpost.com on stories 631/632 -> rule D
+        ("marktechpost.com", 0.61, 0.24, 3, "d"),
+        # bbc.com and i24news.tv on story 637 -> rule C
+        ("bbc.com", 0.30, 0.27, 6, "c"),
+        ("i24news.tv", 0.30, 0.28, 7, "c"),
+        # just under each bar stays rejected
+        ("close.example", 0.61, 0.21, 3, None),  # text below rule D's floor
+        ("four.example", 0.30, 0.30, 4, None),  # entities below rule C's bar
+    ],
+)
+def test_extra_rules_c_and_d_accept_real_coverage(
+    monkeypatch, site, title_sim, text, entities, rule
+):
+    """Below ``min_text_similarity`` and without a strong snippet: rule C accepts many
+    shared entities with a lower text floor, rule D a matching headline + entities."""
+    hit_title = f"Ubuntu 26.10 on {site}"
+    monkeypatch.setattr(
+        "app.enrich.filters.similarity",
+        lambda a, _b: title_sim if a == hit_title else text,
+    )
+    monkeypatch.setattr("app.enrich.filters.shared_entities", lambda _a, _b: entities)
+    cfg = EnrichmentConfig()
+    verdict = text_check(
+        hit_title,
+        OTHER_TEXT,
+        story_ctx(),
+        threshold=cfg.min_text_similarity,
+        min_entities=cfg.min_shared_entities,
+        duplicate_overlap=cfg.duplicate_overlap,
+        snippet_similarity=0.20,  # rule B does not apply
+        extra_rules=cfg.extra_rules,
+    )
+    if rule is None:
+        assert verdict.reason == "low_text_similarity"
+    else:
+        assert verdict.reason is None and verdict.rule == rule
+    # disabled: same scores reject
+    off = EnrichmentConfig(extra_rules={"enabled": False})
+    verdict = text_check(
+        hit_title,
+        OTHER_TEXT,
+        story_ctx(),
+        threshold=cfg.min_text_similarity,
+        min_entities=cfg.min_shared_entities,
+        duplicate_overlap=cfg.duplicate_overlap,
+        snippet_similarity=0.20,
+        extra_rules=off.extra_rules,
+    )
+    assert verdict.reason == "low_text_similarity"
+
+
+def test_anchor_url_patterns_skip_opinion_and_features(session_factory):
+    """Opinion columns / live blogs / features are searched and never match: the anchor
+    URL's path skips them (``skipped:url_pattern``)."""
+    enricher = make_enricher(session_factory, FakeSearch())
+    headlines = ["Springfield mayor Ortiz wins council vote on electric buses"]
+    for path in (
+        "/commentisfree/2026/oct/17/buses",
+        "/opinion/2026/10/buses",
+        "/opinions/buses",
+        "/comment/buses",
+        "/columnists/ortiz/buses",
+        "/blogs/city-hall/buses",
+        "/live/2026/oct/17/buses-live",
+    ):
+        assert enricher.skip_reason(headlines, f"https://news.example{path}") == (
+            "skipped:url_pattern"
+        ), path
+    assert enricher.skip_reason(headlines, "https://news.example/news/buses") is None
+    cfg = EnrichmentConfig(skip_url_patterns=[])
+    enricher.config = cfg
+    assert enricher.skip_reason(headlines, "https://news.example/opinion/buses") is None
+
+
+def test_query_cleanup_drops_contractions_and_filler():
+    from app.enrich.query import heuristic_query
+
+    q = heuristic_query(["You can't make this stuff up: fascinated by the Elizabeth Holmes trial"])
+    tokens = set(q.lower().split())
+    assert "elizabeth" in tokens and "holmes" in tokens
+    for filler in ("can't", "cant", "make", "stuff", "fascinated"):
+        assert filler not in tokens, (filler, q)
+    # contractions drop whole; possessives keep the noun
+    q = heuristic_query(["Apple's quarterly results aren't what analysts'd expect"])
+    tokens = set(q.lower().split())
+    assert "apple" in tokens and "arent" not in tokens and "analystsd" not in tokens
+    # O'Brien-style apostrophes clean into one token
+    from app.enrich.query import _clean
+
+    assert _clean("O'Brien") == "OBrien"
+    assert _clean("Apple's") == "Apple"
+
+
+def test_block_domain_denies_removes_and_queues(session_factory):
+    """The admin action: the domain is persisted (and overrides YAML), its enrichment
+    members disappear from every story, and those stories queue for one regeneration."""
+    story_id = seed(session_factory)
+    enricher = make_enricher(session_factory, FakeSearch())
+    run(enricher, story_id)
+    with session_factory() as session:
+        member = session.scalar(select(Article).where(Article.origin == ENRICHMENT))
+        story = session.get(Story, story_id)
+        story.state = StoryState.BRIEF_READY.value
+        session.commit()
+        member_url = member.url
+    result = enricher.block_domain(member_url)
+    assert result["domain"] == "wire.example" and result["removed"] == 1
+    assert result["stories"] == [story_id] and result["queued"] == 1
+    with session_factory() as session:
+        assert session.get(Story, story_id).state == StoryState.CLUSTERED
+        assert not session.scalars(select(Article).where(Article.origin == ENRICHMENT)).all()
+        blocked = session.scalars(select(BlockedDomain)).all()
+        assert [(b.domain, b.canonical) for b in blocked] == [("wire.example", "wire.example")]
+    # and it is denied on the next pass even though YAML does not list it
+    with session_factory() as session:
+        assert "wire.example" in enricher._denied(session)
+
+
+def test_block_domain_via_story_page(settings, session_factory):
+    """POST /story/{id}/members/{article_id}/block-domain (admin-only via the POST
+    guard) removes the member; a feed member's id 404s."""
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+
+    story_id = seed(session_factory)
+    enricher = make_enricher(session_factory, FakeSearch())
+    run(enricher, story_id)
+    with session_factory() as session:
+        member = session.scalar(select(Article).where(Article.origin == ENRICHMENT))
+        feed = session.scalar(select(Article).where(Article.origin != ENRICHMENT))
+        session.commit()
+        member_id, feed_id = member.id, feed.id
+    with TestClient(create_app(settings)) as client:
+        client.app.state.session_factory = session_factory  # the seeded DB
+        client.app.state.pipeline.enricher = enricher
+        assert client.post(f"/story/{story_id}/members/{feed_id}/block-domain").status_code == 404
+        ok = client.post(
+            f"/story/{story_id}/members/{member_id}/block-domain",
+            headers={"HX-Request": "true"},
+        )
+        assert ok.status_code == 200
+    with session_factory() as session:
+        assert session.get(Article, member_id) is None
+        assert session.scalars(select(BlockedDomain)).all()
+
+
+def test_fetch_failure_causes_are_categorized():
+    from app.enrich.evaluate import _fetch_cause
+
+    assert _fetch_cause("failed: HTTP 503") == "http_503"
+    assert _fetch_cause("failed: Timeout: ReadTimeout") == "timeout"
+    assert _fetch_cause("failed: larger than 1048576 bytes") == "size_cap"
+    assert _fetch_cause("failed: extracted 3 words (< 40)") == "extract_empty"
+    assert _fetch_cause("failed: not HTML (application/pdf)") == "not_html"
+    assert _fetch_cause("blocked: example.com refused") == "blocked"
+    assert _fetch_cause("skipped: disallowed by robots.txt") == "robots"
+    assert _fetch_cause("failed: something else") == "other"
+
+
+def test_backtest_hides_everything_but_the_anchor(session_factory):
+    """anchor_only pretends a multi-publisher story has one member: its other feed
+    domains are no longer same-domain rejections and the context only sees the anchor."""
+    story_id = seed(session_factory)
+    with session_factory() as session:
+        session.add(
+            Article(
+                source_id="b",
+                url="https://wire.example/covered",
+                canonical_url="https://wire.example/covered",
+                title="Springfield council approves electric buses",
+                published_at=NOW,
+                fetched_at=NOW,
+                content_hash="zz1",
+                story_id=story_id,
+            )
+        )
+        session.commit()
+    with session_factory() as session:
+        enricher = make_enricher(session_factory, FakeSearch())
+        full, _ = enricher.context(session, story_id)
+        solo, anchor = enricher.context(session, story_id, anchor_only=True)
+        assert len(full.domains) == 2 and solo.domains == {"news.example"}
+        assert solo.headlines == [anchor.title] and len(solo.texts) == 1
+
+
+def test_backtest_story_picker_needs_three_publishers(session_factory):
+    from app.enrich.evaluate import _backtest_stories
+
+    story_id = seed(session_factory)
+    enricher = make_enricher(session_factory, FakeSearch())
+    with session_factory() as session:
+        assert _backtest_stories(session, enricher.config, None, 30) == []
+        for n, dom in enumerate(("wire.example", "other.example")):
+            session.add(
+                Article(
+                    source_id="x",
+                    url=f"https://{dom}/a",
+                    canonical_url=f"https://{dom}/a",
+                    title="t",
+                    published_at=NOW,
+                    fetched_at=NOW,
+                    content_hash=f"zz{n}",
+                    story_id=story_id,
+                )
+            )
+        session.commit()
+        picks = _backtest_stories(session, enricher.config, None, 30)
+        assert [p[0] for p in picks] == [story_id]
+        _id, _title, anchor, expected = picks[0]
+        assert anchor == "news.example" and expected == {"wire.example", "other.example"}

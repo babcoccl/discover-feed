@@ -249,10 +249,17 @@ update it when fixtures or defaults change. README "Tuning clustering" has the f
   them after `--rebuild`. Queries over members that feed alerts, cards or profile visibility
   must filter `origin != "enrichment"`.
 - Debug: `python -m app.enrich.diagnose --auto|--story-id N [--dry-run]`,
-  `python -m app.enrich.evaluate --stories 30 --markdown [--provider gdelt] [--wait]`, in
+  `python -m app.enrich.evaluate --stories 30 --markdown [--provider gdelt] [--wait]
+  [--story-ids 1,2,3] [--backtest]`, in
   Docker `docker exec discover-feed python -m app.enrich.evaluate ...` (both read-only;
   exit 3 during a provider cooldown) (Windows:
-  `.venv\Scripts\python -m app.enrich.diagnose ...`). Admin: `POST /api/admin/enrich`.
+  `.venv\Scripts\python -m app.enrich.diagnose ...`). `--backtest` needs stories with >= 3
+  feed publishers: it hides all but the anchor, runs the real search + filters (no writes)
+  and prints recall = share of the other publishers' canonical domains found. Admin:
+  `POST /api/admin/enrich`, `POST /story/{id}/members/{article_id}/block-domain` (persisted
+  `blocked_domains` deny list; removes the domain's members, requeues each story once).
+  `evaluate` also prints fetch-failure causes with their domains and per-provider result
+  fields (snippet/date/publisher coverage).
 - Tests: `tests/test_tinyfish.py` (TinyFish provider, fallback to GDELT, real-headline
   queries, skips, GDELT too-short; its `Router` sends `*tinyfish*` hosts to a fake TinyFish
   and the rest to `FakeSearch`). `tests/test_enrich.py` (fake GDELT/SearXNG/TinyFish via `httpx.MockTransport`, a fake page
@@ -272,13 +279,23 @@ update it when fixtures or defaults change. README "Tuning clustering" has the f
 - Thresholds (`min_snippet_similarity` 0.25, `min_text_similarity` 0.35) are starting points
   from one live run (Ubuntu 26.10); tune with `evaluate` on live data. Rule B accepts a
   candidate whose snippet >= `min_snippet_strong` (0.45) + `min_shared_entities` + text >=
-  `min_text_floor` (0.25) even below `min_text_similarity` (reason `accepted_rule_b`,
-  marker `rule_b` in `evaluate`). `link_only: true` stores strong-snippet hits whose page
+  `min_text_floor` (0.25) even below `min_text_similarity` (marker `b` in the `via`
+  column). `extra_rules` (on by default) add rule C (entities >= `rule_c_entities` 5 and
+  text >= `rule_c_text` 0.25 -> `entities+c`) and rule D (title >= `rule_d_title` 0.60 and
+  entities >= `rule_d_entities` 3 and text >= `rule_d_text` 0.22 -> `title+d`).
+  `link_only: true` stores strong-snippet hits whose page
   cannot be fetched (not robots) as `text_status = none` members: "also reported by
   (link only)", never summarized/cited/counted. Threshold tests pin
   the live scores by monkeypatching `app.enrich.filters.similarity` (and
-  `shared_entities` for entity-dependent paths). `diagnose` prints a
+  `shared_entities` for entity-dependent paths; rule D's title check is
+  `similarity(hit.title, headline)` so mock it separately). `diagnose` prints a
   `fetch: <status> (<reason>)` line under candidates whose page was not fetched.
+  `publisher_aliases` collapses editions (bbc.co.uk = bbc.com) and `www.`/`amp.`/`m.`/`uk.`
+  prefixes in the same-domain and publisher-count checks; `social_domains` /
+  `aggregator_domains` extend the built-in lists (threads.*, x.com, fediverse, daily.dev,
+  flipboard, msn ...); `skip_url_patterns` skips anchor URLs by path
+  (/opinion/, /commentisfree/ ...). TinyFish snippet parsing falls back to
+  content/description/summary/text/excerpt and reports per-search field coverage.
   9to5linux.com's robots.txt allows named crawlers only (`User-agent: * Disallow: /`,
   confirmed live), so its pages are `robots`, not an extractor bug — and not link_only
   either (do not spoof a crawler User-Agent).

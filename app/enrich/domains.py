@@ -17,12 +17,19 @@ _MULTI_PART_SUFFIXES = frozenset(
 SOCIAL = frozenset(
     {
         *("twitter.com", "x.com", "t.co", "facebook.com", "fb.com", "instagram.com"),
-        *("threads.net", "tiktok.com", "youtube.com", "youtu.be", "reddit.com", "redd.it"),
-        *("linkedin.com", "bsky.app", "mastodon.social", "t.me", "telegram.org", "pinterest.com"),
-        *("tumblr.com", "snapchat.com", "discord.com", "vk.com", "weibo.com", "quora.com"),
+        *("threads.net", "threads.com", "tiktok.com", "youtube.com", "youtu.be"),
+        *("reddit.com", "redd.it", "linkedin.com", "bsky.app", "bsky.social"),
+        *("mastodon.social", "mastodon.online", "mstdn.social", "mstdn.jp", "mas.to"),
+        *("fosstodon.org", "hachyderm.io", "infosec.exchange", "pawoo.net"),
+        *("t.me", "telegram.org", "pinterest.com", "tumblr.com", "snapchat.com"),
+        *("discord.com", "vk.com", "weibo.com", "quora.com"),
         *("medium.com", "substack.com", "truthsocial.com", "rumble.com", "twitch.tv"),
     }
 )
+
+_SOCIAL_HOST_PARTS = ("mastodon.", "mstdn.")
+"""Any host containing one of these counts as a fediverse (mastodon-style) host —
+instances live on arbitrary domains, so no fixed list covers them."""
 
 AGGREGATORS = frozenset(
     {
@@ -32,6 +39,7 @@ AGGREGATORS = frozenset(
         *("digg.com", "smartnews.com", "newsnow.co.uk", "drudgereport.com", "memeorandum.com"),
         *("techmeme.com", "bing.com", "duckduckgo.com", "archive.org", "archive.ph"),
         *("newsnow.com", "pressreader.com", "headtopics.com", "biztoc.com", "newsable.com"),
+        *("daily.dev", "app.daily.dev"),
     }
 )
 
@@ -56,13 +64,35 @@ def _matches(name: str, domains) -> bool:
     return any(name == d or name.endswith(f".{d}") for d in domains)
 
 
-def blocked_reason(url: str, deny: list[str] | tuple[str, ...] = ()) -> str | None:
-    """``social`` / ``aggregator`` / ``denied`` when enrichment must not use ``url``."""
+def canonical_domain(value: str, aliases: dict[str, str] | None = None) -> str:
+    """The publisher's canonical domain: the registrable domain, then mapped through
+    ``aliases`` so editions of the same publisher (``bbc.co.uk`` / ``bbc.com``,
+    ``guardian.co.uk`` / ``theguardian.com``) count as one. Subdomains (``amp.``,
+    ``m.``, ``uk.``) already collapse to the registrable domain."""
+    domain = registrable_domain(value)
+    if not aliases:
+        return domain
+    return aliases.get(domain, domain)
+
+
+def blocked_reason(
+    url: str,
+    deny: list[str] | tuple[str, ...] = (),
+    *,
+    social=(),
+    aggregators=(),
+) -> str | None:
+    """``social`` / ``aggregator`` / ``denied`` when enrichment must not use ``url``.
+    ``social`` / ``aggregators``: host lists that extend the built-ins."""
     name = host(url)
     if _matches(name, deny):
         return "denied"
-    if _matches(name, SOCIAL):
+    if (
+        _matches(name, SOCIAL)
+        or _matches(name, social)
+        or any(part in name for part in _SOCIAL_HOST_PARTS)
+    ):
         return "social"
-    if _matches(name, AGGREGATORS):
+    if _matches(name, AGGREGATORS) or _matches(name, aggregators):
         return "aggregator"
     return None

@@ -17,12 +17,13 @@ from app import images
 from app import profiles as repo
 from app import story_views as views
 from app.alerts import repo as alert_repo
+from app.auth import is_admin
 from app.config import CardStyle, NoImageStyle
 from app.demo_images import demo_image
 from app.demo_pages import FIXTURE_DIR, page_html
 from app.images.cache import image_key, is_key
 from app.images.service import ImageWorker, image_stats
-from app.models import ProfileRecord, StorySummary, Topic
+from app.models import ENRICHMENT, Article, ProfileRecord, StorySummary, Topic
 from app.pipeline_panel import pipeline_queue, quality_metrics, recent_attempts
 from app.runs import last_runs, text_status_counts
 from app.secret_warnings import missing_secrets
@@ -338,6 +339,7 @@ def story_page(
             summary=story.brief,
             **_report_context(request, story),
             **_chat_context(request, session, story.story_id, p),
+            can_block=is_admin(request) and _enricher(request) is not None,
         )
     return TEMPLATES.TemplateResponse(request, "story.html", context)
 
@@ -395,6 +397,24 @@ def story_regenerate(request: Request, story_id: int, kind: str = "both") -> Res
         story = views.published_story(session, story_id)
     context = {**_report_context(request, story, "queued"), "story_id": story_id}
     return TEMPLATES.TemplateResponse(request, "_report.html", context)
+
+
+@router.post("/story/{story_id}/members/{article_id}/block-domain")
+def story_block_domain(request: Request, story_id: int, article_id: int) -> Response:
+    """Block this domain (admin): deny-list it, drop every enrichment member it added
+    and queue the affected stories for one regeneration."""
+    enricher = _enricher(request)
+    if enricher is None:
+        raise HTTPException(status_code=409, detail="enrichment is not configured")
+    with _session(request) as session:
+        article = session.get(Article, article_id)
+        if article is None or article.story_id != story_id or article.origin != ENRICHMENT:
+            raise HTTPException(status_code=404, detail="no web-search member")
+        url = article.url
+    result = enricher.block_domain(url)
+    if _is_htmx(request):
+        return HTMLResponse("")
+    return RedirectResponse(f"/story/{story_id}?blocked={result['domain']}", status_code=303)
 
 
 # --- settings ------------------------------------------------------------------------------

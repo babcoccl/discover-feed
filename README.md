@@ -257,7 +257,10 @@ How it works (`app/search/`, `app/enrich/`):
    language) is a looser one sent (`"Federal Reserve" (Powell OR 2025 OR rates)`), at most
    `max_queries_per_story` (default 2) requests per provider and story. `query_mode: llm`
    asks the summarizer for up to 2 queries, trimmed to the same per-provider limits, falling
-   back to the heuristic.
+   back to the heuristic. Before ranking, apostrophes are cleaned (`O'Brien` -> `OBrien`,
+   `Apple's` -> `Apple`), whole contractions (`can't`, `we're`, `it's`) and filler words that
+   carry no signal (`make`, `stuff`, `fascinated`, `says` ...) are dropped, keeping names,
+   numbers and distinctive nouns.
 3. Each provider in `providers` is asked in order until enough sources are found (a failing
    or empty provider falls through to the next). The default is `tinyfish` alone: `gdelt`
    stays available but is opt-in (on a live eval it rate-limited 32 of 37 requests and
@@ -271,6 +274,10 @@ How it works (`app/search/`, `app/enrich/`):
    env var name). Without `TINYFISH_API_KEY` TinyFish is asked keyless (no `X-API-Key`
    header; works through a keyless proxy `base_url`); the real API answers 401 then, which
    rests TinyFish for an hour (GDELT serves meanwhile) instead of failing every story.
+   When a result has no `snippet` the parser also accepts `content`, `description`,
+   `summary`, `text` and `excerpt`; each search reports how many results carried each field
+   ("result fields" in `evaluate`, `fields:` in `diagnose`), so a shape change is visible
+   instead of every snippet silently being `-`.
    `min_interval_seconds` defaults to 2 for tinyfish (30 requests / minute; lower values are
    raised to 2 unless `override_min_interval: true`), 10 for gdelt (GDELT documents one request
    per 5 s but rate-limits at 6 s spacing in practice, so it is an unreliable fallback; values
@@ -301,10 +308,18 @@ How it works (`app/search/`, `app/enrich/`):
    zero hits is not degraded: the fallback's result counts as done.
 5. **Second pass:** stories still under `target_sources` are searched once more
    `second_pass_hours` (default 3; 0 = off) after the first pass.
-6. Candidates are rejected before fetching for: same registrable domain as a member
-   (`bbc.co.uk`, `cnn.com`), social sites and aggregators, `deny_domains`, an already known
+6. Candidates are rejected before fetching for: same domain as a member
+   (`bbc.co.uk`, `cnn.com`; `publisher_aliases` first collapses regional editions —
+   `bbc.com` = `bbc.co.uk`, `theguardian.com` = `guardian.co.uk` — and `www.`/`amp.`/`m.`/
+   `uk.` prefixes, so the same publisher is caught before any fetch and counted once in the
+   publishers tally), social sites and aggregators, `deny_domains` and the persisted
+   blocked-domain list (see below), an already known
    URL, a publication time more than `max_time_gap_hours` from the story, another language,
-   or title/snippet TF-IDF similarity below `min_snippet_similarity` (default 0.25). Hits without a snippet
+   or title/snippet TF-IDF similarity below `min_snippet_similarity` (default 0.25). The
+   social list covers threads.com / threads.net, x.com, Bluesky and the common fediverse
+   hosts (plus any `mastodon.`/`mstdn.` host); the aggregator list covers daily.dev,
+   flipboard.com, newsbreak.com, ground.news, smartnews.com and msn.com —
+   `social_domains` / `aggregator_domains` extend both. Hits without a snippet
    (GDELT returns titles only) must share an entity with the headlines and reach
    `min_title_similarity` (default 0.30); both scores are stored in `enrichment_candidates`
    and the text check below has the final say. The best
@@ -317,9 +332,15 @@ How it works (`app/search/`, `app/enrich/`):
    is accepted when it reaches `min_text_similarity` (default 0.35), or — rule B — when the
    hit's snippet was strong (`min_snippet_strong`, default 0.45), the text shares
    `min_shared_entities` names with the headlines and stays above `min_text_floor`
-   (default 0.25): a precise snippet can carry a page that extracts thinly. In both cases
+   (default 0.25): a precise snippet can carry a page that extracts thinly. Two extra rules
+   (`extra_rules`, on by default) accept real coverage that still scores low on text:
+   rule C when the page shares `rule_c_entities` (default 5) names and reaches
+   `rule_c_text` (0.25); rule D when the headline matches at `rule_d_title` (0.60) with
+   `rule_d_entities` (3) names and `rule_d_text` (0.22). In all cases
    it must not be a copy (5-word shingle overlap of `duplicate_overlap`
-   with a member or an accepted page: syndicated wire copies collapse).
+   with a member or an accepted page: syndicated wire copies collapse) or a social /
+   aggregator / paywalled page; `evaluate`'s `via` column records which rule accepted
+   (`text` / `snippet+b` / `entities+c` / `title+d` / `link`).
 7. Accepted pages become members with `origin = enrichment`, source id `web:<domain>`,
    pinned to the story through incremental clustering, merges and `--rebuild`. They count
    toward "N sources", are cited and numbered in briefs and reports like any member, and are
@@ -331,6 +352,11 @@ How it works (`app/search/`, `app/enrich/`):
    paywalled — never robots-disallowed) is stored as a member with `text_status = none`:
    the story page lists it as "also reported by (link only)"; it is never summarized,
    cited or counted in the sources.
+   Admins get a **Block this domain** action on every web-search member (story page):
+   it persists the domain in a `blocked_domains` table — applied like `deny_domains` on
+   every later pass, including publisher aliases — removes every enrichment member on it
+   and queues the affected stories for one regeneration. Settings > Pipeline lists the
+   domains accepted most often in the last 7 days so scraper sites are visible at a glance.
 8. Sources found after a story was published regenerate it once (`enrich_regens`); the
    published version stays visible until the new one passes the publish gate. At most
    `late_regen_max_per_hour` (default 6) stories are regenerated that way per hour, so
@@ -380,6 +406,13 @@ as more live data comes in (real-world false-match rates are not measured yet):
 python -m app.enrich.diagnose --story-id 42 --dry-run   # queries, raw responses, decisions
 python -m app.enrich.diagnose --auto                     # newest eligible story; adds pages
 python -m app.enrich.evaluate --stories 30 --markdown    # dry run over 30 recent stories
+python -m app.enrich.evaluate --story-ids 631,632,637    # chosen stories only
+python -m app.enrich.evaluate --backtest                 # ground-truth recall: on stories
+                                                          # with >= 3 feed publishers it hides
+                                                          # all but the anchor, runs the real
+                                                          # search + filters (no writes) and
+                                                          # reports how many of the real
+                                                          # publishers' domains were found
 python -m app.enrich.evaluate --stories 20 --provider gdelt   # only the fallback
 python -m app.enrich.evaluate --stories 20 --wait             # wait out cooldowns
 # in the Docker container (same database, so the same pacing and cooldowns as the app):
@@ -392,11 +425,16 @@ Windows: `.venv\Scripts\python -m app.enrich.diagnose --auto --dry-run` (PowerSh
 
 `evaluate` and `diagnose --dry-run` write nothing (no `enrich_status`, no candidates, no
 search-cache entries; only the shared pacing/cooldown state and request counts). `evaluate`
-prints every accepted page with its snippet / title / text scores (check them for false
-matches), rejections by reason with average scores, stories not searched, per provider the
-requests actually sent vs cooldown skips and errors grouped by exact text (count and an
+prints every accepted page with its snippet / title / text scores and the `via` rule
+(check them for false matches), rejections by reason with average scores, fetch failures
+broken down by cause (HTTP status, timeout, size cap, empty extraction, blocked, robots)
+with the domains behind each, per provider the result fields its responses carried plus
+requests sent vs cooldown skips and errors grouped by exact text (count and an
 example query), and per story the queries sent, hits per query and the top three rejected
-candidates with scores and reasons. A provider that is cooling down (shared with the app)
+candidates with scores and reasons. `--backtest` gives a ground-truth recall number: on
+stories that already have 3+ feed publishers it hides all but the anchor member, runs the
+real search and filters (no writes) and reports recall — the share of the other real
+publishers' domains the search found — per story and overall, plus the extra domains found. A provider that is cooling down (shared with the app)
 is skipped and its fallback answers; with every provider cooling down both refuse (exit 3).
 `--wait` waits instead, and `evaluate --wait` also waits whenever a provider starts cooling
 down mid-run ("waiting for gdelt (cooling down)"). Runs take at least

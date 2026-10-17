@@ -576,6 +576,42 @@ DEFAULT_STRIP_TITLE_PREFIXES = [
 ]
 
 
+DEFAULT_SKIP_URL_PATTERNS = [
+    "/commentisfree/",
+    "/opinion/",
+    "/opinions/",
+    "/comment/",
+    "/columnists/",
+    "/blogs/",
+    "/live/",
+]
+DEFAULT_PUBLISHER_ALIASES = {
+    "bbc.co.uk": "bbc.com",
+    "guardian.co.uk": "theguardian.com",
+}
+"""Registrable domains that are the same publisher, keyed to the canonical name
+(``bbc.co.uk`` -> ``bbc.com``). Applied after ``www.``/``amp.``/``m.`` subdomains
+collapse to the registrable domain."""
+
+
+class ExtraRulesConfig(_Model):
+    """Acceptance rules beyond rule A (text similarity) and rule B (strong snippet):
+    real coverage whose extracted text scores just below ``min_text_similarity`` but
+    shares enough of the story's named entities, or whose headline matches closely."""
+
+    enabled: bool = True
+    rule_c_entities: int = Field(default=5, ge=1, le=20)
+    """Rule C: at least this many shared names/numbers ..."""
+    rule_c_text: float = Field(default=0.25, ge=0, le=1)
+    """... and extracted text at least this similar."""
+    rule_d_title: float = Field(default=0.60, ge=0, le=1)
+    """Rule D: the hit's title this similar to the story headlines ..."""
+    rule_d_entities: int = Field(default=3, ge=1, le=20)
+    """... plus this many shared entities ..."""
+    rule_d_text: float = Field(default=0.22, ge=0, le=1)
+    """... and extracted text at least this similar."""
+
+
 class EnrichmentConfig(_Model):
     """Web-search enrichment: find other publishers' coverage of single-sourced stories."""
 
@@ -608,6 +644,19 @@ class EnrichmentConfig(_Model):
     duplicate_overlap: float = Field(default=0.6, gt=0, le=1)
     """Shingle overlap at which a candidate counts as a copy (syndicated wire text)."""
     deny_domains: list[str] = Field(default_factory=list)
+    """Blocked candidate domains; the admin "Block this domain" action persists more in
+    the database (both apply, the DB wins when they disagree)."""
+    social_domains: list[str] = Field(default_factory=list)
+    """Extra hosts treated as social (never enrichment members); the built-in list
+    already covers the common networks and mastodon-style hosts."""
+    aggregator_domains: list[str] = Field(default_factory=list)
+    """Extra hosts treated as aggregators/scrapers (never enrichment members)."""
+    publisher_aliases: dict[str, str] = Field(
+        default_factory=lambda: dict(DEFAULT_PUBLISHER_ALIASES)
+    )
+    """Domains that are the same publisher (``bbc.co.uk`` -> ``bbc.com``): they count as
+    one in the same-domain and publisher-count checks, before any fetch."""
+    extra_rules: ExtraRulesConfig = Field(default_factory=ExtraRulesConfig)
     reenrich_hours: float = Field(default=24, ge=0)
     query_mode: QueryMode = QueryMode.HEURISTIC
     resummarize_on_enrichment: bool = True
@@ -641,6 +690,9 @@ class EnrichmentConfig(_Model):
     min_signal_tokens: int = Field(default=1, ge=0, le=10)
     """Stories whose headlines have fewer distinct names / numbers than this are not
     searched (``skipped:no_signal``; 0: off)."""
+    skip_url_patterns: list[str] = Field(default_factory=lambda: list(DEFAULT_SKIP_URL_PATTERNS))
+    """Substrings (case-insensitive) on the anchor article's URL path: opinion columns,
+    features and live blogs are searched and never match (``skipped:url_pattern``)."""
 
     @model_validator(mode="after")
     def _check(self) -> "EnrichmentConfig":
@@ -651,6 +703,15 @@ class EnrichmentConfig(_Model):
             if p.name == "searxng" and not p.base_url:
                 raise ValueError("the searxng provider needs base_url")
         self.deny_domains = [d.strip().lower().lstrip(".") for d in self.deny_domains if d]
+        self.social_domains = [d.strip().lower().lstrip(".") for d in self.social_domains if d]
+        self.aggregator_domains = [
+            d.strip().lower().lstrip(".") for d in self.aggregator_domains if d
+        ]
+        self.publisher_aliases = {
+            k.strip().lower().lstrip("."): v.strip().lower().lstrip(".")
+            for k, v in self.publisher_aliases.items()
+            if k and v
+        }
         for pattern in self.skip_title_patterns:
             try:
                 re.compile(pattern)
