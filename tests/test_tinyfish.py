@@ -245,7 +245,30 @@ def test_relative_dates_feed_the_time_filter_and_own_domains_are_excluded(
     stale = next(c for c in result.candidates if "elsewhere" in c.hit.url)
     assert stale.reason == "too_far_in_time"
     for request in router.tf_requests:
-        assert request.url.params["exclude_domains"] == "news.example"
+        excluded = request.url.params["exclude_domains"].split(",")
+        assert "news.example" in excluded
+
+
+def test_social_domains_are_excluded_server_side(session_factory, monkeypatch):
+    """Social networks are always rejected post-fetch, so they also go out as
+    ``exclude_domains`` (116 of 260 candidates on one live eval were social); the
+    built-in list plus ``enrichment.social_domains`` applies."""
+    monkeypatch.setenv("TINYFISH_API_KEY", "k")
+    story_id = seed(session_factory)
+    router = Router(default=httpx.Response(200, json=tf_body()))
+    enricher, _ = clocked_enricher(
+        session_factory,
+        router,
+        config(
+            providers=[SearchProviderConfig(name="tinyfish")],
+            social_domains=["custom-social.example"],
+        ),
+    )
+    run_now(enricher, story_id)
+    assert router.tf_requests
+    for request in router.tf_requests:
+        excluded = set(request.url.params["exclude_domains"].split(","))
+        assert {"news.example", "reddit.com", "facebook.com", "custom-social.example"} <= excluded
 
 
 # --- fallback -------------------------------------------------------------------------
@@ -653,5 +676,8 @@ def test_snippet_fields_and_field_coverage(session_factory, monkeypatch):
     assert outcome.hits[1].snippet.startswith("Forty electric buses")  # fallback key
     assert outcome.hits[2].snippet == ""  # genuinely missing, not a parse bug
     fields = outcome.fields
-    assert fields["snippet"] == 1 and fields["description"] == 1
+    assert fields["snippet"] == 1 and fields["snippet:empty"] == 1
+    assert fields["description"] == 1
     assert fields["site_name"] == 3 and fields["date"] == 1 and fields["publisher"] == 1
+    # unknown / structural keys are counted by presence so a renamed field surfaces
+    assert fields["position"] == 3 and fields["title"] == 3 and fields["url"] == 3

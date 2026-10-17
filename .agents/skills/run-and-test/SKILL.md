@@ -233,9 +233,12 @@ update it when fixtures or defaults change. README "Tuning clustering" has the f
   under `target_sources`); tests that make the primary fail must expect `retry`, not `done`.
   Guardian is opt-in only; GDELT is opt-in too now (default chain `[tinyfish]` — it
   rate-limits in practice, and a TinyFish cooldown retries the story instead).
-  TinyFish is sent `exclude_domains` with the story's own publishers
-  (`SearchProvider.supports_exclude`); the looser query runs when a query leaves too few
-  usable candidates after the cheap rejects, not only on 0 hits.
+  TinyFish is sent `exclude_domains` with the story's own publishers plus the social
+  networks (built-in `SOCIAL` + `social_domains`; `SearchProvider.supports_exclude`) —
+  they were 116/260 candidates on one live eval and always reject anyway; `mastodon.`/
+  `mstdn.` substring hosts can't be enumerated and stay post-filtered. The looser query
+  runs when a query leaves too few usable candidates after the cheap rejects, not only
+  on 0 hits.
 - Provider pacing/cooldown is shared DB state (`search_provider_state`): tests that expect
   a fresh provider after a 429 must delete that row (or use a new DB). GDELT
   `min_interval_seconds` defaults to 10 and is floored at 5 (tinyfish at 2), so fake-provider tests pass
@@ -281,7 +284,7 @@ update it when fixtures or defaults change. README "Tuning clustering" has the f
   candidate whose snippet >= `min_snippet_strong` (0.45) + `min_shared_entities` + text >=
   `min_text_floor` (0.25) even below `min_text_similarity` (marker `b` in the `via`
   column). `extra_rules` (on by default) add rule C (entities >= `rule_c_entities` 5 and
-  text >= `rule_c_text` 0.25 -> `entities+c`) and rule D (title >= `rule_d_title` 0.60 and
+  text >= `rule_c_text` 0.25 -> `entities+c`) and rule D (title >= `rule_d_title` 0.55 and
   entities >= `rule_d_entities` 3 and text >= `rule_d_text` 0.22 -> `title+d`).
   `link_only: true` stores strong-snippet hits whose page
   cannot be fetched (not robots) as `text_status = none` members: "also reported by
@@ -295,7 +298,11 @@ update it when fixtures or defaults change. README "Tuning clustering" has the f
   `aggregator_domains` extend the built-in lists (threads.*, x.com, fediverse, daily.dev,
   flipboard, msn ...); `skip_url_patterns` skips anchor URLs by path
   (/opinion/, /commentisfree/ ...). TinyFish snippet parsing falls back to
-  content/description/summary/text/excerpt and reports per-search field coverage.
+  content/description/summary/text/excerpt and reports per-search field coverage:
+  known keys count non-empty (`key:empty` for blank values), every other raw key counts
+  by presence, so a missing/emptied/renamed field is visible. Confirmed content farms
+  go in `deny_domains` (tech-insider.org is in the example profile; superpowerdaily.com
+  and hyper.ai were checked and are legitimate publishers).
   9to5linux.com's robots.txt allows named crawlers only (`User-agent: * Disallow: /`,
   confirmed live), so its pages are `robots`, not an extractor bug — and not link_only
   either (do not spoof a crawler User-Agent).
