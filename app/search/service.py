@@ -51,6 +51,10 @@ class SearchOutcome:
     ``auth`` | ``budget`` | ``cooldown`` | ``error``."""
     requests: int = 0
     """HTTP requests actually sent for this search (0: cached or skipped)."""
+    fields: dict[str, int] = field(default_factory=dict)
+    """Non-empty field counts across the provider's raw results (TinyFish records which
+    of the known response keys actually came back — a missing ``snippet`` key then shows
+    up here instead of silently degrading to title-only candidates)."""
 
     @property
     def ok(self) -> bool:
@@ -274,6 +278,7 @@ class SearchService:
                 return outcome
             outcome.raw = scrub(provider.last_raw, *provider.secrets())
             outcome.requests = health.requests - sent_before
+            outcome.fields = dict(getattr(provider, "last_fields", {}) or {})
         health.successes += 1
         health.hits += len(outcome.hits)
         health.last_ok_at = self.now()

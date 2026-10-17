@@ -607,3 +607,51 @@ def test_degraded_passes_stop_after_a_few_attempts(session_factory, monkeypatch)
     with session_factory() as session:
         story = session.get(Story, story_id)
         assert story.enrich_status == "done" and story.enrich_reason.startswith("degraded")
+
+
+def test_snippet_fields_and_field_coverage(session_factory, monkeypatch):
+    """The recorded news-domain response shape: ``snippet`` is the documented text key,
+    but ``content`` / ``description`` / ``summary`` / ``text`` / ``excerpt`` are accepted
+    as fallbacks, and the raw response's field coverage is reported (so a future shape
+    change shows up in evaluate instead of silently dropping every snippet)."""
+    monkeypatch.setenv("TINYFISH_API_KEY", "k")
+    body = {
+        "query": "q",
+        "results": [
+            {  # the documented news shape
+                "position": 1,
+                "site_name": "BBC News",
+                "publisher": "bbc.com",
+                "authors": "Jane Doe",
+                "title": "Springfield buses approved",
+                "snippet": "The council voted for forty electric buses.",
+                "url": "https://bbc.com/news/1",
+                "date": "2 hours ago",
+            },
+            {  # a result whose blurb comes under another name
+                "position": 2,
+                "site_name": "Wire",
+                "title": "Council backs bus plan",
+                "description": "Forty electric buses for Springfield.",
+                "url": "https://wire.example/x",
+            },
+            {  # title only, like the live rows that showed snippet "-"
+                "position": 3,
+                "site_name": "Daily",
+                "title": "Buses vote tonight",
+                "snippet": "",
+                "url": "https://daily.example/x",
+            },
+        ],
+        "total_results": 3,
+        "page": 0,
+    }
+    router = Router(default=httpx.Response(200, json=body))
+    _, outcome = search_once(session_factory, router)
+    assert outcome.ok and len(outcome.hits) == 3
+    assert outcome.hits[0].snippet.startswith("The council voted")
+    assert outcome.hits[1].snippet.startswith("Forty electric buses")  # fallback key
+    assert outcome.hits[2].snippet == ""  # genuinely missing, not a parse bug
+    fields = outcome.fields
+    assert fields["snippet"] == 1 and fields["description"] == 1
+    assert fields["site_name"] == 3 and fields["date"] == 1 and fields["publisher"] == 1

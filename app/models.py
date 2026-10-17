@@ -682,6 +682,19 @@ class EnrichmentCandidate(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
 
 
+class BlockedDomain(Base):
+    """A domain the admin blocked from the story page (``enrichment.deny_domains`` in
+    YAML also applies; this list overrides it — remove a row to unblock)."""
+
+    __tablename__ = "blocked_domains"
+
+    domain: Mapped[str] = mapped_column(String(300), primary_key=True)
+    """The registrable domain (``gokawiil.com``)."""
+    canonical: Mapped[str] = mapped_column(String(300), default="", index=True)
+    """The publisher-alias canonical domain, so ``bbc.co.uk`` is blocked with ``bbc.com``."""
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
 class SearchCacheEntry(Base):
     """A provider's parsed hits for one query (reused for ``cache_hours``)."""
 

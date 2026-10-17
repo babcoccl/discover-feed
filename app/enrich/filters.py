@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 from app.cluster.tokens import significant_tokens, words
-from app.enrich.domains import blocked_reason, registrable_domain
+from app.enrich.domains import blocked_reason, canonical_domain
 from app.normalize import canonicalize_url
 from app.search.base import SearchHit
 
@@ -54,14 +54,17 @@ def pre_filter(
     deny: Sequence[str],
     max_gap: timedelta,
     language: str | None,
+    aliases: dict[str, str] | None = None,
+    social: Sequence[str] = (),
+    aggregators: Sequence[str] = (),
 ) -> str | None:
     """Why ``hit`` is rejected before any fetch (None: keep it)."""
     if not hit.url.startswith(("http://", "https://")):
         return "bad_url"
-    blocked = blocked_reason(hit.url, deny)
+    blocked = blocked_reason(hit.url, deny, social=social, aggregators=aggregators)
     if blocked:
         return blocked
-    if registrable_domain(hit.url) in story.domains:
+    if canonical_domain(hit.url, aliases) in story.domains:
         return "same_domain"
     canonical = canonicalize_url(hit.url)
     if canonical in story.canonical_urls:
@@ -118,12 +121,14 @@ def overlap(a: set, b: set) -> float:
 @dataclass
 class TextVerdict:
     """The post-extraction decision: a rejection reason (None: accepted), the text
-    similarity, the shared-entity count and whether the combined rule B accepted."""
+    similarity, the shared-entity count and which acceptance rule passed."""
 
     reason: str | None
     score: float
     entities: int = 0
-    rule_b: bool = False
+    rule: str = ""
+    """``""`` for rule A (plain text similarity), ``b`` / ``c`` / ``d`` for the extra
+    rules; recorded as the candidate's ``via``."""
 
 
 def text_check(
@@ -138,18 +143,38 @@ def text_check(
     snippet_similarity: float | None = None,
     min_snippet_strong: float = 0.45,
     min_text_floor: float = 0.25,
+    extra_rules=None,
 ) -> TextVerdict:
-    """Post-extraction checks. Accepted when the body reaches ``threshold`` (rule A), or when
-    the hit's snippet was strong (``min_snippet_strong``), the text shares ``min_entities``
-    names with the story and is not below ``min_text_floor`` (rule B); never a copy of a
-    member or of an already accepted candidate (5-word shingle overlap)."""
+    """Post-extraction checks. Accepted when the body reaches ``threshold`` (rule A); below
+    it, rule B (strong snippet + shared entities + ``min_text_floor``), then — when
+    ``extra_rules`` (an ``app.config.ExtraRulesConfig``) is enabled — rule C (many shared
+    entities + a lower text floor) and rule D (a matching headline + entities + text
+    floor); never a copy of a member or of an already accepted candidate (5-word shingle
+    overlap)."""
     score = round(similarity(f"{title} {text}", story.document), 4)
     entities = shared_entities(f"{title} {text[:2000]}", story)
-    rule_b = score < threshold
-    if rule_b:
-        if score < min_text_floor or not (
+    rule = ""
+    if score < threshold:
+        if score >= min_text_floor and (
             snippet_similarity is not None and snippet_similarity >= min_snippet_strong
         ):
+            rule = "b"
+        elif extra_rules is not None and extra_rules.enabled:
+            if entities >= extra_rules.rule_c_entities and score >= extra_rules.rule_c_text:
+                rule = "c"
+            else:
+                title_similarity = (
+                    max(similarity(title, h) for h in story.headlines)
+                    if title and story.headlines
+                    else 0.0
+                )
+                if (
+                    title_similarity >= extra_rules.rule_d_title
+                    and entities >= extra_rules.rule_d_entities
+                    and score >= extra_rules.rule_d_text
+                ):
+                    rule = "d"
+        if not rule:
             return TextVerdict("low_text_similarity", score, entities)
         if entities < min_entities:
             return TextVerdict("few_shared_entities", score, entities)
@@ -157,4 +182,4 @@ def text_check(
     for other in [*story.texts, *accepted_texts]:
         if overlap(mine, shingles(other)) >= duplicate_overlap:
             return TextVerdict("near_duplicate", score, entities)
-    return TextVerdict(None, score, entities, rule_b=rule_b)
+    return TextVerdict(None, score, entities, rule=rule)

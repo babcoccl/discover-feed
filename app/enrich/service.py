@@ -17,12 +17,13 @@ from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from urllib.parse import urlsplit
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import AppConfig, EnrichmentConfig, LLMRole
-from app.enrich.domains import registrable_domain
+from app.enrich.domains import canonical_domain, registrable_domain
 from app.enrich.fetch import CandidateFetcher, FetchedPage
 from app.enrich.filters import (
     StoryContext,
@@ -43,6 +44,7 @@ from app.lifecycle import PRE_CLUSTER
 from app.models import (
     ENRICHMENT,
     Article,
+    BlockedDomain,
     EnrichmentCandidate,
     ProfileRecord,
     SearchProviderState,
@@ -98,8 +100,12 @@ class Candidate:
     text_similarity: float | None = None
     page: FetchedPage | None = None
     article_id: int | None = None
-    rule_b: bool = False
-    """Accepted by the combined rule (strong snippet + shared entities + text floor)."""
+    rule: str = ""
+    """Which acceptance rule passed: ``""`` for rule A, ``b`` / ``c`` / ``d`` for the
+    extra rules (the candidate's ``via``)."""
+    fetch_detail: str = ""
+    """Why the fetch failed (HTTP status, timeout, size cap, extraction, robots) —
+    for the ``fetch_failed`` breakdown in evaluate."""
 
     def as_dict(self) -> dict:
         return {
@@ -113,6 +119,8 @@ class Candidate:
             "title_similarity": self.title_similarity,
             "shared_entities": self.shared_entities,
             "text_similarity": self.text_similarity,
+            "rule": self.rule,
+            "fetch_detail": self.fetch_detail,
         }
 
     @property
@@ -267,15 +275,20 @@ class Enricher:
         last = story.enriched_at or story.enrich_started_at
         return last is None or last < now - timedelta(hours=self.config.reenrich_hours)
 
-    def skip_reason(self, headlines: list[str]) -> str | None:
-        """``skipped:pattern`` / ``skipped:no_signal`` for stories other outlets are
-        unlikely to cover (Show HN posts, opinion, vague headlines); None to search."""
+    def skip_reason(self, headlines: list[str], anchor_url: str | None = None) -> str | None:
+        """``skipped:pattern`` / ``skipped:no_signal`` / ``skipped:url_pattern`` for
+        stories other outlets are unlikely to cover (Show HN posts, opinion columns,
+        features, vague headlines); None to search."""
         if not headlines:
             return None
         cfg = self.config
         main = headlines[0].strip()
         if any(re.search(p, main, re.IGNORECASE) for p in cfg.skip_title_patterns):
             return f"{SKIPPED}pattern"
+        if anchor_url and any(
+            p in urlsplit(anchor_url).path.lower() for p in cfg.skip_url_patterns
+        ):
+            return f"{SKIPPED}url_pattern"
         if cfg.min_signal_tokens and max(len(signal_tokens(h)) for h in headlines) < (
             cfg.min_signal_tokens
         ):
@@ -288,7 +301,7 @@ class Enricher:
         keep = []
         for sid in ids:
             found = self.context(session, sid)
-            reason = self.skip_reason(found[0].headlines) if found else None
+            reason = self.skip_reason(found[0].headlines, found[1].url) if found else None
             if reason is None:
                 keep.append(sid)
                 continue
@@ -298,10 +311,13 @@ class Enricher:
             story.enrich_passes = (story.enrich_passes or 0) + 1
         return keep
 
-    @staticmethod
-    def publishers(session: Session, story_id: int) -> int:
+    def publishers(self, session: Session, story_id: int) -> int:
+        """Distinct publishers on the story: registrable domains, with editions of the
+        same publisher (``bbc.com`` / ``bbc.co.uk``) counted once via
+        ``publisher_aliases``."""
+        aliases = self.config.publisher_aliases
         urls = session.scalars(select(Article.url).where(Article.story_id == story_id))
-        return len({registrable_domain(u) for u in urls if u})
+        return len({canonical_domain(u, aliases) for u in urls if u})
 
     # --- scheduling -------------------------------------------------------------------
 
@@ -480,7 +496,9 @@ class Enricher:
 
     # --- one story --------------------------------------------------------------------
 
-    def context(self, session: Session, story_id: int) -> tuple[StoryContext, Article] | None:
+    def context(
+        self, session: Session, story_id: int, *, anchor_only: bool = False
+    ) -> tuple[StoryContext, Article] | None:
         story = session.get(Story, story_id)
         if story is None or story.state == StoryState.MERGED:
             return None
@@ -495,6 +513,11 @@ class Enricher:
         if not feed:
             return None
         anchor = next((m for m in feed if m.id == story.representative_article_id), feed[0])
+        if anchor_only:
+            # The backtest's pretend single-sourced story: every member but the anchor
+            # is hidden from queries, domain checks and similarity.
+            feed = [anchor]
+            members = [anchor]
         headlines = [anchor.title or ""] + [m.title or "" for m in feed if m is not anchor]
         return (
             StoryContext(
@@ -505,7 +528,9 @@ class Enricher:
                     or ("" if m.text_status == "none" else m.summary_raw or "")
                     for m in members
                 ],
-                domains={registrable_domain(m.url) for m in members if m.url},
+                domains={
+                    canonical_domain(m.url, self.config.publisher_aliases) for m in members if m.url
+                },
                 canonical_urls={m.canonical_url for m in members},
                 first_at=min(m.published_at for m in members),
                 last_at=max(m.published_at for m in members),
@@ -514,10 +539,14 @@ class Enricher:
             anchor,
         )
 
-    async def enrich_story(self, story_id: int, *, dry_run: bool = False) -> StoryEnrichment:
+    async def enrich_story(
+        self, story_id: int, *, dry_run: bool = False, anchor_only: bool = False
+    ) -> StoryEnrichment:
+        """``anchor_only`` (evaluate ``--backtest``): pretend the story only has its
+        anchor member, so a multi-publisher story exercises the whole pipeline."""
         result = StoryEnrichment(story_id=story_id)
         try:
-            await self._enrich(result, dry_run)
+            await self._enrich(result, dry_run, anchor_only=anchor_only)
         except Exception as exc:
             logger.exception("enrichment of story %s failed", story_id)
             result.status, result.reason = "failed", f"{type(exc).__name__}: {exc}"[:500]
@@ -525,18 +554,24 @@ class Enricher:
                 self._finish(result)
         return result
 
-    async def _enrich(self, result: StoryEnrichment, dry_run: bool) -> None:
+    async def _enrich(
+        self, result: StoryEnrichment, dry_run: bool, *, anchor_only: bool = False
+    ) -> None:
         cfg = self.config
         with self.session_factory() as session:
-            found = self.context(session, result.story_id)
-            result.publishers_before = self.publishers(session, result.story_id)
+            found = self.context(session, result.story_id, anchor_only=anchor_only)
+            result.publishers_before = (
+                len(found[0].domains)
+                if anchor_only and found is not None
+                else self.publishers(session, result.story_id)
+            )
         if found is None:
             result.status, result.reason = "failed", "story gone or has no feed members"
             if not dry_run:
                 self._finish(result)
             return
         story, anchor = found
-        skip = self.skip_reason(story.headlines)
+        skip = self.skip_reason(story.headlines, anchor.url)
         if skip:
             result.answered, result.reason = True, skip
             if not dry_run:
@@ -679,10 +714,20 @@ class Enricher:
                 "requests": outcome.requests,
                 "skipped": outcome.skipped,
                 "cooldown_seconds": round(outcome.cooldown_seconds, 1),
+                "fields": outcome.fields,
                 "raw": outcome.raw[:600],
             }
         )
         return outcome
+
+    def _denied(self, session: Session) -> list[str]:
+        """The effective deny list: ``enrichment.deny_domains`` plus every domain the
+        admin blocked (the database wins — a YAML entry cannot unblock one)."""
+        return [
+            *self.config.deny_domains,
+            *session.scalars(select(BlockedDomain.domain)),
+            *session.scalars(select(BlockedDomain.canonical)),
+        ]
 
     def _prescreen(self, candidates: list[Candidate], story: StoryContext) -> int:
         """The cheap rejections, before any fetch: same domain, deny / social / aggregator
@@ -691,12 +736,20 @@ class Enricher:
         cfg = self.config
         gap = timedelta(hours=cfg.max_time_gap_hours)
         with self.session_factory() as session:
+            deny = self._denied(session)
             for c in candidates:
                 if c.reason:
                     continue
                 c.reason = (
                     pre_filter(
-                        c.hit, story, deny=cfg.deny_domains, max_gap=gap, language=cfg.language
+                        c.hit,
+                        story,
+                        deny=deny,
+                        max_gap=gap,
+                        language=cfg.language,
+                        aliases=cfg.publisher_aliases,
+                        social=cfg.social_domains,
+                        aggregators=cfg.aggregator_domains,
                     )
                     or ""
                 )
@@ -732,12 +785,13 @@ class Enricher:
             if need <= 0 or i >= cfg.max_candidates:
                 c.reason = "not_needed" if need <= 0 else "over_candidate_limit"
                 continue
-            domain = registrable_domain(c.hit.url)
+            domain = canonical_domain(c.hit.url, cfg.publisher_aliases)
             if domain in story.domains:
                 c.reason = "same_domain"
                 continue
             c.page = await self.fetcher.fetch(c.hit.url)
             if c.page.status != "ok":
+                c.fetch_detail = f"{c.page.status}: {c.page.reason or ''}".strip(": ")
                 reason = {
                     "blocked": "blocked_url",
                     "paywalled": "paywalled",
@@ -764,16 +818,18 @@ class Enricher:
                 snippet_similarity=c.similarity,
                 min_snippet_strong=cfg.min_snippet_strong,
                 min_text_floor=cfg.min_text_floor,
+                extra_rules=cfg.extra_rules,
             )
-            c.text_similarity, c.shared_entities, c.rule_b = (
+            c.text_similarity, c.shared_entities, c.rule = (
                 verdict.score,
                 verdict.entities,
-                verdict.rule_b,
+                verdict.rule,
             )
             if verdict.reason:
                 c.reason = verdict.reason
                 continue
-            c.decision, c.reason = "accepted", "accepted_rule_b" if c.rule_b else "accepted"
+            c.decision = "accepted"
+            c.reason = f"accepted_rule_{c.rule}" if c.rule else "accepted"
             accepted_texts.append(c.page.text)
             story.domains.add(domain)
             need -= 1
@@ -939,6 +995,49 @@ class Enricher:
         session.flush()
         return article.id
 
+    # --- domain blocking --------------------------------------------------------------
+
+    def block_domain(self, url_or_domain: str) -> dict:
+        """Persist ``url_or_domain`` in the blocked-domains table, remove every enrichment
+        member on it (canonical domain, so publisher aliases block editions too), and
+        queue the affected stories for one regeneration. Returns what happened."""
+        domain = registrable_domain(url_or_domain)
+        canonical = canonical_domain(url_or_domain, self.config.publisher_aliases)
+        with self.session_factory() as session:
+            if session.get(BlockedDomain, domain) is None:
+                session.add(BlockedDomain(domain=domain, canonical=canonical))
+            blocked = {domain, canonical}
+            members = session.scalars(select(Article).where(Article.origin == ENRICHMENT)).all()
+            story_ids: set[int] = set()
+            removed = 0
+            for m in members:
+                if canonical_domain(m.url, self.config.publisher_aliases) not in blocked:
+                    continue
+                if m.story_id:
+                    story_ids.add(m.story_id)
+                session.delete(m)
+                removed += 1
+            queued = 0
+            for story in session.scalars(select(Story).where(Story.id.in_(story_ids))):
+                if story.state == StoryState.MERGED:
+                    continue
+                if story.state not in PRE_CLUSTER:
+                    story.state = StoryState.CLUSTERED.value  # regenerate once
+                    queued += 1
+            if story_ids:
+                from app.cluster.service import refresh_stories
+
+                session.flush()
+                refresh_stories(session, story_ids)
+            session.commit()
+        return {
+            "domain": domain,
+            "canonical": canonical,
+            "removed": removed,
+            "stories": sorted(story_ids),
+            "queued": queued,
+        }
+
     # --- stats ------------------------------------------------------------------------
 
     def stats(self, session: Session, days: int = 7) -> dict:
@@ -987,6 +1086,16 @@ class Enricher:
                 .group_by(Story.enrich_reason)
             ).all()
         )
+        top_domains = Counter(
+            canonical_domain(url, self.config.publisher_aliases)
+            for (url,) in session.execute(
+                select(EnrichmentCandidate.url).where(
+                    EnrichmentCandidate.created_at >= since,
+                    EnrichmentCandidate.decision.in_(["accepted", "link_only"]),
+                )
+            )
+            if url
+        )
         waiting = (pending or 0) + (retry or 0)
         providers = []
         for row in budget_use(session, self.config.providers, self.now()):
@@ -1023,6 +1132,8 @@ class Enricher:
                 if p["cooldown_seconds"]
             ],
             "reject_reasons": reasons.most_common(8),
+            "top_domains": top_domains.most_common(10),
+            "blocked_domains": [d for (d,) in session.execute(select(BlockedDomain.domain)).all()],
             "providers": providers,
             "days": days,
         }

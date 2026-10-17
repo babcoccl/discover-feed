@@ -18,6 +18,41 @@ _WORD = re.compile(r"[$\u20ac\u00a3]?[^\W_]+(?:['\u2019.&-][^\W_]+)*%?", re.UNIC
 _ACRONYM = re.compile(r"^(?:[A-Za-z]\.)+[A-Za-z]\.?$")
 _PIECE = re.compile(r"[^\W_]+", re.UNICODE)
 _EXTRA_STOP = frozenset({"breaking", "live", "update", "updates", "exclusive", "watch", "video"})
+_FILLER = frozenset(
+    {
+        *("make", "makes", "made", "making", "stuff", "thing", "things"),
+        *("fascinated", "fascinating", "amazing", "incredible", "unbelievable"),
+        *("shocking", "stunning", "bizarre", "weird", "crazy", "wild", "insane"),
+        *("really", "actually", "basically", "literally", "totally", "completely"),
+        *("definitely", "probably", "possibly", "reportedly", "allegedly", "apparently"),
+        *("supposedly", "arguably", "finally", "suddenly", "simply", "clearly"),
+        *("obviously", "certainly", "surely", "perhaps", "somehow", "somewhat"),
+        *("major", "huge", "giant", "massive", "epic"),
+    }
+)
+"""Filler verbs and adjectives a query gains nothing from ("can't make stuff fascinated"
+becomes just the name); entities, numbers and distinctive nouns are kept."""
+_CONTRACTION_ENDINGS = ("n't", "'re", "'ve", "'ll", "'d", "'m")
+_CONTRACTIONS_S = frozenset(
+    {
+        "it's",
+        "he's",
+        "she's",
+        "that's",
+        "there's",
+        "what's",
+        "who's",
+        "here's",
+        "let's",
+        "how's",
+        "when's",
+        "where's",
+        "why's",
+        "this's",
+    }
+)
+"""``'s`` is usually a possessive (``Apple's`` keeps ``Apple``); only pronoun /
+auxiliary contractions are dropped whole."""
 
 QUERY_SCHEMA = {
     "type": "object",
@@ -36,11 +71,23 @@ QUERY_SCHEMA = {
 
 def _is_stop(raw: str) -> bool:
     low = raw.lower().replace("\u2019", "'")
-    return low in STOPWORDS or low.removesuffix("'s") in STOPWORDS or low in _EXTRA_STOP
+    if (
+        low.endswith(_CONTRACTION_ENDINGS)
+        or low in _CONTRACTIONS_S
+        or low in {"o'clock", "y'all", "ma'am"}
+    ):
+        return True  # contractions carry no query signal
+    return (
+        low in STOPWORDS
+        or low.removesuffix("'s") in STOPWORDS
+        or low in _EXTRA_STOP
+        or low in _FILLER
+    )
 
 
 def _clean(raw: str) -> str:
     word = raw.replace("\u2019", "'").removesuffix("'s").strip("'.-&")
+    word = word.replace("'", "")  # O'Brien -> OBrien
     return word.replace(".", "") if _ACRONYM.match(word) else word  # U.S. -> US
 
 

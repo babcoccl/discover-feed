@@ -43,7 +43,28 @@ profiles:
       #                           # on the story page, never summarized, cited or counted.
       # Not searched (rarely covered elsewhere); regexes on the headline:
       # skip_title_patterns: ["^Show HN", "^Ask HN", "^Tell HN", "^Opinion", "^Letters"]
+      # Or on the anchor article's URL path (opinion columns, live blogs, features —
+      # the defaults below; counted as skipped:url_pattern):
+      # skip_url_patterns:
+      #   [/commentisfree/, /opinion/, /opinions/, /comment/, /columnists/, /blogs/, /live/]
       # min_signal_tokens: 1    # skip headlines with fewer distinct names / numbers
+      # Domains blocked before any fetch, as social / aggregator (their own canonical
+      # lists still apply; these extend them):
+      # social_domains: [threads.net]
+      # aggregator_domains: [app.daily.dev]
+      # Domains that are the same publisher (regional editions, amp./m. hosts are
+      # normalized automatically): used by the same-domain and publisher-count checks.
+      # publisher_aliases: {bbc.co.uk: bbc.com, guardian.co.uk: theguardian.com}
+      # Extra acceptance rules below min_text_similarity (each recorded in the `via`
+      # column). Rule C: many shared entities carry a lower text floor. Rule D: a
+      # matching headline plus some entities do too. All other checks still apply.
+      # extra_rules:
+      #   enabled: true
+      #   rule_c_entities: 5
+      #   rule_c_text: 0.25
+      #   rule_d_title: 0.60
+      #   rule_d_entities: 3
+      #   rule_d_text: 0.22
     # Topics become feed tabs. Keywords are whole-word and case-insensitive; an empty
     # include list means "every article from the topic's sources".
     topics:

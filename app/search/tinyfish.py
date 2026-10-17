@@ -63,6 +63,13 @@ def _str(value) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
+_SNIPPET_KEYS = ("snippet", "content", "description", "summary", "text", "excerpt")
+"""Keys TinyFish has used for a result's text blurb, in preference order. The documented
+``news`` shape carries ``snippet``; if a future shape renames it the others keep it
+working, and ``fields`` records which keys actually came back."""
+_FIELDS = [*_SNIPPET_KEYS, "date", "publisher", "site_name", "authors"]
+
+
 def _error_code(response: httpx.Response) -> str:
     try:
         body = response.json()
@@ -140,17 +147,24 @@ class TinyFishProvider(SearchProvider):
         if not isinstance(results, list):
             raise TransientError("TinyFish returned an unexpected JSON shape")
         hits = []
+        fields: dict[str, int] = {}
         for r in results:
             if not isinstance(r, dict) or not _str(r.get("url")).startswith("http"):
                 continue
+            for key in _FIELDS:
+                if _str(r.get(key)):
+                    fields[key] = fields.get(key, 0) + 1
             hits.append(
                 SearchHit(
                     url=_str(r["url"]),
                     title=_str(r.get("title")),
-                    snippet=_str(r.get("snippet")) or _str(r.get("content")),
+                    snippet=next((s for k in _SNIPPET_KEYS if (s := _str(r.get(k)))), ""),
                     domain=_str(r.get("site_name")),
                     published_at=published_date(_str(r.get("date"))),
                     language=language,
                 )
             )
+        self.last_fields = fields
+        """Non-empty field counts across the raw results (evaluate prints them so an
+        upstream response-shape change shows up instead of silently losing snippets)."""
         return hits[:limit]

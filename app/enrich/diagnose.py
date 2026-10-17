@@ -37,6 +37,13 @@ def report(result: StoryEnrichment, title: str = "") -> str:
             state = f"skipped ({s['skipped']}): {s['error']}"
         sent = f" · {s['requests']} request(s)" if s.get("requests") else ""
         lines.append(f"\n## {s['provider']} · {s['query']!r} · {s['hits']} hit(s){sent} · {state}")
+        if s.get("fields"):
+            lines.append(
+                "fields: "
+                + ", ".join(
+                    f"{k}={v}" for k, v in sorted(s["fields"].items(), key=lambda kv: -kv[1])
+                )
+            )
         if s["raw"]:
             lines.append("raw: " + s["raw"].replace("\n", " ")[:600])
     lines.append("\n## Candidates")
