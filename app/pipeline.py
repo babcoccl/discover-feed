@@ -240,6 +240,8 @@ class Pipeline:
 
     def attach_context(self, finder: "ContextFinder") -> "ContextFinder":
         self.context = finder
+        # context waits for enrichment passes (they share provider slots + cooldowns)
+        finder.peer_running = lambda: self.enricher is not None and self.enricher.running
         return finder
 
     def find_context(self, story_ids: list[int] | None = None, *, force: bool = False) -> int:

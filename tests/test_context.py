@@ -50,6 +50,27 @@ UNRELATED = (
     "and a new international series in three countries next autumn for every franchise. "
 ) * 6
 SHORT = "Springfield transit history. " * 10
+# Same event retold with background vocabulary: similarity ~0.51 — accepted under the
+# old 0.60 ceiling, rejected at 0.45.
+COVERAGE_BLEND = (
+    "Springfield's council approved the electric bus purchase and the Central Station "
+    "rebuild on Monday. The transit authority has weighed electric buses since a 2014 "
+    "pilot on Route 7, and the depots date to a 1960s expansion. Mayor Lena Ortiz said "
+    "fares will be studied again next year after three council reviews since 2019. "
+) * 6
+BACKGROUND2 = (
+    "Long before this week's vote, Springfield officials argued over whether the "
+    "transit authority should electrify its fleet at all. A 2011 feasibility study "
+    "estimated depot upgrades at several million dollars, and council members twice "
+    "delayed a bus contract over fare revenue. The Central Station terminal, built "
+    "in 1967, has been rebuilt in stages for decades. "
+) * 6
+BACKGROUND3 = (
+    "Electric bus programs elsewhere offer a preview of what Springfield may face: "
+    "battery range limits, charging windows between rush periods, and depot retrofits. "
+    "Transit authorities in comparable cities reported fare shortfalls in early years, "
+    "though councils there say ridership recovered once routes stabilized. "
+) * 8
 
 
 def resolver(host: str) -> list[str]:
@@ -478,6 +499,43 @@ def test_text_check_band():
     assert v.reason == "few_shared_entities" and v.entities == 1
 
 
+def test_lowered_ceiling_separates_same_event_from_background():
+    """At the 0.45 ceiling, blended same-event coverage (~0.51) is rejected while a
+    genuine backgrounder (~0.26, overlapping entities) is still accepted; under the old
+    0.60 ceiling the blended page passed."""
+    story = story_ctx()
+    blend = context_text_check(
+        "Council approves buses amid long debate",
+        COVERAGE_BLEND,
+        story,
+        floor=0.05,
+        ceiling=0.45,
+        min_entities=1,
+        duplicate_overlap=0.6,
+    )
+    assert blend.reason == "same_event" and blend.score >= 0.45 and blend.entities >= 1
+    old = context_text_check(
+        "Council approves buses amid long debate",
+        COVERAGE_BLEND,
+        story,
+        floor=0.05,
+        ceiling=0.60,
+        min_entities=1,
+        duplicate_overlap=0.6,
+    )
+    assert old.reason is None  # regression guard: the old ceiling let it through
+    background = context_text_check(
+        "A history of Springfield transit",
+        BACKGROUND,
+        story,
+        floor=0.05,
+        ceiling=0.45,
+        min_entities=1,
+        duplicate_overlap=0.6,
+    )
+    assert background.reason is None and background.entities >= 1
+
+
 # --- the finder ------------------------------------------------------------------------
 
 
@@ -603,6 +661,97 @@ def test_max_items_cap(session_factory):
         del PAGES["https://w2.example/transit"]
 
 
+def test_domain_cap_keeps_one_per_domain(session_factory):
+    """``max_per_domain`` (default 1): the first judge-passing page on a domain wins;
+    further accepted pages on it are rejected ``domain_cap``."""
+    story_id = seed(session_factory)
+    PAGES["https://deep.example/history-a"] = page("How Springfield got here", BACKGROUND2)
+    PAGES["https://deep.example/history-b"] = page("A second backgrounder", BACKGROUND)
+    PAGES["https://other.example/history-c"] = page("What other cities learned", BACKGROUND3)
+    try:
+        fake = FakeSearch(
+            hits=[
+                ("https://deep.example/history-a", "How Springfield got here"),
+                ("https://deep.example/history-b", "A second backgrounder"),
+                ("https://other.example/history-c", "What other cities learned"),
+            ]
+        )
+        run(make_finder(session_factory, fake), story_id)
+        links = context_articles(session_factory, story_id)
+        assert sorted(a.url for a in links) == [
+            "https://deep.example/history-a",
+            "https://other.example/history-c",
+        ]
+        with session_factory() as session:
+            capped = [
+                c for c in session.scalars(select(ContextCandidate)) if c.reason == "domain_cap"
+            ]
+            assert [c.url for c in capped] == ["https://deep.example/history-b"]
+    finally:
+        for url in (
+            "https://deep.example/history-a",
+            "https://deep.example/history-b",
+            "https://other.example/history-c",
+        ):
+            del PAGES[url]
+
+
+def test_zero_hits_records_reason(session_factory):
+    """A story whose searches all came back empty is ``done`` with ``context_reason``
+    explaining the 0 candidates (``no_hits``), visible in stats/logs."""
+    story_id = seed(session_factory)
+    finder = make_finder(session_factory, FakeSearch(hits=[]))
+    run(finder, story_id)
+    with session_factory() as session:
+        story = session.get(Story, story_id)
+        assert story.context_status == "done"
+        assert story.context_reason == "no_hits"
+    assert finder.last_run["zero_candidates"] == {"no_hits": 1}
+
+
+def test_worker_waits_out_provider_cooldown(session_factory):
+    """A cooldown already running pauses the pass until it ends instead of burning the
+    story into ``retry`` (cooldowns are shared with enrichment via
+    ``search_provider_state``)."""
+    story_id = seed(session_factory)
+    clock = {"t": NOW}
+
+    def now() -> datetime:
+        return clock["t"]
+
+    async def sleep(seconds: float) -> None:
+        clock["t"] += timedelta(seconds=seconds)
+
+    finder = make_finder(session_factory, now=now, sleep=sleep)
+    finder.search.now = now
+    finder.search._cool_down("tinyfish", 30)
+    run(finder, story_id)
+    assert clock["t"] >= NOW + timedelta(seconds=30)
+    assert context_articles(session_factory, story_id)
+
+
+def test_worker_waits_for_enrichment(session_factory):
+    """While the enrichment worker holds the providers the context pass waits, then
+    proceeds — they share the same provider slots."""
+    story_id = seed(session_factory)
+    states = iter([True, True, False])
+    finder = make_finder(session_factory, peer_running=lambda: next(states, False), sleep=no_sleep)
+    run(finder, story_id)
+    assert context_articles(session_factory, story_id)
+
+
+def test_worker_pauses_when_capacity_never_frees(session_factory):
+    """If the peer never finishes (or every provider stays cooling) the pass pauses
+    without sending requests; stories stay ``pending`` for the next schedule."""
+    story_id = seed(session_factory)
+    fake = FakeSearch()
+    finder = make_finder(session_factory, fake, peer_running=lambda: True, sleep=no_sleep)
+    run(finder, story_id)
+    assert not fake.requests  # nothing searched while the peer held the providers
+    with session_factory() as session:
+        assert session.get(Story, story_id).context_status == "pending"
+
+
 # --- the judge -------------------------------------------------------------------------
 
 
@@ -626,7 +775,8 @@ def test_judge_scores_and_notes_links(session_factory):
         content = (
             '{"angles": [{"label": "history", "query": "\\"Springfield transit\\" history"}]}'
             if len(calls) == 1
-            else '{"adds_context": 2, "note": "Decade of transit history before this vote"}'
+            else '{"adds_context": 2, "is_substantive_article": 1, '
+            '"note": "Decade of transit history before this vote"}'
         )
         return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
 
@@ -639,6 +789,57 @@ def test_judge_scores_and_notes_links(session_factory):
     links = context_articles(session_factory, story_id)
     assert len(links) == 1
     assert links[0].context_note == "Decade of transit history before this vote"
+
+
+def test_judge_rejects_non_articles(session_factory):
+    """Link lists, landing/section pages and product pages are rejected as
+    ``not_article`` even when the judge would otherwise score them 2."""
+    story_id = seed(session_factory)
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        body = request.read().decode()
+        if '"angles"' in body:
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "content": (
+                                    '{"angles": [{"label": "history", '
+                                    '"query": "\\"Springfield transit\\" history"}]}'
+                                )
+                            }
+                        }
+                    ]
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                '{"adds_context": 2, "is_substantive_article": 0, '
+                                '"note": "Mostly a list of links"}'
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    finder = make_finder(
+        session_factory, llm_role=role(), llm_transport=httpx.MockTransport(answer)
+    )
+    run(finder, story_id)
+    assert not context_articles(session_factory, story_id)
+    with session_factory() as session:
+        reasons = {
+            c.reason for c in session.scalars(select(ContextCandidate)) if c.decision == "rejected"
+        }
+        assert "not_article" in reasons
 
 
 def test_judge_rejects_same_event_and_unparseable(session_factory):
