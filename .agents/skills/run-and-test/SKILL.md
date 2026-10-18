@@ -359,7 +359,12 @@ update it when fixtures or defaults change. README "Tuning clustering" has the f
   `same_domain` (vs ALL member domains incl. enrichment members), `social`/
   `aggregator`/`denied`/`bad_url`/`duplicate_url`/`already_ingested`/`language`.
 - Budget: shared `search:<name>` usage via `SearchService` plus context's own
-  `daily_request_budget` counted as `context:<name>` `source_usage` rows.
+  `daily_request_budget` (default 100/day across providers) counted as `context:<name>`
+  `source_usage` rows keyed by UTC day — resets at UTC midnight, never shared with
+  enrichment. Exhaustion shows as `skipped_context_budget` in `searches[]`/
+  `context_reason`. `evaluate`/dry runs read it but never increment it (their real
+  requests still count under `search:<name>`). The Pipeline panel shows
+  `budget_used_today` of `daily_request_budget`.
 - Providers: reuse `SearchService`; `SearchProvider.supports_find_similar` + default
   `find_similar()` raising `FetchError`; `exa` (`app/search/exa.py`, `EXA_API_KEY`)
   implements it — hits merge into the candidate pool under a `related` angle.

@@ -518,12 +518,25 @@ class ContextFinder:
                         "raw": outcome.raw[:600],
                     }
                 )
-                self._count_requests(provider.name, outcome.requests)
+                if not dry_run:
+                    self._count_requests(provider.name, outcome.requests)
                 if outcome.error is None or outcome.hits:
                     result.answered = True
                 for h in outcome.hits:
                     out.append((h, provider.name, angle.query, angle))
-            outcome = await self._find_similar(provider, anchor)
+            if self._budget_ok():
+                outcome = await self._find_similar(provider, anchor)
+            else:
+                outcome = None
+                result.searches.append(
+                    {
+                        "provider": provider.name,
+                        "query": f"similar:{anchor.url}",
+                        "angle": "related",
+                        "hits": 0,
+                        "skipped": "context_budget",
+                    }
+                )
             if outcome is not None:
                 result.searches.append(
                     {
@@ -536,6 +549,8 @@ class ContextFinder:
                         "requests": outcome.requests,
                     }
                 )
+                if not dry_run:
+                    self._count_requests(provider.name, outcome.requests)
             if outcome is not None and outcome.hits:
                 similar = _similar_angle()
                 for h in outcome.hits:
@@ -896,17 +911,22 @@ class ContextFinder:
             .where(ContextCandidate.created_at >= since, ContextCandidate.judge == 2)
         )
         providers = []
+        budget_used = 0
         for row in budget_use(session, cfg.providers, self.now()):
             cooling = self.search.cooldown_remaining(row["provider"])
+            context_today = self._context_usage(row["provider"])
+            budget_used += context_today
             providers.append(
                 {
                     **row,
-                    "context_requests_today": self._context_usage(row["provider"]),
+                    "context_requests_today": context_today,
                     "cooldown_seconds": int(cooling + 0.999) if cooling > 0 else 0,
                 }
             )
         return {
             "enabled": bool(self.enabled_profiles(session)),
+            "budget_used_today": budget_used,
+            "daily_request_budget": cfg.daily_request_budget,
             "running": self.running,
             "eligible": len(self.eligible(session)),
             "pending": pending or 0,
