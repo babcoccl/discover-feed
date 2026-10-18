@@ -155,6 +155,7 @@
       <ul class="space-y-1 text-sm" data-context-providers>
         {% for p in cx.providers %}<li data-provider="{{ p.provider }}"><span class="font-medium">{{ p.provider }}</span>: {{ p.context_requests_today }} context requests today{% if p.requests_today %} · {{ p.requests_today }} total{% if p.daily_budget %} of {{ p.daily_budget }}{% endif %}{% endif %}{% if p.cooldown_seconds %} · <span class="text-amber-700 dark:text-amber-400">cooling down {{ p.cooldown_seconds }} s</span>{% endif %}</li>{% endfor %}
       </ul>
+      {% if cx.daily_request_budget %}<p class="mt-1 text-xs{% if cx.budget_used_today >= cx.daily_request_budget %} font-medium text-amber-700 dark:text-amber-400{% else %} text-slate-500 dark:text-slate-400{% endif %}" data-context-budget>Context budget: {{ cx.budget_used_today }} of {{ cx.daily_request_budget }} requests used today — {{ cx.daily_request_budget - cx.budget_used_today }} left (resets UTC midnight)</p>{% endif %}
     </div>
   </div>
 </section>

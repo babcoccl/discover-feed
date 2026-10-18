@@ -484,17 +484,20 @@ How it works (`app/context/`):
    (provider slots and cooldowns are shared state) before touching a story — up to
    15 minutes, otherwise the pass pauses and stories stay `pending` rather than
    burning into `retry`. Every story that kept nothing gets a `context_reason`
-   (`no_angles`, `skipped_cooldown`, `provider_errors:<kind>`, `no_hits`,
-   `all_rejected`), logged per story and counted in `last_run.zero_candidates`.
+   (`no_angles`, `skipped_cooldown`, `skipped_budget`, `skipped_context_budget`,
+   `provider_errors:<kind>`, `no_hits`, `all_rejected`), logged per story and
+   counted in `last_run.zero_candidates`.
 2. `app/context/angles.py` asks the summarizer LLM for up to `max_angles` (3) search
    angles — `label` + a 3-5 term keyword query (entities quoted). If the LLM is absent
    or answers unparseably, the heuristic fallback pairs the top story entity with
    "history" / "explained" / "background" (queries marked heuristic).
 3. Each provider × angle is searched through the shared `SearchService` (same
    cooldowns, pacing and `search:<name>` budgets as enrichment); context additionally
-   enforces its own `context.daily_request_budget` (tracked as `context:<name>` usage
-   rows). Providers that implement `find_similar()` (the optional `exa` provider,
-   `EXA_API_KEY`) also pull semantically-similar pages for the anchor URL.
+   enforces its own `context.daily_request_budget` (default 100/day across all
+   providers, tracked as `context:<name>` usage rows keyed by UTC day — it resets at
+   UTC midnight and is never shared with enrichment). Providers that implement
+   `find_similar()` (the optional `exa` provider, `EXA_API_KEY`) also pull
+   semantically-similar pages for the anchor URL.
 4. `app/context/filters.py` rejects before and after fetching: same domain as any
    member, social / aggregator / deny-listed domains, already-ingested URLs,
    non-HTTP URLs, robots/fetch/paywall failures, pages under `min_words` (300),
@@ -522,8 +525,9 @@ How it works (`app/context/`):
    decision, reason, scores, judge verdict).
 
 Settings > Pipeline shows the context toggle plus live stats (eligible / waiting /
-done / stories with links / links added / judge accept rate / rejections by reason)
-and a "Find context now" button. `POST /api/admin/context[?story_id=N]` triggers a
+done / stories with links / links added / judge accept rate / rejections by reason),
+the context budget used today (X of Y requests, resets UTC midnight) and a
+"Find context now" button. `POST /api/admin/context[?story_id=N]` triggers a
 run for all eligible stories or a single one (admin key).
 
 ```bash
@@ -533,6 +537,10 @@ python -m app.context.evaluate --stories 30 --markdown  # dry run over 30 recent
 # inside Docker:
 docker exec discover-feed python -m app.context.evaluate --stories 30 --markdown
 ```
+
+Dry runs send real provider requests (counted under the shared `search:<name>` usage)
+but never write status, candidates, links, cache entries or `context:<name>` usage —
+they read the context budget, though: an exhausted budget still skips their searches.
 
 Windows: `.venv\Scripts\python -m app.context.evaluate --stories 30 --markdown`.
 

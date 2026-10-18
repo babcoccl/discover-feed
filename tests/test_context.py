@@ -18,6 +18,7 @@ from app.context.service import ContextFinder
 from app.enrich.fetch import CandidateFetcher
 from app.enrich.query import story_terms
 from app.images.safety import Guard
+from app.ingest import usage_periods
 from app.lifecycle import ensure_stories
 from app.models import (
     CONTEXT,
@@ -25,6 +26,7 @@ from app.models import (
     ContextCandidate,
     ProfileRecord,
     SourceRecord,
+    SourceUsage,
     Story,
     StoryState,
     StoryView,
@@ -886,6 +888,58 @@ def test_context_budget_caps_requests(session_factory):
     finder = make_finder(session_factory, fake, cfg=config(daily_request_budget=1, max_angles=3))
     run(finder, story_id)
     assert len(fake.requests) == 1  # one angle search; the rest skipped by the budget
+
+
+def test_context_budget_resets_each_utc_day(session_factory):
+    """``context:<name>`` rows are keyed by UTC day (``usage_periods``): a budget
+    spent yesterday does not block today's searches — only today's row counts."""
+    story_id = seed(session_factory)
+    fake = FakeSearch()
+    finder = make_finder(session_factory, fake, cfg=config(daily_request_budget=1))
+    yesterday, _month = usage_periods(NOW - timedelta(days=1))
+    today, _ = usage_periods(NOW)
+    with session_factory() as session:
+        session.add(SourceUsage(source_id="context:tinyfish", period=yesterday, requests=99))
+        session.commit()
+    run(finder, story_id)
+    assert len(fake.requests) == 1  # yesterday's spend doesn't count against today
+    with session_factory() as session:
+        row = session.get(SourceUsage, ("context:tinyfish", today)) or SourceUsage(
+            source_id="context:tinyfish", period=today
+        )
+        row.requests = 99
+        session.add(row)
+        session.commit()
+    fake.requests.clear()
+    run(finder, seed(session_factory))
+    assert not fake.requests  # today's spend does
+
+
+def test_dry_run_does_not_consume_context_budget(session_factory):
+    """``evaluate`` dry runs read the context budget (an exhausted one still skips
+    searches) but never increment it: the real requests count only under the shared
+    ``search:<name>`` rows, so repeated evaluations can't burn the daily context cap."""
+    story_id = seed(session_factory)
+    fake = FakeSearch()
+    finder = make_finder(session_factory, fake, cfg=config(daily_request_budget=3))
+    asyncio.run(finder.find_story(story_id, dry_run=True))
+    assert fake.requests  # the searches really ran
+    day, _month = usage_periods(NOW)
+    with session_factory() as session:
+        ctx = session.get(SourceUsage, ("context:tinyfish", day))
+        assert ctx is None or not ctx.requests  # dry run: context budget untouched
+        shared = session.get(SourceUsage, ("search:tinyfish", day))
+        assert shared and shared.requests == len(fake.requests)
+    # an exhausted context budget is still honored (read, never incremented)
+    with session_factory() as session:
+        session.add(SourceUsage(source_id="context:tinyfish", period=day, requests=99))
+        session.commit()
+    fake.requests.clear()
+    result = asyncio.run(finder.find_story(seed(session_factory), dry_run=True))
+    assert not fake.requests
+    assert result.searches and all(s.get("skipped") == "context_budget" for s in result.searches)
+    with session_factory() as session:
+        assert session.get(SourceUsage, ("context:tinyfish", day)).requests == 99
 
 
 def test_published_view_excludes_context_links(session_factory):

@@ -783,8 +783,11 @@ class ContextConfig(_Model):
     """Eligible when ``story.priority`` is above this ..."""
     min_publishers: int = Field(default=2, ge=1)
     """... or the story has at least this many distinct publishers."""
-    daily_request_budget: int | None = Field(default=30, ge=0)
-    """Context searches/day across all providers, on top of each provider's own budget."""
+    daily_request_budget: int | None = Field(default=100, ge=0)
+    """Context searches/day across all providers, on top of each provider's own budget.
+    Counted under ``context:<name>`` ``source_usage`` rows keyed by UTC day (resets at
+    UTC midnight) — never shared with enrichment's ``search:<name>`` rows. ``None``
+    disables the cap."""
     llm_judge: bool = True
     """LLM scores each surviving page 0/1/2 for added context (kept only at 2; off: keep
     pages without a note). Failures reject the candidate — nothing is fabricated."""

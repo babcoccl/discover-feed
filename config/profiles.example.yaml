@@ -117,7 +117,8 @@ profiles:
       # min_shared_entities_heuristic: 2  # when the angle query was heuristic
       # min_priority: 0            # eligible: priority > this
       # min_publishers: 2          #          OR this many distinct publishers
-      # daily_request_budget: 30   # context's own cap on top of shared search budgets
+      # daily_request_budget: 100  # context's own cap/day (UTC), on top of the shared
+      #                            # search:<name> provider budgets
       # llm_judge: true            # summarizer role scores each page 0/1/2 + flags
       #                            # non-articles (keep only 2; failures/unparsable
       #                            # reject — notes are never fabricated)
