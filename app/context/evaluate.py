@@ -65,16 +65,39 @@ def _summary(results: list[ContextResult], markdown: bool) -> str:
             [[k or "unknown", str(n)] for k, n in reasons.most_common()],
             markdown,
         )
+    same_event = [
+        (r, c)
+        for r in results
+        for c in r.candidates
+        if c.decision == "rejected" and c.reason == "same_event"
+    ]
+    if same_event:
+        lines.append("\n## Same-event rejections")
+        lines += _table(
+            ["story", "judge", "domain", "title / url"],
+            [
+                [
+                    str(r.story_id),
+                    str(c.judge) if c.judge is not None else "-",
+                    c.hit.domain or "?",
+                    f"{(c.hit.title or '')[:70]} — {c.hit.url}",
+                ]
+                for r, c in same_event
+            ],
+            markdown,
+        )
     accepted = [c for r in results for c in r.accepted]
     if accepted:
         lines.append("\n## Accepted pages")
         lines += _table(
-            ["story", "angle", "judge", "domain", "note", "title / url"],
+            ["story", "angle", "judge", "opinion", "flagged", "domain", "note", "title / url"],
             [
                 [
                     str(r.story_id),
                     c.angle or "-",
                     str(c.judge) if c.judge is not None else "-",
+                    "yes" if c.is_opinion else "-",
+                    c.flagged or "-",
                     c.hit.domain or "?",
                     (c.note or "-")[:60],
                     f"{(c.hit.title or '')[:60]} — {c.hit.url}",
@@ -84,6 +107,15 @@ def _summary(results: list[ContextResult], markdown: bool) -> str:
             ],
             markdown,
         )
+        domains = Counter(c.hit.domain or "?" for c in accepted)
+        repeat = [(d, n) for d, n in domains.most_common() if n >= 2]
+        if repeat:
+            lines.append("\n## Domains accepted 2+ times")
+            lines += _table(
+                ["domain", "accepted"],
+                [[d, str(n)] for d, n in repeat],
+                markdown,
+            )
     lines.append("\n## Per story")
     lines += _table(
         ["story", "angles", "candidates", "accepted", "top rejections"],

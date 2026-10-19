@@ -65,12 +65,23 @@ JUDGE_SCHEMA = {
     "type": "object",
     "properties": {
         "adds_context": {"type": "integer", "enum": [0, 1, 2]},
+        "same_event": {"type": "boolean"},
+        "is_opinion": {"type": "boolean"},
         "is_substantive_article": {"type": "integer", "enum": [0, 1]},
         "note": {"type": "string"},
     },
-    "required": ["adds_context", "is_substantive_article", "note"],
+    "required": [
+        "adds_context",
+        "same_event",
+        "is_opinion",
+        "is_substantive_article",
+        "note",
+    ],
     "additionalProperties": False,
 }
+OVERSHOOT = 3
+"""How many extra candidates are evaluated past ``max_items`` so accepted ones can be
+re-ranked (older pages first) instead of first-come-first-served."""
 
 
 def _similar_angle():
@@ -95,6 +106,14 @@ class Candidate:
     page: object | None = None
     article_id: int | None = None
     fetch_detail: str = ""
+    flagged: str = ""
+    """Source-quality flag (``tld:``/``name:``/``title:seo``): rejected by default
+    (``context.reject_flagged``), recorded either way."""
+    is_opinion: bool = False
+    """Opinion/column page (URL/meta or the judge's ``is_opinion``) — capped by
+    ``context.max_opinion`` and stored as ``context_kind = opinion``."""
+    published_at: datetime | None = None
+    """Hit date, else the page's declared publication date; None when undated."""
 
 
 @dataclass
@@ -591,6 +610,18 @@ class ContextFinder:
 
     # --- filters ----------------------------------------------------------------------
 
+    def _flag(self, c: Candidate) -> str:
+        """The shared source-quality flag for a context candidate (``app.enrich.quality``):
+        content-farm domain, or an SEO-template title (``[2026]`` + comparison/guide)."""
+        from app.enrich.quality import flag_reason, seo_title_reason
+
+        q = self.enrichment.quality
+        return (
+            flag_reason(c.hit.url, tlds=q.suspicious_tlds, patterns=q.suspicious_patterns)
+            or seo_title_reason(c.hit.title)
+            or ""
+        )
+
     def _prescreen(self, candidates: list[Candidate], story: StoryContext, deny: list[str]) -> int:
         from app.context.filters import context_pre_filter
 
@@ -617,21 +648,28 @@ class ContextFinder:
                     .where(Article.canonical_url == canonicalize_url(c.hit.url))
                 ):
                     c.reason = "already_ingested"
+                if not c.reason:
+                    c.flagged = self._flag(c)
+                    if c.flagged and cfg.reject_flagged:
+                        c.reason = "flagged"
         return sum(1 for c in candidates if not c.reason)
 
     async def _fetch_judge(
         self, candidates: list[Candidate], story: StoryContext, brief: str, result
     ) -> None:
-        from app.context.filters import context_text_check
+        from app.context.filters import context_text_check, same_event_check
+        from app.page_meta import is_opinion_page
 
         cfg = self.config
         accepted_texts: list[str] = []
-        kept_domains: Counter[str] = Counter()
-        kept = 0
+        pool: list[Candidate] = []
         for c in candidates:
-            if c.reason or kept >= cfg.max_items:
-                if not c.reason:
-                    c.reason = "not_needed"
+            if c.reason:
+                continue
+            if len(pool) >= cfg.max_items + OVERSHOOT:
+                # enough for the re-rank: evaluate no further (fetch + judge are the
+                # expensive steps) and mark the rest as unneeded
+                c.reason = "not_needed"
                 continue
             c.page = await self.fetcher.fetch(c.hit.url)
             if c.page.status != "ok":
@@ -661,35 +699,76 @@ class ContextFinder:
             if verdict.reason:
                 c.reason = verdict.reason
                 continue
+            c.published_at = c.hit.published_at or (c.page.meta.published_at if c.page else None)
+            if same_event_check(
+                c.hit,
+                story,
+                published_at=c.published_at,
+                entities=verdict.entities,
+                text_similarity=verdict.score,
+                now=self.now(),
+            ):
+                c.reason = "same_event"
+                continue
+            c.is_opinion = is_opinion_page(c.hit.url, c.page.meta if c.page else None)
             judge = await self._judge(story.title, brief, c)
             if judge is None and cfg.llm_judge and self.llm_role is not None:
                 c.reason = "judge_failed"  # never fabricate a note
                 continue
             if judge is not None:
-                c.judge, c.note, substantive = judge
+                c.judge, c.note, substantive, judge_same_event, judge_opinion = judge
+                c.is_opinion = c.is_opinion or judge_opinion
+                if judge_same_event:
+                    c.reason = "same_event"  # the judge's flag forces rejection
+                    continue
                 if not substantive:
                     c.reason = "not_article"
                     continue
                 if c.judge != 2:
                     c.reason = "judge_rejected"
                     continue
+            pool.append(c)
+            accepted_texts.append(c.page.text)
+        # prior-date preference: pages published BEFORE the story rank first (a real
+        # backgrounder), then everything else in provider relevance order
+        order = {id(c): i for i, c in enumerate(pool)}
+        pool.sort(
+            key=lambda c: (
+                c.published_at is None or c.published_at >= story.first_at,
+                c.published_at or story.first_at,
+                order[id(c)],
+            )
+        )
+        kept_domains: Counter[str] = Counter()
+        opinions = 0
+        kept = 0
+        for c in pool:
+            if kept >= cfg.max_items:
+                c.reason = "not_needed"
+                continue
             domain = canonical_domain(c.hit.url, self.enrichment.publisher_aliases)
             if kept_domains[domain] >= cfg.max_per_domain:
-                # the first judge-passing page per domain wins (hits arrive in provider
-                # relevance order and all kept pages score 2 — there is no higher score)
                 c.reason = "domain_cap"
                 continue
+            if c.is_opinion:
+                if opinions >= cfg.max_opinion:
+                    c.reason = "opinion_cap"
+                    continue
+                opinions += 1
             c.decision = "accepted"
             kept_domains[domain] += 1
-            accepted_texts.append(c.page.text)
             kept += 1
         result.answered = result.answered or bool(candidates)
 
-    async def _judge(self, title: str, brief: str, c: Candidate) -> tuple[int, str, int] | None:
-        """``(adds_context, note, is_substantive_article)``: 0 = off topic, 1 = same event
-        (coverage), 2 = adds background; substantive 0 = link list / landing / product
-        page. Returns None on failure/unparsable output — the caller then rejects
-        (never fabricates a note)."""
+    async def _judge(
+        self, title: str, brief: str, c: Candidate
+    ) -> tuple[int, str, int, bool, bool] | None:
+        """``(adds_context, note, is_substantive_article, same_event, is_opinion)``:
+        0 = off topic / the same event, 1 = related but thin, 2 = adds background;
+        ``same_event`` reports the same specific event (including follow-up details of
+        it) and forces rejection; ``is_opinion`` marks opinion/column pages. Returns
+        None on failure/unparsable output — the caller then rejects (never fabricates
+        a note)."""
         if self.llm_role is None or not self.config.llm_judge:
             return None
         role = self.llm_role.model_copy(update={"disable_thinking": True, "max_tokens": 200})
@@ -699,13 +778,19 @@ class ContextFinder:
                 "role": "system",
                 "content": (
                     "Decide whether a web page adds useful background/context to a news "
-                    'story. Answer JSON: {"adds_context": 0|1|2, '
-                    '"is_substantive_article": 0|1, "note": "<=25 words for a '
-                    'reader explaining what it adds"}. adds_context: 0 = off topic; '
-                    "1 = the page is primarily reporting the same news event (reject it "
-                    "even when it is well written); 2 = the page adds background, "
-                    "history, data, or a different angle the story does not cover — "
-                    "only 2 is kept. is_substantive_article: 0 when the page is mostly "
+                    'story. Answer JSON: {"adds_context": 0|1|2, "same_event": '
+                    'true|false, "is_opinion": true|false, "is_substantive_article": '
+                    '0|1, "note": "<=25 words for a reader explaining what it adds"}. '
+                    "same_event: true when the page mainly reports the same specific "
+                    "event as the story — including follow-up details of that same "
+                    "event (its cause, motive, reaction, quotes); when true, "
+                    "adds_context must be 0 and the page is rejected. adds_context: "
+                    "0 = off topic or the same event; 1 = related but adds little; "
+                    "2 = the page adds background, history, data, comparison, "
+                    "explanation, or a different but related event — only 2 is kept. "
+                    "is_opinion: true when the page is an opinion piece, editorial, "
+                    "column or advocacy essay rather than reported news or reference "
+                    "material. is_substantive_article: 0 when the page is mostly "
                     "a list of links, a landing or section/tag page, or a product or "
                     "promotional page rather than a substantive article; 1 otherwise."
                 ),
@@ -727,9 +812,11 @@ class ContextFinder:
             score = int(data["adds_context"])
             substantive = int(data["is_substantive_article"])
             note = str(data.get("note") or "")[:280]
+            same_event = bool(data.get("same_event"))
+            is_opinion = bool(data.get("is_opinion"))
             if score not in (0, 1, 2) or substantive not in (0, 1):
                 return None
-            return (score, note, substantive)
+            return (score, note, substantive, same_event, is_opinion)
         except Exception as exc:
             logger.info("context judge failed for %s: %s", c.hit.url, exc)
             return None
@@ -779,7 +866,7 @@ class ContextFinder:
             canonical_url=canonical,
             title=c.hit.title or c.hit.url,
             summary_raw=c.hit.snippet or "",
-            published_at=c.hit.published_at or now,
+            published_at=c.published_at or now,
             fetched_at=now,
             image_url=c.hit.image_url or (c.page.image_url if c.page else None),
             content_hash=content_hash(c.hit.title or "", c.hit.url),
@@ -794,6 +881,7 @@ class ContextFinder:
             anchor_article_id=anchor_id,
             context_note=c.note or None,
             context_angle=c.angle or None,
+            context_kind="opinion" if c.is_opinion else "article",
         )
         session.add(article)
         session.flush()
@@ -833,6 +921,8 @@ class ContextFinder:
                         title=c.hit.title,
                         decision=c.decision,
                         reason=c.reason[:40],
+                        flagged=c.flagged[:40],
+                        is_opinion=c.is_opinion,
                         shared_entities=c.shared_entities,
                         text_similarity=c.text_similarity,
                         judge=c.judge,

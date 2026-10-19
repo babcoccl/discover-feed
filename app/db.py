@@ -288,6 +288,7 @@ _CONTEXT_COLUMNS = {
     "articles": {
         "context_note": "VARCHAR(300)",
         "context_angle": "VARCHAR(120)",
+        "context_kind": "VARCHAR(10)",
     },
     "stories": {
         "context_status": "VARCHAR(10)",
@@ -297,12 +298,17 @@ _CONTEXT_COLUMNS = {
         "context_reason": "TEXT",
     },
     "profiles": {"context_enabled": "BOOLEAN"},
+    "context_candidates": {
+        "flagged": "VARCHAR(40) NOT NULL DEFAULT ''",
+        "is_opinion": "BOOLEAN NOT NULL DEFAULT 0",
+    },
 }
 
 
 def _add_context_columns(engine: Engine) -> None:
-    """Pre-context DBs: article note/angle, story context state, profile toggle
-    (``context_candidates`` is created by ``Base.metadata.create_all``)."""
+    """Pre-context DBs: article note/angle/kind, story context state, profile toggle
+    (``context_candidates`` itself is created by ``Base.metadata.create_all``; its
+    flag/opinion columns are added here when an older DB already has the table)."""
     with engine.begin() as conn:
         for table, columns in _CONTEXT_COLUMNS.items():
             existing = {c["name"] for c in inspect(conn).get_columns(table)}

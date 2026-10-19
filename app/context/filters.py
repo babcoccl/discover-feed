@@ -10,6 +10,7 @@ the floor the page is off topic, at/above the ceiling it is coverage of the same
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 from app.enrich.domains import blocked_reason, canonical_domain
 from app.enrich.filters import (
@@ -87,3 +88,34 @@ def context_text_check(
     if score >= ceiling:
         return ContextVerdict("same_event", score, entities)
     return ContextVerdict(None, score, entities)
+
+
+SAME_EVENT_LEAD = timedelta(hours=12)
+"""Coverage can lead the story's first member by a little (timezone/embargo)."""
+SAME_EVENT_TITLE = 0.45
+"""Title vs. the story headline this similar inside the event window => same event."""
+SAME_EVENT_ENTITIES = 4
+SAME_EVENT_TEXT = 0.35
+"""... or this many shared entities with text this similar (below the ceiling)."""
+
+
+def same_event_check(
+    hit: SearchHit,
+    story: StoryContext,
+    *,
+    published_at: datetime | None,
+    entities: int,
+    text_similarity: float,
+    now: datetime,
+) -> str | None:
+    """``same_event`` when a *dated* candidate was published inside the story's event
+    window — ``[first_at - SAME_EVENT_LEAD, now]`` — and looks like its coverage
+    (matching headline, or many shared entities with body similarity). Undated pages
+    are never rejected here: backgrounders are often old or undated."""
+    if published_at is None or not story.first_at - SAME_EVENT_LEAD <= published_at <= now:
+        return None
+    if similarity(hit.title, " ".join(story.headlines)) >= SAME_EVENT_TITLE:
+        return "same_event"
+    if entities >= SAME_EVENT_ENTITIES and text_similarity >= SAME_EVENT_TEXT:
+        return "same_event"
+    return None

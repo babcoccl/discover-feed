@@ -4,13 +4,14 @@ re-checked after each redirect and at connect time)."""
 
 import asyncio
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import httpx
 
 from app.extract import Extractor, _describe, _Rejected, domain_of, extract_text
 from app.images.meta import page_images
 from app.images.safety import Blocked, Guard, guarded_get_stream, guarded_transport
+from app.page_meta import PageMeta, page_meta
 
 _PAYWALL = re.compile(rb"""["']isAccessibleForFree["']\s*:\s*["']?(false|no)["']?""", re.IGNORECASE)
 
@@ -24,6 +25,9 @@ class FetchedPage:
     text: str = ""
     words: int = 0
     image_url: str | None = None
+    meta: PageMeta = field(default_factory=PageMeta)
+    """Publication date / og:type / article:section (``app.page_meta``); empty when the
+    page declares none."""
 
 
 class CandidateFetcher(Extractor):
@@ -89,4 +93,6 @@ class CandidateFetcher(Extractor):
         if words < self.min_words:
             return FetchedPage(url, "failed", f"extracted {words} words (< {self.min_words})")
         images = page_images(html, url)
-        return FetchedPage(url, "ok", text=text, words=words, image_url=images.image)
+        return FetchedPage(
+            url, "ok", text=text, words=words, image_url=images.image, meta=page_meta(html, url)
+        )

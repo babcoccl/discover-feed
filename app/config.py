@@ -23,7 +23,11 @@ from pydantic import (
     model_validator,
 )
 
-from app.enrich.quality import DEFAULT_SUSPICIOUS_PATTERNS, DEFAULT_SUSPICIOUS_TLDS
+from app.enrich.quality import (
+    DEFAULT_DENY_DOMAINS,
+    DEFAULT_SUSPICIOUS_PATTERNS,
+    DEFAULT_SUSPICIOUS_TLDS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -627,9 +631,11 @@ class EnrichmentQualityConfig(_Model):
     )
     """Regexes on the registrable domain name for keyword-stuffed farm names
     (``tech-insider``, ``news24``); accepted hits matching one are flagged."""
-    deny_domains: list[str] = Field(default_factory=list)
+    deny_domains: list[str] = Field(default_factory=lambda: list(DEFAULT_DENY_DOMAINS))
     """Confirmed content-farm domains — hard-denied like ``enrichment.deny_domains``
-    and the DB block list; review the pipeline panel's flagged domains to fill it."""
+    and the DB block list; review the pipeline panel's flagged domains to fill it.
+    Defaults to farms confirmed in live evaluations (``DEFAULT_DENY_DOMAINS``);
+    a YAML list replaces the defaults entirely."""
 
     @model_validator(mode="after")
     def _check(self) -> "EnrichmentQualityConfig":
@@ -788,6 +794,12 @@ class ContextConfig(_Model):
     llm_judge: bool = True
     """LLM scores each surviving page 0/1/2 for added context (kept only at 2; off: keep
     pages without a note). Failures reject the candidate — nothing is fabricated."""
+    reject_flagged: bool = True
+    """Reject candidates the shared source-quality gate flags (content-farm domains or
+    SEO-template titles) instead of keeping them with a ``flagged`` marker like
+    enrichment does."""
+    max_opinion: int = Field(default=1, ge=0, le=10)
+    """Opinion/column links kept per story (``context_kind = opinion``; 0: none)."""
     language: str = "en"
     cache_hours: float = Field(default=24, ge=0)
     empty_cache_minutes: float = Field(default=10, ge=0)

@@ -409,14 +409,18 @@ def story_regenerate(request: Request, story_id: int, kind: str = "both") -> Res
 
 @router.post("/story/{story_id}/members/{article_id}/block-domain")
 def story_block_domain(request: Request, story_id: int, article_id: int) -> Response:
-    """Block this domain (admin): deny-list it, drop every enrichment member it added
-    and queue the affected stories for one regeneration."""
+    """Block this domain (admin): deny-list it, drop every enrichment member or context
+    link it added and queue the affected stories for one regeneration."""
     enricher = _enricher(request)
     if enricher is None:
         raise HTTPException(status_code=409, detail="enrichment is not configured")
     with _session(request) as session:
         article = session.get(Article, article_id)
-        if article is None or article.story_id != story_id or article.origin != ENRICHMENT:
+        if (
+            article is None
+            or article.story_id != story_id
+            or article.origin not in (ENRICHMENT, CONTEXT)
+        ):
             raise HTTPException(status_code=404, detail="no web-search member")
         url = article.url
     result = enricher.block_domain(url)

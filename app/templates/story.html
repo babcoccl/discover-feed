@@ -98,9 +98,11 @@
     <li class="p-3">
       <div class="mb-1 flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
         <span class="font-medium text-slate-700 dark:text-slate-300" data-publisher>{{ c.source_id | replace("web:", "") }}</span>
+        {% if c.context_kind == "opinion" %}<span class="inline-flex items-center rounded-full border border-violet-300 px-1.5 py-0.5 text-[0.7rem] font-medium text-violet-700 dark:border-violet-700 dark:text-violet-300" data-context-opinion title="An opinion/column piece, not reported news — background takes precedence">opinion</span>{% endif %}
         {% if c.context_angle %}<span aria-hidden="true">·</span><span class="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500 dark:bg-slate-800 dark:text-slate-400">{{ c.context_angle }}</span>{% endif %}
         <span aria-hidden="true">·</span>
         <time datetime="{{ c.published_at.isoformat() }}" title="{{ c.published_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ c.published_at | reltime }}</time>
+        {{ block_button(c.id, "closest li") }}
       </div>
       <a href="{{ c.url }}" target="_blank" rel="noopener noreferrer" class="font-medium hover:underline">{{ c.title or c.url }} <span aria-hidden="true" class="text-sky-700 dark:text-sky-400">↗</span></a>
       {% if c.context_note %}<p class="mt-1 text-sm text-slate-600 dark:text-slate-400">{{ c.context_note }}</p>{% endif %}

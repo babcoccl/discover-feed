@@ -1025,21 +1025,26 @@ class Enricher:
 
     def block_domain(self, url_or_domain: str) -> dict:
         """Persist ``url_or_domain`` in the blocked-domains table, remove every enrichment
-        member on it (canonical domain, so publisher aliases block editions too), and
-        queue the affected stories for one regeneration. Returns what happened."""
+        member and context link on it (canonical domain, so publisher aliases block
+        editions too), and queue the affected stories for one regeneration — context
+        links never feed briefs, so removing one alone does not requeue. Returns what
+        happened."""
         domain = registrable_domain(url_or_domain)
         canonical = canonical_domain(url_or_domain, self.config.publisher_aliases)
         with self.session_factory() as session:
             if session.get(BlockedDomain, domain) is None:
                 session.add(BlockedDomain(domain=domain, canonical=canonical))
             blocked = {domain, canonical}
-            members = session.scalars(select(Article).where(Article.origin == ENRICHMENT)).all()
+            members = session.scalars(select(Article).where(Article.origin.in_(NON_FEED))).all()
             story_ids: set[int] = set()
             removed = 0
+            removed_context = 0
             for m in members:
                 if canonical_domain(m.url, self.config.publisher_aliases) not in blocked:
                     continue
-                if m.story_id:
+                if m.origin == CONTEXT:
+                    removed_context += 1
+                elif m.story_id:
                     story_ids.add(m.story_id)
                 session.delete(m)
                 removed += 1
@@ -1060,6 +1065,7 @@ class Enricher:
             "domain": domain,
             "canonical": canonical,
             "removed": removed,
+            "removed_context": removed_context,
             "stories": sorted(story_ids),
             "queued": queued,
         }

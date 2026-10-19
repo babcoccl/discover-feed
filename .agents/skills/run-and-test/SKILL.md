@@ -354,10 +354,33 @@ update it when fixtures or defaults change. README "Tuning clustering" has the f
   already-accepted pages; `max_per_domain` (1) caps accepted links from one domain
   (`domain_cap`, first judge-passing hit wins). Optional `llm_judge` (default on with
   a summarizer role) keeps only `adds_context: 2` + `is_substantive_article: 1`
-  (`not_article` = link list / landing / product page), `judge_failed`/
-  `judge_rejected` reject — never fabricate notes. Cheap rejects before any fetch:
+  (`not_article` = link list / landing / product page); the judge also returns
+  `same_event` (same specific event incl. follow-up details — forces rejection even
+  when adds_context is 2) and `is_opinion`; `judge_failed`/`judge_rejected` reject —
+  never fabricate notes. Cheap rejects before any fetch:
   `same_domain` (vs ALL member domains incl. enrichment members), `social`/
   `aggregator`/`denied`/`bad_url`/`duplicate_url`/`already_ingested`/`language`.
+- Context quality (phase 11.3): `same_event_check` in `filters.py` rejects a DATED
+  candidate published inside [story first_at - 12h, now] when title similarity >= 0.45
+  OR (shared entities >= 4 AND text similarity >= 0.35); undated candidates are
+  exempt; the date comes from the hit or `app.page_meta` (og:article:published_time,
+  JSON-LD datePublished, `<time>` on `FetchedPage.meta`). Prior-date preference:
+  pages published BEFORE the story rank first among accepted (bounded by
+  `OVERSHOOT` = 3 extra fetch+judge evaluations past `max_items`). The shared
+  source-quality gate applies too: `_flag()` = `quality.flag_reason` +
+  `quality.seo_title_reason` (`[20xx]` tail + comparison/specs/guide) -> `flagged`
+  rejected by default via `context.reject_flagged` (enrichment keeps-and-marks;
+  context drops). Deny lists are shared with enrichment (`enrichment.deny_domains`,
+  `enrichment.quality.deny_domains` — defaults seed the eval farms shattered.io,
+  finance.biggo.com, vocal.media, newscord.org via `DEFAULT_DENY_DOMAINS` — and the
+  `blocked_domains` table; "Block this domain" on a context link writes there,
+  deleting context links without requeueing since they never feed briefs).
+- Opinion labels: `is_opinion_page` in `app/page_meta.py` (URL path /opinion/,
+  /columnists/, /mnenia/, /blog/…, newsletter hosts substack.com & co., og:type /
+  article:section) OR the judge's `is_opinion` -> `context_kind = "opinion"` on the
+  Article (badge in the context section, `kind` in API v1), capped at
+  `context.max_opinion` (default 1, `opinion_cap` beyond); `ContextCandidate` rows
+  record `flagged` + `is_opinion`.
 - Budget: shared `search:<name>` usage via `SearchService` plus context's own
   `daily_request_budget` counted as `context:<name>` `source_usage` rows.
 - Providers: reuse `SearchService`; `SearchProvider.supports_find_similar` + default
@@ -366,12 +389,14 @@ update it when fixtures or defaults change. README "Tuning clustering" has the f
 - Debug: `python -m app.context.diagnose --story-id N [--dry-run]`,
   `python -m app.context.evaluate --stories 30 --markdown`
   (Windows: `.venv\Scripts\python -m app.context.evaluate ...`). Dry runs write nothing.
-- Tests: `tests/test_context.py` (fakes everywhere — `FakeSearch`, `page_transport`,
+- Tests: `tests/test_context.py` (fakes everywhere — `FakeSearch` (hits may carry a
+  3rd tuple element = ISO date; None = undated), `page_transport`,
   `Guard(resolver)`, no real LLM; judge fakes must emit `is_substantive_article` too).
   Docker E2E: fixture server `--context-wire-base
   http://contextwire:8081` serves a TinyFish-shaped `/context-search` whose hits are
-  generated `/context/<id>` backgrounder pages (shares title entities + some content
-  words -> lands in the similarity band; `llm_judge: false` in
+  generated `/context/<id>` backgrounder pages dated ~30 days back (a real
+  backgrounder predates the event — keeps them out of the same-event window AND
+  exercises the prior-date preference); `llm_judge: false` in
   `tests/fixtures/docker/profiles.yaml` because the fake LLM cannot emit
   `{"adds_context":2}`); `scripts/docker_e2e.py` asserts at least one story gets
   `context[]` and that no context link ever appears in `sources`.

@@ -715,6 +715,16 @@
             "title": "Domain",
             "type": "string"
           },
+          "kind": {
+            "default": "article",
+            "description": "`opinion` when the page is an opinion/column piece (at most `context.max_opinion` per story); `article` otherwise.",
+            "enum": [
+              "article",
+              "opinion"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
           "note": {
             "anyOf": [
               {
