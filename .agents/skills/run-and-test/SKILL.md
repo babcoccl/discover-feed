@@ -7,6 +7,12 @@ description: How to install, lint, test and run discover-feed locally and in Doc
 
 Requires Python 3.12+ (or just Docker).
 
+Docs live in `docs/` (MkDocs site; `make docs` builds it, `scripts/check_docs.py`
+verifies coverage); the API contract is `docs/openapi.v1.json`; `README.md` is
+only a front page. **Every change must update the matching docs page** — a new
+`DISCOVER_*` var, `python -m` command, `/api` route or config field that is
+missing from `docs/` fails `make docs` and CI.
+
 ```bash
 python3.12 -m venv .venv && source .venv/bin/activate
 make install          # pip install -e ".[dev]"  (re-run after pulling: deps change)
@@ -96,7 +102,7 @@ python -m app.cluster --rebuild                              # re-cluster the co
 Labels: `tests/fixtures/demo/stories.yaml` (stories + near-miss pairs). Keep precision at 100%
 and the threshold clearly above the highest near-miss cosine. Add new live false merges or misses
 as fixtures (feed item + page + label). `tests/test_cluster.py` asserts the exact groups, so
-update it when fixtures or defaults change. README "Tuning clustering" has the full procedure.
+update it when fixtures or defaults change. docs/features/clustering.md has the full procedure.
 
 ## Summaries and the LLM
 

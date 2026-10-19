@@ -3,7 +3,7 @@ HOST ?= 0.0.0.0
 PORT ?= 8000
 DEMO_HOST ?= 127.0.0.1
 
-.PHONY: install test lint format run demo docker-up docker-down openapi
+.PHONY: install test lint format run demo docker-up docker-down openapi docs docs-serve
 
 install:
 	$(PYTHON) -m pip install -e ".[dev]"
@@ -30,6 +30,15 @@ demo:
 # Regenerate the committed /api/v1 contract (tests fail while it is out of date).
 openapi:
 	$(PYTHON) -m app.openapi
+
+# Build the MkDocs site into site/ (strict: warnings are errors). Needs `pip install -e ".[docs]"`.
+docs:
+	$(PYTHON) scripts/check_docs.py
+	$(PYTHON) -m mkdocs build --strict
+
+# Serve the docs site locally with live reload.
+docs-serve:
+	$(PYTHON) -m mkdocs serve
 
 docker-up:
 	docker compose up --build

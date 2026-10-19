@@ -7,7 +7,7 @@ profiles:
     name: Personal Reader
     description: Long-form tech, science and culture reading, summarised daily.
     # Web-search enrichment: find other publishers' coverage of single-sourced stories
-    # (README "Web-search enrichment"). Off by default; Settings > Pipeline can toggle it.
+    # (docs/features/enrichment/). Off by default; Settings > Pipeline can toggle it.
     enrichment:
       enabled: false
       providers:
@@ -103,7 +103,7 @@ profiles:
     # the story page; they are NEVER sources of the event, never feed briefs/reports/
     # citations/Q&A, and never fire alerts. Off by default; Settings > Pipeline toggles
     # it per profile. Shares the enrichment providers' budgets and cooldowns plus its
-    # own daily_request_budget. (README "Background and context links")
+    # own daily_request_budget. (docs/features/context/)
     context:
       enabled: false
       providers:
@@ -259,7 +259,7 @@ profiles:
         tags: [markets]
     # Keyword alerts: evaluated on title + feed summary the moment an article is ingested
     # (before extraction, clustering or any LLM work), at most once per story per rule.
-    # `$AAPL` is a case-sensitive ticker that also matches "AAPL". See README "Alerts".
+    # `$AAPL` is a case-sensitive ticker that also matches "AAPL". See docs/features/alerts.md.
     alert_rules:
       - name: Rate decisions
         include: [fomc, rate decision, federal funds rate, rate cut, rate hike]
