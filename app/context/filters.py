@@ -5,13 +5,22 @@ social/aggregator/deny-listed, already-ingested, language. ``context_text_check`
 after extraction: minimum length, near-duplicates of members or of each other, a shared
 entity with the story, and a text similarity *between* ``floor`` and ``ceiling`` — below
 the floor the page is off topic, at/above the ceiling it is coverage of the same event
-(which is enrichment's job, not context's).
+(which is enrichment's job, not context's). ``same_event_signals`` adds deterministic
+same-event rules before the (expensive, inconsistent) LLM judge: shared specific
+numbers, a stricter similarity band for contemporaneous pages, and a headline
+entities + event-word check.
 """
 
+from __future__ import annotations
+
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import TYPE_CHECKING
 
+from app.cluster.tokens import normalize, words
+from app.context.rules import SameEventRules
 from app.enrich.domains import blocked_reason, canonical_domain
 from app.enrich.filters import (
     StoryContext,
@@ -21,7 +30,10 @@ from app.enrich.filters import (
     similarity,
 )
 from app.normalize import canonicalize_url
-from app.search.base import SearchHit
+
+if TYPE_CHECKING:
+    # runtime import would cycle: app.config -> this module -> app.search.base -> app.config
+    from app.search.base import SearchHit
 
 
 def context_pre_filter(
@@ -90,32 +102,69 @@ def context_text_check(
     return ContextVerdict(None, score, entities)
 
 
-SAME_EVENT_LEAD = timedelta(hours=12)
-"""Coverage can lead the story's first member by a little (timezone/embargo)."""
-SAME_EVENT_TITLE = 0.45
-"""Title vs. the story headline this similar inside the event window => same event."""
-SAME_EVENT_ENTITIES = 4
-SAME_EVENT_TEXT = 0.35
-"""... or this many shared entities with text this similar (below the ceiling)."""
+_NUMBER = re.compile(r"\d[\d,.]*\d|\d")
+_YEAR = re.compile(r"(19|20)\d{2}")
 
 
-def same_event_check(
+def _numbers(text: str) -> set[str]:
+    """Distinct numeric tokens in ``text``, canonicalized (commas/periods stripped):
+    "1,068" -> "1068", "$6.2 billion" -> "6.2". Single digits and 4-digit years
+    (19xx/20xx) are excluded — they are everywhere and carry no event identity."""
+    out = set()
+    for raw in _NUMBER.findall(text or ""):
+        token = raw.replace(",", "").rstrip(".")
+        if len(token) == 1 or _YEAR.fullmatch(token):
+            continue
+        out.add(token)
+    return out
+
+
+def _event_stem(token: str) -> str:
+    """Crude suffix stem so inflections of one event word meet ("unveils"/
+    "unveiled" -> "unveil", "raises"/"raised" -> "rais", "approves"/
+    "approved" -> "approv")."""
+    w = normalize(token)
+    for suffix in ("ing", "ies", "ed", "es", "s", "d", "e"):
+        if w.endswith(suffix) and len(w) - len(suffix) >= 3:
+            return w[: -len(suffix)]
+    return w
+
+
+def same_event_signals(
     hit: SearchHit,
     story: StoryContext,
     *,
+    brief: str,
+    text: str,
     published_at: datetime | None,
     entities: int,
     text_similarity: float,
-    now: datetime,
+    rules: SameEventRules,
 ) -> str | None:
-    """``same_event`` when a *dated* candidate was published inside the story's event
-    window — ``[first_at - SAME_EVENT_LEAD, now]`` — and looks like its coverage
-    (matching headline, or many shared entities with body similarity). Undated pages
-    are never rejected here: backgrounders are often old or undated."""
-    if published_at is None or not story.first_at - SAME_EVENT_LEAD <= published_at <= now:
-        return None
-    if similarity(hit.title, " ".join(story.headlines)) >= SAME_EVENT_TITLE:
-        return "same_event"
-    if entities >= SAME_EVENT_ENTITIES and text_similarity >= SAME_EVENT_TEXT:
-        return "same_event"
+    """Which deterministic signal marks this page as coverage of the same event:
+    ``"numbers"`` / ``"date_band"`` / ``"entities_verb"`` — None when none fires.
+    Each signal alone is enough to reject; the returned tag is recorded for the
+    evaluate/diagnose breakdown."""
+    story_numbers = _numbers(f"{story.title} {brief}")
+    if story_numbers:
+        shared = story_numbers & _numbers(f"{hit.title} {text[: rules.numbers_text_chars]}")
+        if len(shared) >= rules.numbers_min_shared:
+            return "numbers"
+    contemporaneous = (
+        published_at is not None
+        and abs(published_at - story.first_at) <= timedelta(hours=rules.window_hours)
+    ) or (published_at is None and entities >= rules.undated_min_entities)
+    if contemporaneous:
+        title_similarity = similarity(hit.title, " ".join(story.headlines))
+        if (
+            title_similarity >= rules.max_title_similarity
+            or text_similarity >= rules.max_text_similarity
+        ):
+            return "date_band"
+    if shared_entities(hit.title, story) >= rules.entities_min:
+        stems = {_event_stem(t) for t in rules.event_terms}
+        headline_events = {_event_stem(w) for w in words(" ".join(story.headlines))} & stems
+        title_events = {_event_stem(w) for w in words(hit.title)} & stems
+        if headline_events & title_events:
+            return "entities_verb"
     return None

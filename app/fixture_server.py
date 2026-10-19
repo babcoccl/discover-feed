@@ -107,7 +107,9 @@ def context_json(fixture_dir: Path, query: str, wire_base: str) -> bytes:
         {
             "position": n,
             "site_name": urlsplit(wire_base).hostname or "contextwire",
-            "title": f"Background: {title}",
+            # a backgrounder title: shares entities but does NOT echo the headline
+            # (a headline echo trips the entities+event-word same-event rule)
+            "title": _backgrounder_title(title),
             "snippet": f"Background and history on {title}.",
             "url": f"{wire_base.rstrip('/')}/context/{stem}",
             "date": (datetime.now(UTC) - timedelta(days=30)).isoformat(),
@@ -116,6 +118,16 @@ def context_json(fixture_dir: Path, query: str, wire_base: str) -> bytes:
     ]
     body = {"query": query, "results": results, "total_results": len(results), "page": 0}
     return json.dumps(body).encode()
+
+
+def _backgrounder_title(title: str) -> str:
+    """A background-reading title for the generated context page: names the topic's
+    entities without echoing the story headline (no event verbs — the deterministic
+    same-event rules reject a headline lookalike)."""
+    ents = [w for w in re.findall(r"[A-Za-z0-9]+", title) if len(w) >= 4]
+    if len(ents) >= 2:
+        return f"How {ents[0]} and {ents[1]} got here"
+    return f"Background on {ents[0] if ents else 'the issue'}"
 
 
 def context_html(fixture_dir: Path, article_id: str) -> bytes | None:
@@ -160,7 +172,7 @@ def context_html(fixture_dir: Path, article_id: str) -> bytes | None:
     body = "".join(f"<p>{htmllib.escape(s)}</p>" for s in sentences)
     pad = max(0, (340 - len(text.split())) // 28 + 2)
     body += "".join(f"<p>{htmllib.escape(filler)}</p>" for _ in range(pad))
-    heading = htmllib.escape(f"Background: {title}")
+    heading = htmllib.escape(_backgrounder_title(title))
     return (
         f"<!doctype html><html><head><title>{heading}</title></head><body>"
         f"<article><h1>{heading}</h1>{body}</article></body></html>"

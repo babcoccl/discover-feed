@@ -301,6 +301,8 @@ _CONTEXT_COLUMNS = {
     "context_candidates": {
         "flagged": "VARCHAR(40) NOT NULL DEFAULT ''",
         "is_opinion": "BOOLEAN NOT NULL DEFAULT 0",
+        "judge_same_event": "BOOLEAN",
+        "same_event_signal": "VARCHAR(20) NOT NULL DEFAULT ''",
     },
 }
 

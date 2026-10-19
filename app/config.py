@@ -23,6 +23,7 @@ from pydantic import (
     model_validator,
 )
 
+from app.context.rules import SameEventRules
 from app.enrich.quality import (
     DEFAULT_DENY_DOMAINS,
     DEFAULT_SUSPICIOUS_PATTERNS,
@@ -800,6 +801,9 @@ class ContextConfig(_Model):
     enrichment does."""
     max_opinion: int = Field(default=1, ge=0, le=10)
     """Opinion/column links kept per story (``context_kind = opinion``; 0: none)."""
+    same_event: "SameEventRules" = Field(default_factory=lambda: SameEventRules())
+    """Deterministic same-event signals run before the judge (shared numbers, a
+    stricter band for contemporaneous pages, title entities + an event word)."""
     language: str = "en"
     cache_hours: float = Field(default=24, ge=0)
     empty_cache_minutes: float = Field(default=10, ge=0)

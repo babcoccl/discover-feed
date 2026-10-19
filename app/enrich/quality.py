@@ -38,6 +38,7 @@ DEFAULT_DENY_DOMAINS = (
     "finance.biggo.com",  # biggo.com content-farm network (4 accepted links in the eval)
     "vocal.media",  # user-generated content platform, not reported news
     "newscord.org",  # SEO news-site farm ("Elon Musk Pledges One SpaceX Share...")
+    "orcarouter.ai",  # SEO blog (AI keyword posts), seen in enrichment + the context eval
 )
 """Confirmed content farms hard-denied by default; YAML ``quality.deny_domains``
 replaces this list and the DB block list overrides both."""

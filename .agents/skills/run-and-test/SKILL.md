@@ -353,17 +353,28 @@ update it when fixtures or defaults change. README "Tuning clustering" has the f
   angle query was heuristic); `min_words` 300; shingle `near_duplicate` vs members and
   already-accepted pages; `max_per_domain` (1) caps accepted links from one domain
   (`domain_cap`, first judge-passing hit wins). Optional `llm_judge` (default on with
-  a summarizer role) keeps only `adds_context: 2` + `is_substantive_article: 1`
-  (`not_article` = link list / landing / product page); the judge also returns
-  `same_event` (same specific event incl. follow-up details — forces rejection even
-  when adds_context is 2) and `is_opinion`; `judge_failed`/`judge_rejected` reject —
-  never fabricate notes. Cheap rejects before any fetch:
+  a summarizer role) sees the story headline + brief + story/page dates and keeps
+  only `adds_context: 2` + `is_substantive_article: 1`
+  (`not_article` = link list / landing / product page); its `same_event` flag is
+  stored as `judge_same_event` and forces `same_event` only with adds_context >= 1
+  — score 0 + flag = `off_topic`, score 0 without = `judge_rejected`; `is_opinion`;
+  `judge_failed`/`judge_rejected` reject — never fabricate notes. Cheap rejects before any fetch:
   `same_domain` (vs ALL member domains incl. enrichment members), `social`/
   `aggregator`/`denied`/`bad_url`/`duplicate_url`/`already_ingested`/`language`.
-- Context quality (phase 11.3): `same_event_check` in `filters.py` rejects a DATED
-  candidate published inside [story first_at - 12h, now] when title similarity >= 0.45
-  OR (shared entities >= 4 AND text similarity >= 0.35); undated candidates are
-  exempt; the date comes from the hit or `app.page_meta` (og:article:published_time,
+- Same-event rules (phase 11.4): `same_event_signals` in `filters.py` runs BEFORE
+  the judge, independent of its flag; thresholds under `context.same_event`
+  (`SameEventRules` in `rules.py` — a stdlib-only module so `app.config` can
+  import it without an import cycle). Three signals, each alone => `same_event`,
+  recorded as `same_event_signal` (+ `ceiling` for the similarity-ceiling hit,
+  `judge` for a judge flag):
+  - `numbers`: title + first `numbers_text_chars` (600) shares >= `numbers_min_shared`
+    (2) numeric tokens with story title + brief (no single digits or 4-digit years);
+  - `date_band`: CONTEMPORANEOUS = dated within +/- `window_hours` (72) of
+    `first_at`, OR undated with >= `undated_min_entities` (3) shared entities ->
+    BOTH `max_title_similarity` 0.30 and `max_text_similarity` 0.30 apply;
+  - `entities_verb`: title shares >= `entities_min` (3) story entities AND an
+    `event_terms` word also in a story headline (`_event_stem` merges inflections).
+  The date comes from the hit or `app.page_meta` (og:article:published_time,
   JSON-LD datePublished, `<time>` on `FetchedPage.meta`). Prior-date preference:
   pages published BEFORE the story rank first among accepted (bounded by
   `OVERSHOOT` = 3 extra fetch+judge evaluations past `max_items`). The shared
@@ -394,9 +405,10 @@ update it when fixtures or defaults change. README "Tuning clustering" has the f
   `Guard(resolver)`, no real LLM; judge fakes must emit `is_substantive_article` too).
   Docker E2E: fixture server `--context-wire-base
   http://contextwire:8081` serves a TinyFish-shaped `/context-search` whose hits are
-  generated `/context/<id>` backgrounder pages dated ~30 days back (a real
-  backgrounder predates the event — keeps them out of the same-event window AND
-  exercises the prior-date preference); `llm_judge: false` in
+  generated `/context/<id>` backgrounder pages titled by `_backgrounder_title`
+  ("How <ent1> and <ent2> got here" — a headline echo trips entities_verb) and
+  dated ~30 days back (a real backgrounder predates the event — keeps them out of
+  the date band AND exercises the prior-date preference); `llm_judge: false` in
   `tests/fixtures/docker/profiles.yaml` because the fake LLM cannot emit
   `{"adds_context":2}`); `scripts/docker_e2e.py` asserts at least one story gets
   `context[]` and that no context link ever appears in `sources`.

@@ -114,6 +114,11 @@ class Candidate:
     ``context.max_opinion`` and stored as ``context_kind = opinion``."""
     published_at: datetime | None = None
     """Hit date, else the page's declared publication date; None when undated."""
+    same_event_signal: str = ""
+    """Which same-event signal rejected the page (``ceiling``/``numbers``/
+    ``date_band``/``entities_verb``/``judge``); empty when not a same_event reject."""
+    judge_same_event: bool | None = None
+    """The judge's ``same_event`` flag, kept separate from the rule-based decision."""
 
 
 @dataclass
@@ -657,7 +662,7 @@ class ContextFinder:
     async def _fetch_judge(
         self, candidates: list[Candidate], story: StoryContext, brief: str, result
     ) -> None:
-        from app.context.filters import context_text_check, same_event_check
+        from app.context.filters import context_text_check, same_event_signals
         from app.page_meta import is_opinion_page
 
         cfg = self.config
@@ -698,34 +703,42 @@ class ContextFinder:
             c.shared_entities, c.text_similarity = verdict.entities, verdict.score
             if verdict.reason:
                 c.reason = verdict.reason
+                if verdict.reason == "same_event":
+                    c.same_event_signal = "ceiling"
                 continue
             c.published_at = c.hit.published_at or (c.page.meta.published_at if c.page else None)
-            if same_event_check(
+            signal = same_event_signals(
                 c.hit,
                 story,
+                brief=brief,
+                text=c.page.text or "",
                 published_at=c.published_at,
                 entities=verdict.entities,
                 text_similarity=verdict.score,
-                now=self.now(),
-            ):
-                c.reason = "same_event"
+                rules=cfg.same_event,
+            )
+            if signal:
+                c.reason, c.same_event_signal = "same_event", signal
                 continue
             c.is_opinion = is_opinion_page(c.hit.url, c.page.meta if c.page else None)
-            judge = await self._judge(story.title, brief, c)
+            judge = await self._judge(story, brief, c)
             if judge is None and cfg.llm_judge and self.llm_role is not None:
                 c.reason = "judge_failed"  # never fabricate a note
                 continue
             if judge is not None:
-                c.judge, c.note, substantive, judge_same_event, judge_opinion = judge
-                c.is_opinion = c.is_opinion or judge_opinion
-                if judge_same_event:
-                    c.reason = "same_event"  # the judge's flag forces rejection
+                c.judge, c.note, substantive, judge_se, judge_opinion = judge
+                c.judge_same_event, c.is_opinion = judge_se, c.is_opinion or judge_opinion
+                if judge_se and c.judge >= 1:
+                    # near-identical page the judge still read as related
+                    c.reason, c.same_event_signal = "same_event", "judge"
                     continue
                 if not substantive:
                     c.reason = "not_article"
                     continue
                 if c.judge != 2:
-                    c.reason = "judge_rejected"
+                    # score 0 with same_event=false: judged and rejected; score 0
+                    # with same_event=true: off topic entirely
+                    c.reason = "off_topic" if judge_se else "judge_rejected"
                     continue
             pool.append(c)
             accepted_texts.append(c.page.text)
@@ -761,7 +774,7 @@ class ContextFinder:
         result.answered = result.answered or bool(candidates)
 
     async def _judge(
-        self, title: str, brief: str, c: Candidate
+        self, story: StoryContext, brief: str, c: Candidate
     ) -> tuple[int, str, int, bool, bool] | None:
         """``(adds_context, note, is_substantive_article, same_event, is_opinion)``:
         0 = off topic / the same event, 1 = related but thin, 2 = adds background;
@@ -773,6 +786,7 @@ class ContextFinder:
             return None
         role = self.llm_role.model_copy(update={"disable_thinking": True, "max_tokens": 200})
         text = (c.page.text or "")[:JUDGE_CHARS] if c.page else ""
+        page_date = c.published_at.date().isoformat() if c.published_at else "undated"
         messages = [
             {
                 "role": "system",
@@ -783,7 +797,9 @@ class ContextFinder:
                     '0|1, "note": "<=25 words for a reader explaining what it adds"}. '
                     "same_event: true when the page mainly reports the same specific "
                     "event as the story — including follow-up details of that same "
-                    "event (its cause, motive, reaction, quotes); when true, "
+                    "event (its cause, motive, reaction, quotes); a page date near "
+                    "the story date is a strong same-event hint, a much older page "
+                    "is usually background. When true, "
                     "adds_context must be 0 and the page is rejected. adds_context: "
                     "0 = off topic or the same event; 1 = related but adds little; "
                     "2 = the page adds background, history, data, comparison, "
@@ -798,7 +814,9 @@ class ContextFinder:
             {
                 "role": "user",
                 "content": (
-                    f"Story: {title}\n\nBrief: {brief[:1500]}\n\n"
+                    f"Story: {story.title}\n\nBrief: {brief[:1500]}\n\n"
+                    f"Story date: {story.first_at.date().isoformat()}\n"
+                    f"Page date: {page_date}\n"
                     f"Page title: {c.hit.title}\nPage text: {text}"
                 ),
             },
@@ -926,6 +944,8 @@ class ContextFinder:
                         shared_entities=c.shared_entities,
                         text_similarity=c.text_similarity,
                         judge=c.judge,
+                        judge_same_event=c.judge_same_event,
+                        same_event_signal=c.same_event_signal[:20],
                         note=c.note,
                         article_id=c.article_id,
                         created_at=now,

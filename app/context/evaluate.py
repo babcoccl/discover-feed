@@ -73,11 +73,14 @@ def _summary(results: list[ContextResult], markdown: bool) -> str:
     ]
     if same_event:
         lines.append("\n## Same-event rejections")
+        signals = Counter(c.same_event_signal or "?" for _, c in same_event)
+        lines.append("- by signal: " + ", ".join(f"{k}={n}" for k, n in signals.most_common()))
         lines += _table(
-            ["story", "judge", "domain", "title / url"],
+            ["story", "signal", "judge", "domain", "title / url"],
             [
                 [
                     str(r.story_id),
+                    c.same_event_signal or "?",
                     str(c.judge) if c.judge is not None else "-",
                     c.hit.domain or "?",
                     f"{(c.hit.title or '')[:70]} — {c.hit.url}",

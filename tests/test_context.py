@@ -910,50 +910,236 @@ def test_published_view_excludes_context_links(session_factory):
     assert len(story.members) == 2
 
 
-# --- context quality: same-event rule, opinion labels, content-farm gate -------------
+# --- context quality: same-event rules, opinion labels, content-farm gate ----------
 
 
-def test_same_event_check_rule():
-    """The date-window same-event rule: a dated page inside [story first_at - 12h, now]
-    whose title or text reads like the story is rejected; undated and older pages
-    (real backgrounders) are exempt."""
-    from app.context.filters import same_event_check
+def test_same_event_signals():
+    """The three deterministic signals each reject independently: >=2 shared specific
+    numbers (years and single digits never count), the stricter similarity band for
+    contemporaneous pages (dated +/-72h, or undated with the story's entities), and
+    a title echoing >=3 story entities plus a headline event word."""
+    from app.context.filters import same_event_signals
+    from app.context.rules import SameEventRules
 
-    story = story_ctx()  # first_at = NOW - 1h
-    similar = hit(
-        "https://other.example/1",
-        "Springfield mayor Ortiz wins council vote on electric buses",
+    rules = SameEventRules()
+    # the real StoryContext carries every member headline ("approves" is an event word)
+    story = StoryContext(
+        title="Springfield mayor Ortiz wins council vote on electric buses",
+        headlines=[
+            "Springfield mayor Ortiz wins council vote on electric buses",
+            "Springfield council approves electric bus purchase",
+        ],
+        texts=[TEXT],
+        domains=set(),
+        canonical_urls=set(),
+        first_at=NOW - timedelta(hours=1),
+        last_at=NOW,
     )
-    kw = {"entities": 8, "text_similarity": 0.3, "now": NOW}
-    assert same_event_check(similar, story, published_at=NOW, **kw) == "same_event"
-    # published before the event window: a genuine backgrounder, not coverage
-    assert same_event_check(similar, story, published_at=NOW - timedelta(days=2), **kw) is None
-    # undated candidates are never rejected by this rule
-    assert same_event_check(similar, story, published_at=None, **kw) is None
-    # an unrelated page inside the window passes
-    other = hit("https://other.example/2", "Rail depot history")
+    brief = "The council approved forty electric buses for $61.2 million over 18 months."
+
+    def check(
+        title,
+        *,
+        text="",
+        published_at=None,
+        entities=0,
+        text_similarity=0.0,
+        story_=story,
+        brief_=brief,
+    ):
+        return same_event_signals(
+            hit("https://x.example/p", title),
+            story_,
+            brief=brief_,
+            text=text,
+            published_at=published_at,
+            entities=entities,
+            text_similarity=text_similarity,
+            rules=rules,
+        )
+
+    # numbers: >=2 shared numeric tokens (title + first 600 chars vs title + brief)
     assert (
-        same_event_check(other, story, published_at=NOW, entities=1, text_similarity=0.1, now=NOW)
+        check(
+            "Springfield bus deal",
+            text="The package costs $61.2 million and runs 18 months, records show.",
+            published_at=NOW - timedelta(days=30),
+        )
+        == "numbers"
+    )
+    # single digits and 4-digit years are ignored -> nothing left to share
+    assert (
+        check(
+            "Springfield bus deal",
+            text="3 routes since 2019 and a second one in 2026.",
+            published_at=NOW - timedelta(days=30),
+        )
         is None
     )
-    # but 4+ shared entities with similar-enough text triggers it without the title
+    # date_band: a dated page inside +/-72h must clear BOTH 0.30 caps
+    kw = {"text": COVERAGE_BLEND, "entities": 8, "text_similarity": 0.55}
+    assert check("Council approves Springfield bus plan", published_at=NOW, **kw) == "date_band"
     assert (
-        same_event_check(other, story, published_at=NOW, entities=4, text_similarity=0.35, now=NOW)
-        == "same_event"
+        check(
+            "Council approves Springfield bus plan",
+            published_at=NOW + timedelta(hours=40),
+            **kw,
+        )
+        == "date_band"
     )
+    # outside the window the band does not apply (a real backgrounder can be old)
+    assert (
+        check(
+            "Springfield transit history",
+            published_at=NOW - timedelta(days=30),
+            entities=1,
+            text_similarity=0.26,
+        )
+        is None
+    )
+    # undated with >=3 shared entities counts as contemporaneous too
+    assert (
+        check(
+            "Mayor wins bus vote",
+            text=BACKGROUND3,
+            published_at=None,
+            entities=3,
+            text_similarity=0.18,
+        )
+        == "date_band"
+    )
+    # but an undated genuinely-different backgrounder still survives the band
+    assert (
+        check(
+            "How other cities handled bus electrification",
+            text=BACKGROUND3,
+            published_at=None,
+            entities=3,
+            text_similarity=0.18,
+        )
+        is None
+    )
+    # entities_verb: >=3 story entities in the title plus a headline event word
+    assert (
+        check(
+            "Springfield council approves new bus depot site",
+            published_at=NOW - timedelta(days=30),
+            entities=1,
+        )
+        == "entities_verb"
+    )
+    # >=3 shared entities without a headline event word is fine
+    assert (
+        check(
+            "Springfield council Ortiz depot photo gallery",
+            published_at=NOW - timedelta(days=30),
+            entities=1,
+        )
+        is None
+    )
+    # an event word in the title that is NOT in a story headline does not fire
+    assert (
+        check(
+            "Springfield mayor Ortiz recalls bus fight",
+            published_at=NOW - timedelta(days=30),
+            entities=1,
+        )
+        is None
+    )
+
+
+def test_same_event_signals_eval_pairs():
+    """The spec's accepted-as-same-event pattern: near-identical coverage that the
+    judge let through (breach/launch/unveil titles echoing the story) is rejected
+    by the deterministic rules; genuine backgrounder-style pages still pass."""
+    from app.context.filters import same_event_signals
+    from app.context.rules import SameEventRules
+
+    rules = SameEventRules()
+    breach = StoryContext(
+        title="OpenCode breach exposes 1068 user API tokens",
+        headlines=[
+            "OpenCode breach exposes 1068 user API tokens",
+            "Hackers leak 1068 API tokens stolen from OpenCode",
+        ],
+        texts=["Hackers breached OpenCode and leaked 1068 tokens. " * 60],
+        domains=set(),
+        canonical_urls=set(),
+        first_at=NOW - timedelta(hours=5),
+        last_at=NOW,
+    )
+    # same-event coverage: contemporaneous, echoing title, shared "1068"/"6200" numbers
+    assert (
+        same_event_signals(
+            hit("https://thehackernews.example/opencode", "OpenCode hackers leak 1,068 tokens"),
+            breach,
+            brief="The breach leaked 1068 API tokens; a $6200 bounty was paid.",
+            text="OpenCode hackers leaked 1,068 tokens and collected a $6,200 bounty. " * 30,
+            published_at=NOW,
+            entities=9,
+            text_similarity=0.5,
+            rules=rules,
+        )
+        == "numbers"
+    )
+    # entities+event word: a launch story retold (the Mercury-3 acceptance)
+    launch = StoryContext(
+        title="Astra launches Mercury 3 rocket from pad 39A",
+        headlines=["Astra launches Mercury 3 rocket from pad 39A"],
+        texts=["Astra's Mercury 3 lifted off from pad 39A carrying satellites. " * 60],
+        domains=set(),
+        canonical_urls=set(),
+        first_at=NOW - timedelta(hours=2),
+        last_at=NOW,
+    )
+    assert (
+        same_event_signals(
+            hit("https://startupfortune.example/m3", "Astra's Mercury 3 launches successfully"),
+            launch,
+            brief="Astra launched the Mercury 3 rocket.",
+            text="Mercury 3 launches: Astra's rocket lifted off from pad 39A. " * 30,
+            published_at=NOW,
+            entities=7,
+            text_similarity=0.4,
+            rules=rules,
+        )
+        == "date_band"  # contemporaneous + similar; entities_verb would fire too
+    )
+    # a genuine backgrounder still passes every signal
+    for title, published_at, text in (
+        ("How the DOE bet on small reactor designs", NOW - timedelta(days=60), BACKGROUND),
+        ("A history of API token leaks", None, BACKGROUND2),
+        ("Rocketry programs comparable to Astra's", NOW - timedelta(days=90), BACKGROUND3),
+    ):
+        got = same_event_signals(
+            hit("https://bg.example/x", title),
+            launch,
+            brief="Astra launched the Mercury 3 rocket.",
+            text=text,
+            published_at=published_at,
+            entities=2,
+            text_similarity=0.18,
+            rules=rules,
+        )
+        assert got is None, (title, got)
 
 
 def test_same_event_rule_and_prior_date_preference(session_factory):
     """A dated page inside the event window that retells the story is rejected as
-    ``same_event`` before the judge; an undated lookalike is exempt; a backgrounder
-    published before the story ranks first among accepted links."""
+    ``same_event`` before the judge; an undated title-lookalike sharing the story's
+    entities is contemporaneous and rejected too; a real backgrounder — dated before
+    the story, or undated but genuinely different — is accepted, the dated one
+    first."""
     story_id = seed(session_factory)
     PAGES["https://farm.example/retell"] = page("Springfield buses approved", COVERAGE_BLEND)
     PAGES["https://bg.example/history"] = page("Springfield transit history", BACKGROUND)
-    PAGES["https://undated.example/take"] = page("Mayor wins bus vote", BACKGROUND3)
+    PAGES["https://undated.example/take"] = page(
+        "How other cities handled bus electrification", BACKGROUND3
+    )
+    PAGES["https://undated.example/echo"] = page("Mayor wins bus vote", BACKGROUND3)
     hits = [
-        # dated NOW -> inside [first_at - 12h, now]; COVERAGE_BLEND shares the story's
-        # entities and reads ~0.5 like it -> same_event (the shattered.io DMV pattern)
+        # dated NOW -> inside +/-72h; COVERAGE_BLEND reads ~0.55 like the story
+        # -> date_band (the shattered.io DMV pattern from the eval)
         (
             "https://farm.example/retell",
             "Council approves Springfield bus plan",
@@ -965,13 +1151,18 @@ def test_same_event_rule_and_prior_date_preference(session_factory):
             "Springfield transit history",
             (NOW - timedelta(days=30)).isoformat(),
         ),
-        # undated -> the date rule does not apply
-        ("https://undated.example/take", "Mayor wins bus vote", None),
+        # undated + shares >=3 entities -> contemporaneous: its title reads ~0.37
+        # like the headlines -> date_band rejects it too
+        ("https://undated.example/echo", "Mayor wins bus vote", None),
+        # undated but genuinely different -> survives the band
+        ("https://undated.example/take", "How other cities handled bus electrification", None),
     ]
     run(make_finder(session_factory, FakeSearch(hits)), story_id)
     with session_factory() as session:
         rows = {c.url: c for c in session.scalars(select(ContextCandidate))}
     assert rows["https://farm.example/retell"].reason == "same_event"
+    assert rows["https://farm.example/retell"].same_event_signal == "date_band"
+    assert rows["https://undated.example/echo"].reason == "same_event"
     assert rows["https://undated.example/take"].decision == "accepted"
     links = context_articles(session_factory, story_id)
     assert [a.url for a in links] == [
@@ -1039,9 +1230,67 @@ def test_judge_same_event_forces_rejection_and_opinion_cap(session_factory):
     with session_factory() as session:
         rows = {c.url: c for c in session.scalars(select(ContextCandidate))}
     assert rows["https://dmv.example/breach"].reason == "same_event"
+    assert rows["https://dmv.example/breach"].same_event_signal == "judge"
+    assert rows["https://dmv.example/breach"].judge_same_event is True
     assert rows["https://dmv.example/breach"].judge == 2  # what the old prompt scored it
     assert rows["https://take.example/news/take"].reason == "opinion_cap"
     assert rows["https://take.example/news/take"].is_opinion
+
+
+def test_judge_flag_attribution(session_factory):
+    """Reason attribution: ``same_event`` only for rule hits or a judge flag with
+    adds_context >= 1; a judge score of 0 with the flag is ``off_topic`` (the page
+    was simply irrelevant), and without it ``judge_rejected``."""
+    story_id = seed(session_factory)
+    PAGES["https://a.example/x"] = page("A Springfield transit take", BACKGROUND2)
+    PAGES["https://b.example/y"] = page("How Springfield got here", BACKGROUND)
+    PAGES["https://c.example/z"] = page("What other cities learned", BACKGROUND3)
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        body = request.read().decode()
+        if '"angles"' in body:
+            out = '{"angles": [{"label": "history", "query": "\\"Springfield transit\\" history"}]}'
+        elif "A Springfield transit take" in body:
+            # score 0 with the flag: irrelevant, not same-event coverage
+            out = (
+                '{"adds_context": 0, "same_event": true, "is_opinion": false, '
+                '"is_substantive_article": 1, "note": "off topic"}'
+            )
+        elif "How Springfield got here" in body:
+            out = (
+                '{"adds_context": 0, "same_event": false, "is_opinion": false, '
+                '"is_substantive_article": 1, "note": "not context"}'
+            )
+        else:
+            # thin but flagged same-event by the judge -> same_event (judge signal)
+            out = (
+                '{"adds_context": 1, "same_event": true, "is_opinion": false, '
+                '"is_substantive_article": 1, "note": "thin same-event recap"}'
+            )
+        return httpx.Response(200, json={"choices": [{"message": {"content": out}}]})
+
+    hits = [
+        ("https://a.example/x", "A Springfield transit take", None),
+        ("https://b.example/y", "How Springfield got here", None),
+        ("https://c.example/z", "What other cities learned", None),
+    ]
+    run(
+        make_finder(
+            session_factory,
+            FakeSearch(hits),
+            llm_role=role(),
+            llm_transport=httpx.MockTransport(answer),
+        ),
+        story_id,
+    )
+    with session_factory() as session:
+        rows = {c.url: c for c in session.scalars(select(ContextCandidate))}
+    assert rows["https://a.example/x"].reason == "off_topic"
+    assert rows["https://a.example/x"].judge_same_event is True
+    assert rows["https://b.example/y"].reason == "judge_rejected"
+    assert rows["https://b.example/y"].judge_same_event is False
+    assert rows["https://c.example/z"].reason == "same_event"
+    assert rows["https://c.example/z"].same_event_signal == "judge"
 
 
 def test_context_reads_the_shared_deny_lists(session_factory):

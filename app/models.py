@@ -736,6 +736,13 @@ class ContextCandidate(Base):
     text_similarity: Mapped[float | None] = mapped_column(Float)
     judge: Mapped[int | None] = mapped_column(Integer)
     """The LLM judge's ``adds_context`` score 0 | 1 | 2 (NULL: judge off / not reached)."""
+    judge_same_event: Mapped[bool | None] = mapped_column(Boolean)
+    """The judge's raw ``same_event`` flag — informational only; the ``same_event``
+    reason is reserved for rule hits (see ``same_event_signal``) or a judge flag
+    with ``judge >= 1``."""
+    same_event_signal: Mapped[str] = mapped_column(String(20), default="", server_default="")
+    """Which deterministic/judge signal rejected the page as same_event:
+    ``ceiling`` | ``numbers`` | ``date_band`` | ``entities_verb`` | ``judge``."""
     note: Mapped[str] = mapped_column(Text, default="")
     """The judge's one-line reason shown to readers (``context_note`` on the article)."""
     article_id: Mapped[int | None] = mapped_column(Integer)
