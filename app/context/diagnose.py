@@ -60,8 +60,9 @@ def report(result: ContextResult, title: str = "") -> str:
         tsim = f"{c.text_similarity:.2f}" if c.text_similarity is not None else "-"
         ents = str(c.shared_entities) if c.shared_entities is not None else "-"
         judge = str(c.judge) if c.judge is not None else "-"
+        reason = c.reason + (f"({c.same_event_signal})" if c.same_event_signal else "")
         lines.append(
-            f"- [{c.decision}] {c.reason:<22} sim {tsim} ents {ents} judge {judge}  "
+            f"- [{c.decision}] {reason:<22} sim {tsim} ents {ents} judge {judge}  "
             f"angle {c.angle or '-'} · {c.hit.domain or '?'}\n"
             f"    {(c.hit.title or '')[:90]}\n    {c.hit.url}"
         )

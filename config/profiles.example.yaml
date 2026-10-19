@@ -52,6 +52,7 @@ profiles:
           - vocal.media       # user-generated content platform, not reported news
           - newscord.org      # SEO news-site farm ("Elon Musk Pledges One SpaceX
           #                   # Share For Every US Child")
+          - orcarouter.ai     # SEO blog (AI keyword posts), seen in enrichment + eval
         # Checked 2026-10-17 and kept: superpowerdaily.com, hyper.ai — legitimate
         # publishers whose names match the name heuristics below.
         # suspicious_tlds:    # domain endings commonly used by scraper pages
@@ -136,6 +137,23 @@ profiles:
       # max_opinion: 1             # opinion/column links kept per story (context_kind
       #                            # = opinion, badged in the context section; extras
       #                            # rejected "opinion_cap"; 0: none)
+      # same_event:                # deterministic same-event signals, applied before
+      #                            # the judge and independent of its flag
+      #   numbers_min_shared: 2    # shared numeric tokens (no single digits or 4-digit
+      #                            # years) between the page's title + first
+      #                            # numbers_text_chars and the story's title + brief
+      #   numbers_text_chars: 600
+      #   window_hours: 72         # dated within +/- this of the story's first_at
+      #                            # (or undated with undated_min_entities shared) =
+      #                            # contemporaneous: both similarity caps below apply
+      #   undated_min_entities: 3
+      #   max_title_similarity: 0.30
+      #   max_text_similarity: 0.30
+      #   entities_min: 3          # page title shares this many story entities AND an
+      #                            # event_terms word also in a story headline ->
+      #                            # same_event (breach, launch, unveils, acquires...)
+      #   event_terms: [announce, unveil, launch, acquire, ...]  # full default list in
+      #                            # app/context/rules.py DEFAULT_EVENT_TERMS
       # language: en               # hit language must match when the provider reports it
     # Topics become feed tabs. Keywords are whole-word and case-insensitive; an empty
     # include list means "every article from the topic's sources".
