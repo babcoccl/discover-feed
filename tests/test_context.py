@@ -11,7 +11,13 @@ from sqlalchemy import select
 
 from app.cluster import TfidfClusterer
 from app.cluster.service import refresh_stories, run_clustering
-from app.config import ContextConfig, EnrichmentConfig, LLMRole, SearchProviderConfig
+from app.config import (
+    ContextConfig,
+    EnrichmentConfig,
+    EnrichmentQualityConfig,
+    LLMRole,
+    SearchProviderConfig,
+)
 from app.context.angles import Angle, heuristic_angles, make_angles, parse_angles
 from app.context.filters import StoryContext, context_pre_filter, context_text_check
 from app.context.service import ContextFinder
@@ -22,6 +28,7 @@ from app.lifecycle import ensure_stories
 from app.models import (
     CONTEXT,
     Article,
+    BlockedDomain,
     ContextCandidate,
     ProfileRecord,
     SourceRecord,
@@ -130,13 +137,14 @@ class FakeSearch:
             "results": [
                 {
                     "position": n,
-                    "site_name": urlsplit(u).hostname,
-                    "title": t,
-                    "snippet": t,
-                    "url": u,
-                    "date": NOW.isoformat(),
+                    "site_name": urlsplit(e[0]).hostname,
+                    "title": e[1],
+                    "snippet": e[1],
+                    "url": e[0],
+                    # an optional 3rd tuple element is the hit's ISO date (None: undated)
+                    "date": e[2] if len(e) > 2 else NOW.isoformat(),
                 }
-                for n, (u, t) in enumerate(self.hits, start=1)
+                for n, e in enumerate(self.hits, start=1)
             ],
             "total_results": len(self.hits),
             "page": 0,
@@ -172,7 +180,7 @@ def make_finder(
     return ContextFinder(
         factory,
         cfg or config(),
-        enrichment=EnrichmentConfig(),
+        enrichment=kw.pop("enrichment", EnrichmentConfig()),
         profile_defaults={"me": True},
         search=search,
         fetcher=fetcher,
@@ -900,3 +908,286 @@ def test_published_view_excludes_context_links(session_factory):
     assert story is not None
     assert all(m.origin != CONTEXT for m in story.members)
     assert len(story.members) == 2
+
+
+# --- context quality: same-event rule, opinion labels, content-farm gate -------------
+
+
+def test_same_event_check_rule():
+    """The date-window same-event rule: a dated page inside [story first_at - 12h, now]
+    whose title or text reads like the story is rejected; undated and older pages
+    (real backgrounders) are exempt."""
+    from app.context.filters import same_event_check
+
+    story = story_ctx()  # first_at = NOW - 1h
+    similar = hit(
+        "https://other.example/1",
+        "Springfield mayor Ortiz wins council vote on electric buses",
+    )
+    kw = {"entities": 8, "text_similarity": 0.3, "now": NOW}
+    assert same_event_check(similar, story, published_at=NOW, **kw) == "same_event"
+    # published before the event window: a genuine backgrounder, not coverage
+    assert same_event_check(similar, story, published_at=NOW - timedelta(days=2), **kw) is None
+    # undated candidates are never rejected by this rule
+    assert same_event_check(similar, story, published_at=None, **kw) is None
+    # an unrelated page inside the window passes
+    other = hit("https://other.example/2", "Rail depot history")
+    assert (
+        same_event_check(other, story, published_at=NOW, entities=1, text_similarity=0.1, now=NOW)
+        is None
+    )
+    # but 4+ shared entities with similar-enough text triggers it without the title
+    assert (
+        same_event_check(other, story, published_at=NOW, entities=4, text_similarity=0.35, now=NOW)
+        == "same_event"
+    )
+
+
+def test_same_event_rule_and_prior_date_preference(session_factory):
+    """A dated page inside the event window that retells the story is rejected as
+    ``same_event`` before the judge; an undated lookalike is exempt; a backgrounder
+    published before the story ranks first among accepted links."""
+    story_id = seed(session_factory)
+    PAGES["https://farm.example/retell"] = page("Springfield buses approved", COVERAGE_BLEND)
+    PAGES["https://bg.example/history"] = page("Springfield transit history", BACKGROUND)
+    PAGES["https://undated.example/take"] = page("Mayor wins bus vote", BACKGROUND3)
+    hits = [
+        # dated NOW -> inside [first_at - 12h, now]; COVERAGE_BLEND shares the story's
+        # entities and reads ~0.5 like it -> same_event (the shattered.io DMV pattern)
+        (
+            "https://farm.example/retell",
+            "Council approves Springfield bus plan",
+            NOW.isoformat(),
+        ),
+        # a real backgrounder predates the story -> wins the prior-date preference
+        (
+            "https://bg.example/history",
+            "Springfield transit history",
+            (NOW - timedelta(days=30)).isoformat(),
+        ),
+        # undated -> the date rule does not apply
+        ("https://undated.example/take", "Mayor wins bus vote", None),
+    ]
+    run(make_finder(session_factory, FakeSearch(hits)), story_id)
+    with session_factory() as session:
+        rows = {c.url: c for c in session.scalars(select(ContextCandidate))}
+    assert rows["https://farm.example/retell"].reason == "same_event"
+    assert rows["https://undated.example/take"].decision == "accepted"
+    links = context_articles(session_factory, story_id)
+    assert [a.url for a in links] == [
+        "https://bg.example/history",
+        "https://undated.example/take",
+    ]
+    # the accepted link keeps the page's own date, not the discovery time
+    assert links[0].published_at == NOW - timedelta(days=30)
+
+
+def test_judge_same_event_forces_rejection_and_opinion_cap(session_factory):
+    """The spec's eval regressions: same-event coverage the old prompt scored 2
+    ("explains the cause", "adds hacker motives") is rejected via the judge's
+    ``same_event`` flag; opinion pages are kept but labeled and capped."""
+    story_id = seed(session_factory)
+    PAGES["https://dmv.example/breach"] = page(
+        "Florida DMV Breach: Hackers Claim 200K Records", BACKGROUND
+    )
+    PAGES["https://view.example/opinion/bus-take"] = page("Why the bus vote was wrong", BACKGROUND)
+    PAGES["https://take.example/news/take"] = page("A Springfield transit take", BACKGROUND2)
+    PAGES["https://bg.example/history"] = page("Springfield transit history", BACKGROUND3)
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        body = request.read().decode()
+        if '"angles"' in body:
+            out = '{"angles": [{"label": "history", "query": "\\"Springfield transit\\" history"}]}'
+        elif "Florida DMV Breach" in body:
+            # the same event, scored 2 by the old prompt -> same_event forces 0
+            out = (
+                '{"adds_context": 2, "same_event": true, "is_opinion": false, '
+                '"is_substantive_article": 1, "note": "adds hacker group motives"}'
+            )
+        elif "A Springfield transit take" in body:
+            out = (
+                '{"adds_context": 2, "same_event": false, "is_opinion": true, '
+                '"is_substantive_article": 1, "note": "a columnist take"}'
+            )
+        else:
+            out = (
+                '{"adds_context": 2, "same_event": false, "is_opinion": false, '
+                '"is_substantive_article": 1, "note": "decades of transit history"}'
+            )
+        return httpx.Response(200, json={"choices": [{"message": {"content": out}}]})
+
+    hits = [
+        ("https://dmv.example/breach", "Florida DMV Breach: Hackers Claim 200K Records", None),
+        ("https://view.example/opinion/bus-take", "Why the bus vote was wrong", None),
+        ("https://take.example/news/take", "A Springfield transit take", None),
+        ("https://bg.example/history", "Springfield transit history", None),
+    ]
+    finder = make_finder(
+        session_factory,
+        FakeSearch(hits),
+        llm_role=role(),
+        llm_transport=httpx.MockTransport(answer),
+    )
+    run(finder, story_id)
+    links = context_articles(session_factory, story_id)
+    kinds = {a.url: a.context_kind for a in links}
+    # URL path detection marks the /opinion/ link even with the judge saying article
+    assert kinds["https://view.example/opinion/bus-take"] == "opinion"
+    assert kinds["https://bg.example/history"] == "article"
+    # the judge-flagged second opinion hits context.max_opinion (default 1)
+    assert "https://take.example/news/take" not in kinds
+    with session_factory() as session:
+        rows = {c.url: c for c in session.scalars(select(ContextCandidate))}
+    assert rows["https://dmv.example/breach"].reason == "same_event"
+    assert rows["https://dmv.example/breach"].judge == 2  # what the old prompt scored it
+    assert rows["https://take.example/news/take"].reason == "opinion_cap"
+    assert rows["https://take.example/news/take"].is_opinion
+
+
+def test_context_reads_the_shared_deny_lists(session_factory):
+    """Context denies candidates on the same three lists as enrichment: YAML
+    ``enrichment.deny_domains``, ``enrichment.quality.deny_domains`` and the DB block
+    list — plus the built-in farm list, which covers the eval's repeat offenders."""
+    story_id = seed(session_factory)
+    with session_factory() as session:
+        session.add(BlockedDomain(domain="dbblocked.example", canonical="dbblocked.example"))
+        session.commit()
+    hits = [
+        ("https://yamldenied.example/a", "Springfield transit background"),
+        ("https://qualityfarm.example/b", "Springfield transit background"),
+        ("https://dbblocked.example/c", "Springfield transit background"),
+        # the eval's content farms, denied via the new DEFAULT_DENY_DOMAINS defaults
+        ("https://shattered.io/florida-dmv-breach-2026", "Florida DMV Breach"),
+        ("https://finance.biggo.com/wyze-scale", "Wyze Scale X Full Spec Comparison"),
+        ("https://vocal.media/shinyhunters", "The ShinyHunters Florida Leak Explained"),
+        ("https://newscord.org/musk", "Elon Musk Pledges One SpaceX Share"),
+        ("https://wikipedia.example/transit-history", "A history of Springfield transit"),
+    ]
+    enrichment = EnrichmentConfig(
+        deny_domains=["yamldenied.example"],
+        quality=EnrichmentQualityConfig(deny_domains=["qualityfarm.example"]),
+    )
+    # wait: a custom quality.deny_domains REPLACES the defaults, so the farms must be
+    # denied by... -> second run below uses the default config for them
+    finder = make_finder(session_factory, FakeSearch(hits), enrichment=enrichment)
+    run(finder, story_id)
+    with session_factory() as session:
+        rows = {c.url: c.reason for c in session.scalars(select(ContextCandidate))}
+    assert rows["https://yamldenied.example/a"] == "denied"
+    assert rows["https://qualityfarm.example/b"] == "denied"
+    assert rows["https://dbblocked.example/c"] == "denied"
+
+    # default config: the built-in farm list denies the eval offenders out of the box
+    story2 = seed(session_factory)
+    run(make_finder(session_factory, FakeSearch(hits)), story2)
+    with session_factory() as session:
+        rows = {
+            c.url: c.reason
+            for c in session.scalars(
+                select(ContextCandidate).where(ContextCandidate.story_id == story2)
+            )
+        }
+    for u, _t, *_ in hits[3:7]:
+        assert rows[u] == "denied", (u, rows.get(u))
+    links = context_articles(session_factory, story2)
+    assert [a.url for a in links] == ["https://wikipedia.example/transit-history"]
+
+
+def test_flagged_candidates_rejected_in_context(session_factory):
+    """``context.reject_flagged`` (default true) rejects what the shared quality gate
+    flags — farm-pattern domains and SEO-template titles — where enrichment only
+    marks them; with the flag off the candidate is kept and recorded ``flagged``."""
+    story_id = seed(session_factory)
+    PAGES["https://news24.example/bus"] = page("Springfield transit background", BACKGROUND)
+    PAGES["https://ok.example/compare"] = page("Bus Depot Full Spec Comparison [2026]", BACKGROUND2)
+    hits = [
+        ("https://news24.example/bus", "Springfield transit background", None),
+        ("https://ok.example/compare", "Bus Depot Full Spec Comparison [2026]", None),
+        ("https://wikipedia.example/transit-history", "A history of Springfield transit", None),
+    ]
+    run(make_finder(session_factory, FakeSearch(hits)), story_id)
+    with session_factory() as session:
+        rows = {c.url: c for c in session.scalars(select(ContextCandidate))}
+    assert rows["https://news24.example/bus"].reason == "flagged"
+    assert rows["https://news24.example/bus"].flagged == "name:news24"
+    assert rows["https://ok.example/compare"].reason == "flagged"
+    assert rows["https://ok.example/compare"].flagged == "title:seo"
+    assert rows["https://wikipedia.example/transit-history"].decision == "accepted"
+
+    story2 = seed(session_factory)
+    run(
+        make_finder(session_factory, FakeSearch(hits), cfg=config(reject_flagged=False)),
+        story2,
+    )
+    with session_factory() as session:
+        rows = {
+            c.url: c
+            for c in session.scalars(
+                select(ContextCandidate).where(ContextCandidate.story_id == story2)
+            )
+        }
+    assert rows["https://news24.example/bus"].decision == "accepted"
+    assert rows["https://news24.example/bus"].flagged == "name:news24"  # kept, marked
+
+
+def test_block_domain_removes_context_links(session_factory):
+    """ "Block this domain" on a context link: the domain lands in the DB block list
+    (denying future candidates) and existing context links are deleted — context
+    links never feed briefs, so no story is requeued for them."""
+    from app.enrich.service import Enricher
+
+    story_id = seed(session_factory)
+    run(make_finder(session_factory), story_id)
+    links = context_articles(session_factory, story_id)
+    assert len(links) == 1
+    enricher = Enricher(session_factory, EnrichmentConfig())
+    result = enricher.block_domain(links[0].url)
+    assert result["domain"] == "wikipedia.example"
+    assert result["removed_context"] == 1 and result["removed"] == 1
+    assert result["queued"] == 0  # context links never feed briefs: no regeneration
+    assert not context_articles(session_factory, story_id)
+    with session_factory() as session:
+        assert session.scalars(select(BlockedDomain)).all()
+
+
+def test_opinion_url_and_meta_detection():
+    """URL path segments, newsletter hosts and page metadata mark opinion pages."""
+    from app.page_meta import is_opinion_page, page_meta
+
+    assert is_opinion_page("https://mk.co.kr/columnists/x")
+    assert is_opinion_page("https://arguably-uk.substack.com/p/take")
+    assert is_opinion_page("https://fakti.bg/mnenia/123")
+    assert is_opinion_page("https://example.com/blog/my-take")
+    assert not is_opinion_page("https://news.example/world/story-123")
+    meta = page_meta(
+        b'<html><head><meta property="og:type" content="article"/>'
+        b'<meta property="article:section" content="Opinion"/></head><body/></html>',
+        "https://news.example/x",
+    )
+    assert is_opinion_page("https://news.example/x", meta)
+
+
+def test_page_meta_parses_dates():
+    """``og:article:published_time``, JSON-LD ``datePublished`` and ``<time>`` all
+    feed the same-event date rule and the context link's ``published_at``."""
+    from app.page_meta import PageMeta, page_meta
+
+    meta = page_meta(
+        b'<html><head><meta property="og:article:published_time" '
+        b'content="2024-05-01T10:00:00Z"/></head><body/></html>',
+        "https://x.example/a",
+    )
+    assert meta.published_at == datetime(2024, 5, 1, 10, tzinfo=UTC)
+    meta = page_meta(
+        b'<html><head><script type="application/ld+json">'
+        b'{"@type": "NewsArticle", "datePublished": "2023-11-20T08:30:00+00:00"}'
+        b"</script></head><body/></html>",
+        "https://x.example/b",
+    )
+    assert meta.published_at == datetime(2023, 11, 20, 8, 30, tzinfo=UTC)
+    meta = page_meta(
+        b'<html><body><article><time datetime="2022-02-14">Feb 14</time></article></body></html>',
+        "https://x.example/c",
+    )
+    assert meta.published_at == datetime(2022, 2, 14, tzinfo=UTC)
+    assert page_meta(b"<html><body>no dates</body></html>", "https://x.example/d") == PageMeta()

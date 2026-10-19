@@ -496,19 +496,33 @@ How it works (`app/context/`):
    rows). Providers that implement `find_similar()` (the optional `exa` provider,
    `EXA_API_KEY`) also pull semantically-similar pages for the anchor URL.
 4. `app/context/filters.py` rejects before and after fetching: same domain as any
-   member, social / aggregator / deny-listed domains, already-ingested URLs,
+   member, social / aggregator / deny-listed domains (the shared enrichment lists:
+   YAML `enrichment.deny_domains`, `enrichment.quality.deny_domains` — which ships
+   the eval's confirmed farms in its defaults — and the DB block list; "Block this
+   domain" on a context link writes there too), already-ingested URLs,
    non-HTTP URLs, robots/fetch/paywall failures, pages under `min_words` (300),
    near-duplicates of any member or accepted page (5-word shingle overlap). The page
    must share `min_shared_entities` (1; 2 when the angle was heuristic) names/numbers
    with the story and land inside the TF-IDF band
    `similarity_floor` (0.10) ≤ score < `similarity_ceiling` (0.45): below is off
-   topic, at or above is the same event — both rejected. At most `max_per_domain`
-   (1) accepted links per story may come from one domain; further accepted pages on
-   it are rejected `domain_cap`.
+   topic, at or above is the same event — both rejected. Two more rejections before
+   the (expensive) judge: the shared source-quality gate (`app.enrich.quality` —
+   farm-pattern domains and SEO-template titles like `[2026] ... Comparison`;
+   `context.reject_flagged`, default true) and a dated-candidate same-event check
+   (`same_event_check`): a page whose publication date (hit date, or
+   `og:article:published_time` / JSON-LD `datePublished` / `<time>`) falls inside
+   [story first_at − 12h, now] is rejected `same_event` when its title is similar
+   (≥0.45) or it shares ≥4 entities with text similarity ≥0.35 — undated pages are
+   exempt. At most `max_per_domain` (1) accepted links per story may come from one
+   domain; further accepted pages on it are rejected `domain_cap`.
 5. With `llm_judge` on (default when a summarizer role is configured) each surviving
    page is judged by the LLM on the brief + title + first 1500 chars:
-   `{"adds_context": 0|1|2, "is_substantive_article": 0|1, "note": "<=25 words"}` —
-   0 = off topic, 1 = primarily reporting the same news event, 2 = adds background;
+   `{"adds_context": 0|1|2, "same_event": bool, "is_opinion": bool,
+   "is_substantive_article": 0|1, "note": "<=25 words"}` — `same_event` true (the
+   page mainly reports the same specific event, including follow-up details of it:
+   cause, motive, reaction, quotes) forces rejection; `adds_context` 2 = adds
+   background, history, data, comparison, explanation or a different but related
+   event — only 2 is kept; `is_opinion` marks opinion/column/advocacy pages.
    `is_substantive_article` 0 = mostly a list of links, a landing/section page or a
    product page (`not_article`). Only a substantive article scored 2 is kept, with
    `note` stored as `context_note`. Failures and unparsable answers reject the
@@ -516,10 +530,16 @@ How it works (`app/context/`):
    accepted pages carry no note.
 6. Accepted pages become `origin="context"` articles pinned to the story
    (`discovered_for_story_id` + `anchor_article_id`), shown on the story page with
-   their domain, angle label and note, and exposed in API v1 as
-   `GET /api/v1/stories/{id}` → `context[]` (url, title, domain, note, angle).
+   their domain, angle label and note. Opinion/column pages — detected from the URL
+   path (/opinion/, /columnists/, /mnenia/, /blog/…), newsletter hosts (substack.com
+   & co.), `og:type`/`article:section` metadata or the judge's `is_opinion` — are
+   stored with `context_kind = "opinion"`, badged "opinion" in the section, and
+   capped at `context.max_opinion` (default 1) per story (`opinion_cap` beyond).
+   Pages published before the story rank first among accepted links (a real
+   backgrounder wins over newer pages). API v1 exposes them as
+   `GET /api/v1/stories/{id}` → `context[]` (url, title, domain, note, angle, kind).
    Every decision is persisted in `context_candidates` (provider, query, angle,
-   decision, reason, scores, judge verdict).
+   decision, reason, flagged, is_opinion, scores, judge verdict).
 
 Settings > Pipeline shows the context toggle plus live stats (eligible / waiting /
 done / stories with links / links added / judge accept rate / rejections by reason)

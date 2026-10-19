@@ -24,7 +24,7 @@ import json
 import re
 import threading
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -100,7 +100,9 @@ def tinyfish_json(fixture_dir: Path, query: str, wire_base: str) -> bytes:
 
 def context_json(fixture_dir: Path, query: str, wire_base: str) -> bytes:
     """TinyFish-shaped hits at the generated ``/context/<id>`` backgrounder pages: the same
-    matched fixture articles, presented as background reading rather than coverage."""
+    matched fixture articles, presented as background reading rather than coverage.
+    Dated 30 days back: a real backgrounder predates the event — the same-event date
+    rule must not reject it (and the prior-date preference ranks it first)."""
     results = [
         {
             "position": n,
@@ -108,7 +110,7 @@ def context_json(fixture_dir: Path, query: str, wire_base: str) -> bytes:
             "title": f"Background: {title}",
             "snippet": f"Background and history on {title}.",
             "url": f"{wire_base.rstrip('/')}/context/{stem}",
-            "date": datetime.now(UTC).isoformat(),
+            "date": (datetime.now(UTC) - timedelta(days=30)).isoformat(),
         }
         for n, (_, stem, title) in enumerate(_matches(fixture_dir, query, min_shared=1), start=1)
     ]

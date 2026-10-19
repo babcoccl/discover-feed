@@ -161,6 +161,11 @@ class ContextLinkV1(BaseModel):
         default=None,
         description="The search angle that surfaced it (`history`, `opposing view`...).",
     )
+    kind: Literal["article", "opinion"] = Field(
+        default="article",
+        description="`opinion` when the page is an opinion/column piece (at most "
+        "`context.max_opinion` per story); `article` otherwise.",
+    )
 
 
 class ImageOut(BaseModel):
@@ -551,6 +556,7 @@ def get_story(
                 domain=(a.source_id or "").removeprefix("web:"),
                 note=a.context_note,
                 angle=a.context_angle,
+                kind="opinion" if a.context_kind == "opinion" else "article",
             )
             for a in context_articles
         ],

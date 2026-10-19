@@ -93,6 +93,9 @@ class Article(Base):
     background"; empty when the LLM judge is off."""
     context_angle: Mapped[str | None] = mapped_column(String(120))
     """Context links only: the angle the page was found under (``app.context.angles``)."""
+    context_kind: Mapped[str | None] = mapped_column(String(10))
+    """Context links only: ``article`` | ``opinion`` (badged in the context section,
+    capped by ``context.max_opinion``)."""
 
 
 ENRICHMENT = "enrichment"
@@ -725,6 +728,10 @@ class ContextCandidate(Base):
     decision: Mapped[str] = mapped_column(String(10))
     """``accepted`` | ``rejected``."""
     reason: Mapped[str] = mapped_column(String(40), default="")
+    flagged: Mapped[str] = mapped_column(String(40), default="")
+    """Source-quality flag (``tld:``/``name:``/``title:seo``) — rejected by default."""
+    is_opinion: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    """Opinion/column page (URL/meta or the judge's ``is_opinion``)."""
     shared_entities: Mapped[int | None] = mapped_column(Integer)
     text_similarity: Mapped[float | None] = mapped_column(Float)
     judge: Mapped[int | None] = mapped_column(Integer)
