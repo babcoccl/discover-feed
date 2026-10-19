@@ -1,0 +1,100 @@
+site_name: discover-feed
+site_description: Personal Discover-style news-feed monitor
+site_url: https://babcoccl.github.io/discover-feed/
+repo_url: https://github.com/babcoccl/discover-feed
+edit_uri: edit/main/docs/
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: material
+  language: en
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - navigation.footer
+    - content.code.copy
+    - content.tabs.link
+    - toc.follow
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - toc:
+      permalink: true
+
+plugins:
+  - search
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Quick start: getting-started/quick-start.md
+      - Demo without an LLM: getting-started/demo.md
+      - First-run checklist: getting-started/first-run.md
+      - Deploy on a NAS or home server: getting-started/nas.md
+  - Configuration:
+      - profiles.yaml: configuration/profiles.md
+      - Environment variables: configuration/environment.md
+      - LLM endpoints: configuration/llm.md
+      - Config reference: configuration/reference.md
+  - Features:
+      - Sources and ingestion: features/sources.md
+      - Profiles, topics and the UI: features/profiles-topics.md
+      - Text extraction: features/text-extraction.md
+      - Clustering and tuning: features/clustering.md
+      - Briefs and reports: features/summaries.md
+      - Story Q&A: features/qa.md
+      - Alerts and notifications: features/alerts.md
+      - Card images: features/images.md
+      - Authentication and admin keys: features/authentication.md
+      - Web-search enrichment:
+          - Overview: features/enrichment/overview.md
+          - Providers: features/enrichment/providers.md
+          - Queries: features/enrichment/queries.md
+          - Filters and acceptance rules: features/enrichment/filters.md
+          - Source quality: features/enrichment/source-quality.md
+          - Operating and tuning: features/enrichment/operating.md
+      - Background and context links:
+          - Overview: features/context/overview.md
+          - Configuration: features/context/configuration.md
+          - Operating: features/context/operating.md
+  - Operations:
+      - Pipeline panel and admin API: operations/pipeline.md
+      - Command-line tools: operations/cli.md
+      - Backups and upgrades: operations/backups.md
+      - Troubleshooting: operations/troubleshooting.md
+  - Reference:
+      - Public API (v1): reference/api.md
+      - Statuses and reason codes: reference/glossary.md
+      - Database tables: reference/database.md
+  - Development:
+      - Architecture and project layout: development/architecture.md
+      - Testing: development/testing.md
+      - Extending sources and providers: development/extending.md
+      - Evaluation tools: development/evaluation.md
+      - README migration map: development/migration-map.md

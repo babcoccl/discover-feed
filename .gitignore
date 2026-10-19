@@ -17,3 +17,4 @@ data/
 .env
 config/profiles.yaml
 diag.md
+site/

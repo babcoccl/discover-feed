@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     images_allow_hosts: str = ""
     """Comma-separated hosts exempt from the public-IP check (Docker e2e fixture server)."""
 
-    # Story clustering (app/cluster); see README "Tuning clustering"
+    # Story clustering (app/cluster); see docs/features/clustering.md
     cluster_threshold: float = 0.45
     cluster_window_hours: float = 72
     cluster_same_source_threshold: float = 0.7
