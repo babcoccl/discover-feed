@@ -1,0 +1,9 @@
+# Gold set for `python -m app.context.evaluate --gold`: story id -> the URLs a person
+# judged to be good context for it. The run covers exactly these stories and reports
+# retrieval recall (gold URLs seen as candidates) and final recall (accepted), splitting
+# misses into "not retrieved" vs "retrieved but rejected" with the reason and scores.
+42:
+  - https://example.com/history-of-the-topic
+  - https://example.net/earlier-interview
+137:
+  - https://example.org/background-explainer

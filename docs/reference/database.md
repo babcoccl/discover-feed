@@ -21,6 +21,7 @@ idempotently on startup.
 | `search_cache` | Cached search results |
 | `enrichment_candidates` | Every enrichment decision with scores and `via` |
 | `context_candidates` | Every context decision with scores/judge verdict |
+| `context_traces` | One per planner-mode run: planner output, every query, every decision, timings |
 | `blocked_domains` | Persisted admin block list |
 | `alert_rules`, `alert_channels`, `alert_firings`, `notifications` | Alerts: rules, channels, exactly-once ledger, delivery log |
 | `images` | Validated/failed image URLs (`reason`), cache keys |

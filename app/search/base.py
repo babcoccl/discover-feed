@@ -175,6 +175,13 @@ class SearchProvider(ABC):
         except (TypeError, ValueError):
             self.last_raw = str(body)[:4000]
 
+    supports_before = False
+    """``before``: hits published before a date (``before_date``)."""
+    supports_domain_type = False
+    """``domain_type``: per-query ``news`` | ``web`` | ``research_paper`` override."""
+    supports_pub_years = False
+    """``pub_year_min``/``pub_year_max``: research-paper year bounds."""
+
     @abstractmethod
     async def search(
         self,
@@ -188,13 +195,25 @@ class SearchProvider(ABC):
         page: int = 0,
         location: str | None = None,
         include: Sequence[str] = (),
+        before: datetime | None = None,
+        domain_type: str | None = None,
+        pub_year_min: int | None = None,
+        pub_year_max: int | None = None,
     ) -> list[SearchHit]:
         """Hits for ``query`` published after ``since`` (best effort per provider).
         ``quota.before_request()`` is called once per HTTP request (budgets).
         ``exclude``: registrable domains the caller does not want back (only honored by
         providers with ``supports_exclude``). ``page``, ``location`` and ``include``
         are deep-tier knobs honored by providers with ``supports_pages`` /
-        ``supports_location`` / ``supports_include`` and ignored elsewhere."""
+        ``supports_location`` / ``supports_include`` and ignored elsewhere.
+        ``before``, ``domain_type`` and the ``pub_year_*`` bounds are honored only by
+        providers declaring the matching ``supports_*`` flag — callers post-filter
+        dates themselves everywhere else."""
+
+    async def fetch_pages(self, urls: list[str], quota: Quota) -> dict[str, str]:
+        """Fetch API: ``{url: clean markdown text}`` for pages the local extractor
+        cannot read (providers with a fetch endpoint only — tinyfish)."""
+        raise FetchError(f"{self.name}: fetch_pages not supported")
 
     async def find_similar(
         self,

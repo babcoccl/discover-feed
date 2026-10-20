@@ -4,7 +4,9 @@ Each profile has two LLM roles: `summarizer` (briefs, reports, enrichment query
 mode `llm`, context angles and the context judge) and `chat` (story Q&A), plus
 an optional `perspectives` role (the per-source digests and the "how outlets
 differ" synthesis — unset: the summarizer role, or point it at a stronger
-endpoint). Any OpenAI-compatible chat-completions server works — providers
+endpoint) and an optional `context` role (the `query_mode: planner` planner,
+page extractor and 'additional detail' composer — unset: the summarizer
+role). Any OpenAI-compatible chat-completions server works — providers
 differ only in these settings, never in code.
 
 ```yaml

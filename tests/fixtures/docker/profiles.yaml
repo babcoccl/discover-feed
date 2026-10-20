@@ -43,8 +43,11 @@ profiles:
   # host — always a different domain from feed and enrichment (wire) pages.
   # llm_judge off: the fake LLM cannot produce {"adds_context":2} verdicts, so a judge
   # failure would reject every candidate by design (never fabricate).
+  # query_mode angles: the fake LLM also can't emit planner/extract/compose JSON, so
+  # the docker E2E stays on the Phase-14 path; planner mode is covered by unit tests.
   context:
     enabled: true
+    query_mode: angles
     providers:
     - name: tinyfish
       base_url: http://otherwire:8081/context-search

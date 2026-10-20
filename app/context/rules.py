@@ -4,6 +4,16 @@ back through ``app.normalize`` -> ``app.sources.base`` -> ``app.config``)."""
 
 from dataclasses import dataclass
 
+CONTEXT_TASK_TYPES = (
+    "history",
+    "quotes",
+    "financials",
+    "related_developments",
+    "background",
+)
+"""The planner's fixed retrieval catalog (``context.actions`` keys). The LLM picks from
+this list only — it never writes raw queries (``app.context.catalog`` builds them)."""
+
 DEFAULT_EVENT_TERMS = (
     # verbs
     "announce",

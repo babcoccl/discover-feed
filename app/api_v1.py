@@ -196,6 +196,34 @@ class ContextLinkV1(BaseModel):
         "`context.max_opinion` per story); `fact_check` when the counter-narrative "
         "angle found a fact-check page; `article` otherwise.",
     )
+    type: str | None = Field(
+        default=None,
+        description="Planner mode: the retrieval-catalog task the item serves "
+        "(history | quotes | financials | related_developments | background); "
+        "null for angles-mode links.",
+    )
+    subject: str | None = Field(
+        default=None, description="Planner mode: the named entity the task covers."
+    )
+    outlet: str | None = Field(
+        default=None, description="Planner mode: the publisher alias (== `domain`)."
+    )
+    date: str | None = Field(
+        default=None, description="Planner mode: the page's verified publication date."
+    )
+    fact: str | None = Field(
+        default=None,
+        description="Planner mode: the verified <=30-word grounded fact.",
+    )
+    quote: str | None = Field(
+        default=None,
+        description="Planner mode: the verbatim evidence quote (<=25 words) from the page.",
+    )
+    origin: Literal["archive", "web"] | None = Field(
+        default=None,
+        description="Planner mode: `archive` when the page came from an older-window "
+        "retrieval query, `web` otherwise.",
+    )
 
 
 class ImageOut(BaseModel):
@@ -376,6 +404,12 @@ class StoryV1(BaseModel):
         description="Background/context links (related, not the same event). Empty until "
         "the context search runs or when it is off.",
     )
+    then_and_now: dict | None = Field(
+        default=None,
+        description="Planner mode: a verified earlier-vs-current quote comparison "
+        "({relation, summary, references}) — present only when relation is `changed` "
+        "or `expanded` and both quotes verified verbatim in their pages.",
+    )
 
 
 class HealthV1(BaseModel):
@@ -409,6 +443,25 @@ def _profile(session: Session, slug: str) -> ProfileRecord:
     if profile is None:
         raise HTTPException(status_code=404, detail=f"unknown profile {slug!r}")
     return profile
+
+
+def _then_and_now(session: Session, story_id: int) -> dict | None:
+    """The latest planner-mode 'then and now' comparison for the story (only when the
+    composer verified it and marked it showable)."""
+    row = session.scalar(
+        select(StorySummary)
+        .where(
+            StorySummary.story_id == story_id,
+            StorySummary.kind == "context",
+            StorySummary.status == "ok",
+        )
+        .order_by(StorySummary.id.desc())
+        .limit(1)
+    )
+    if row is None:
+        return None
+    tan = (row.content_json or {}).get("then_and_now")
+    return tan if isinstance(tan, dict) and tan.get("show") else None
 
 
 def _scope(session: Session, slug: str, topic_id: int | None):
@@ -594,6 +647,21 @@ def get_story(
             )
             content = row.content_json if row is not None else None
             perspectives = content if content and any(content.get(k) for k in content) else None
+            detail = session.scalar(
+                select(StorySummary)
+                .where(
+                    StorySummary.story_id == story.story_id,
+                    StorySummary.kind == "context",
+                    StorySummary.status == "ok",
+                )
+                .order_by(StorySummary.id.desc())
+                .limit(1)
+            )
+            detail_items = (
+                {i.get("url"): i for i in ((detail.content_json or {}).get("items") or [])}
+                if detail is not None
+                else {}
+            )
             stances = {
                 d.article_id: (d.digest_json or {}).get("stance")
                 for d in session.scalars(
@@ -642,9 +710,17 @@ def get_story(
                     if a.context_kind == "fact_check"
                     else "article"
                 ),
+                type=a.context_task,
+                subject=(detail_items.get(a.url) or {}).get("subject"),
+                outlet=(a.source_id or "").removeprefix("web:") or None,
+                date=a.published_at.date().isoformat() if a.context_task else None,
+                fact=a.context_fact,
+                quote=a.context_quote,
+                origin=(a.context_origin if a.context_origin in ("archive", "web") else None),
             )
             for a in context_articles
         ],
+        then_and_now=_then_and_now(session, story.story_id),
     )
 
 

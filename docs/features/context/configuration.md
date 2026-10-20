@@ -5,9 +5,13 @@
 ```yaml
 context:
   enabled: false                 # Settings > Pipeline toggles it per profile
+  query_mode: planner            # planner (default): LLM-planned tasks -> verified
+                               # 'Additional detail' items; angles: the Phase-14
+                               # angle/similarity/judge pipeline (kept for rollback)
   providers:
     - name: tinyfish
       min_interval_seconds: 2
+      # fetch_url: https://api.tinyfish.ai/v1/fetch   # Fetch endpoint for fetch_via
     # - name: exa                # semantic: find_similar() on the anchor URL
     #   api_key: EXA_API_KEY     # env var name, never the key
   daily_request_budget: 30       # context's own cap on top of shared budgets
@@ -16,6 +20,37 @@ context:
 Domain rules (`deny_domains`, `social_domains`, `aggregator_domains`,
 `publisher_aliases`) come from the profile's `enrichment` block. Every key:
 [context config](../../configuration/reference.md#context).
+
+## Planner mode (`query_mode: planner`, the default)
+
+```yaml
+context:
+  query_mode: planner
+  max_tasks: 3                   # planner LLM picks at most this many tasks
+  max_queries_per_task: 2        # retrieval queries each recipe may run
+  max_judged: 8                  # candidates sent to the extractor per story
+  max_extracted: 8               # pages fetched + LLM-extracted per story
+  fetch_via: tinyfish            # optional Fetch-API fallback for 403/empty/timeout
+                                 # (off by default; never robots/paywalled pages)
+  archive: true                  # allow older-window queries (origin = archive)
+  actions:                       # per-type overrides; unknown keys are rejected
+    history:
+      enabled: true
+      max_queries: 2             # override max_queries_per_task for this type
+      pages_per_query: 2         # hits kept per query
+      window_days: ~             # recent-window override (history has none)
+      min_age_days: 3            # dated pages newer than this aren't 'history'
+    quotes: { window_days: 90 }  # financials 180, related_developments 30
+    background: { research: true }  # domain_type research_paper + pub_year bounds
+```
+
+One story costs at most **1 planner call + `max_extracted` page extractions + 1
+compose call**, all through the `llm.context` role (falls back to
+`llm.summarizer`). Planner calls yield while briefs/reports/perspectives hold
+the LLM and while enrichment holds the providers — the pause reason shows in
+Settings > Pipeline ("Waiting: …").
+
+## Angles mode (`query_mode: angles`)
 
 ## Filters
 

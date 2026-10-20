@@ -94,6 +94,12 @@ class TinyFishProvider(SearchProvider):
     configured country for regional outlets."""
     supports_include = True
     """``include_domains``: ensure-groups queries restrict hits to a group's domains."""
+    supports_before = True
+    """``before`` -> ``before_date`` (combinable with ``after_date``)."""
+    supports_domain_type = True
+    """``domain_type``: per-query ``news`` | ``web`` | ``research_paper``."""
+    supports_pub_years = True
+    """``pub_year_min``/``pub_year_max`` for ``research_paper`` queries."""
 
     def optional_key(self) -> str:
         return os.environ.get(self.key_env or "", "").strip()
@@ -110,14 +116,25 @@ class TinyFishProvider(SearchProvider):
         page: int = 0,
         location: str | None = None,
         include=(),
+        before=None,
+        domain_type: str | None = None,
+        pub_year_min: int | None = None,
+        pub_year_max: int | None = None,
     ) -> list[SearchHit]:
         key = self.optional_key()
         params = {
             "query": query,
-            "domain_type": self.config.search_type,
-            "after_date": since.date().isoformat(),
+            "domain_type": domain_type or self.config.search_type,
             "purpose": PURPOSE,
         }
+        if since is not None:
+            params["after_date"] = since.date().isoformat()
+        if before is not None:
+            params["before_date"] = before.date().isoformat()
+        if pub_year_min is not None:
+            params["pub_year_min"] = pub_year_min
+        if pub_year_max is not None:
+            params["pub_year_max"] = pub_year_max
         if language:
             params["language"] = language
         if exclude:
@@ -199,3 +216,55 @@ class TinyFishProvider(SearchProvider):
         print them so an upstream shape change shows up instead of silently losing
         snippets)."""
         return hits[:limit]
+
+    async def fetch_pages(self, urls: list[str], quota: Quota) -> dict[str, str]:
+        """TinyFish Fetch API: POST ``{urls (1-10), format: markdown}`` -> clean
+        extracted text per URL, rendering JS-heavy pages. Used by the context
+        pipeline as an opt-in fallback for pages our extractor cannot read
+        (``context.fetch_via``); robots-blocked/paywalled pages are never sent."""
+        if not urls:
+            return {}
+        endpoint = self.config.fetch_url or self.config.base_url
+        if not endpoint:
+            raise FetchError("tinyfish fetch needs fetch_url (or base_url)")
+        headers = {"Accept": "application/json", "Content-Type": "application/json"}
+        key = self.optional_key()
+        if key:
+            headers["X-API-Key"] = key
+        quota.before_request()
+        try:
+            response = await self.client.post(
+                endpoint, json={"urls": urls[:10], "format": "markdown"}, headers=headers
+            )
+        except httpx.TimeoutException as exc:
+            raise ProviderTimeout(f"TinyFish fetch timed out ({type(exc).__name__})") from None
+        except Exception as exc:
+            raise FetchError(f"TinyFish fetch failed: {type(exc).__name__}: {exc}") from None
+        self.last_raw = response.text[:4000]
+        status = response.status_code
+        if status == 429:
+            raise RateLimited("TinyFish fetch rate limit (HTTP 429)", retry_after_seconds(response))
+        if status == 401:
+            raise NotAuthorized("TinyFish fetch HTTP 401 (check the API key)")
+        if status == 402:
+            raise QuotaExhausted("TinyFish fetch: daily allowance used")
+        if status >= 400:
+            raise FetchError(f"TinyFish fetch HTTP {status}: {response.text[:200]}")
+        try:
+            body = response.json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            raise TransientError(
+                f"TinyFish fetch returned malformed JSON: {response.text[:200]}"
+            ) from None
+        results = body.get("results") if isinstance(body, dict) else None
+        if not isinstance(results, list):
+            raise TransientError("TinyFish fetch returned an unexpected JSON shape")
+        out = {}
+        for r in results:
+            if not isinstance(r, dict):
+                continue
+            url = _str(r.get("url"))
+            text = next((s for k in ("markdown", "content", "text") if (s := _str(r.get(k)))), "")
+            if url.startswith("http") and text:
+                out[url] = text
+        return out

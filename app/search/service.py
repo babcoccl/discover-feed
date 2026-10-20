@@ -103,12 +103,18 @@ def cache_key(
     page: int = 0,
     location: str | None = None,
     include=(),
+    before: datetime | None = None,
+    domain_type: str | None = None,
+    pub_year_min: int | None = None,
+    pub_year_max: int | None = None,
 ) -> str:
     skipped = ",".join(sorted({d.casefold() for d in exclude}))
     wanted = ",".join(sorted({d.casefold() for d in include}))
     raw = (
         f"{name}\0{' '.join(query.split()).casefold()}\0{language or ''}\0{skipped}"
         f"\0{page}\0{location or ''}\0{wanted}"
+        f"\0{before.date().isoformat() if before else ''}\0{domain_type or ''}"
+        f"\0{pub_year_min or ''}\0{pub_year_max or ''}"
     )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
@@ -227,17 +233,33 @@ class SearchService:
         page: int = 0,
         location: str | None = None,
         include: Sequence[str] = (),
+        before: datetime | None = None,
+        domain_type: str | None = None,
+        pub_year_min: int | None = None,
+        pub_year_max: int | None = None,
     ) -> SearchOutcome:
         """One query. ``store=False`` (dry runs) reads the cache but never writes it.
         ``exclude``: domains to keep out of the results (providers with
         ``supports_exclude``; part of the cache key, as are the deep-tier ``page``,
-        ``location`` and ``include``)."""
+        ``location`` and ``include``). ``before``/``domain_type``/``pub_year_*`` are
+        window knobs for the context catalog; only providers declaring the matching
+        ``supports_*`` flag receive them (they are part of the cache key regardless)."""
         name = config.name
         limit = limit or config.max_results
         outcome = SearchOutcome(provider=name, query=query)
         health = self._health(name)
         key = cache_key(
-            name, query, language, exclude, page=page, location=location, include=include
+            name,
+            query,
+            language,
+            exclude,
+            page=page,
+            location=location,
+            include=include,
+            before=before,
+            domain_type=domain_type,
+            pub_year_min=pub_year_min,
+            pub_year_max=pub_year_max,
         )
         if cache_hours > 0:
             hits = self._cached(key, cache_hours, empty_cache_minutes)
@@ -264,7 +286,19 @@ class SearchService:
             sent_before = health.requests
             try:
                 outcome.hits = await self._call(
-                    provider, query, since, language, limit, exclude, page, location, include
+                    provider,
+                    query,
+                    since,
+                    language,
+                    limit,
+                    exclude,
+                    page,
+                    location,
+                    include,
+                    before=before,
+                    domain_type=domain_type,
+                    pub_year_min=pub_year_min,
+                    pub_year_max=pub_year_max,
                 )
             except FetchError as exc:
                 outcome.requests = health.requests - sent_before
@@ -320,10 +354,22 @@ class SearchService:
         page: int = 0,
         location: str | None = None,
         include: Sequence[str] = (),
+        *,
+        before: datetime | None = None,
+        domain_type: str | None = None,
+        pub_year_min: int | None = None,
+        pub_year_max: int | None = None,
     ) -> list[SearchHit]:
         config = provider.config
         name = config.name
         health = self._health(name)
+        extra: dict = {}
+        if provider.supports_before:
+            extra["before"] = before
+        if provider.supports_domain_type:
+            extra["domain_type"] = domain_type
+        if provider.supports_pub_years:
+            extra.update(pub_year_min=pub_year_min, pub_year_max=pub_year_max)
         for attempt in range(2):
             quota = self._quota(config)
             if config.cost_per_request_usd and quota.reads_allowed() < 1:
@@ -346,6 +392,7 @@ class SearchService:
                     page=page,
                     location=location,
                     include=include,
+                    **extra,
                 )
             except RateLimited as exc:
                 health.rate_limited += 1

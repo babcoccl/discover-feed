@@ -291,6 +291,11 @@ _CONTEXT_COLUMNS = {
         "context_note": "VARCHAR(300)",
         "context_angle": "VARCHAR(120)",
         "context_kind": "VARCHAR(10)",
+        "context_task": "VARCHAR(24)",
+        "context_fact": "TEXT",
+        "context_quote": "TEXT",
+        "context_speaker": "VARCHAR(200)",
+        "context_origin": "VARCHAR(10)",
     },
     "stories": {
         "context_status": "VARCHAR(10)",

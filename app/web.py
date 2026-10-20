@@ -344,6 +344,16 @@ def story_page(
                 .order_by(Article.id)
             )
         )
+        detail_row = session.scalar(
+            select(StorySummary)
+            .where(
+                StorySummary.story_id == story.story_id,
+                StorySummary.kind == "context",
+                StorySummary.status == "ok",
+            )
+            .order_by(StorySummary.id.desc())
+            .limit(1)
+        )
         context = _base_context(
             session,
             profile,
@@ -356,6 +366,7 @@ def story_page(
             **_chat_context(request, session, story.story_id, p),
             **_perspectives_context(request, session, story.story_id, profile),
             context_items=context_items,
+            context_detail=(detail_row.content_json if detail_row is not None else None),
             can_block=is_admin(request) and _enricher(request) is not None,
         )
     return TEMPLATES.TemplateResponse(request, "story.html", context)

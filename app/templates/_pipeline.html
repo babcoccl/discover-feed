@@ -175,6 +175,9 @@
       <ul class="space-y-1 text-sm" data-context-providers>
         {% for p in cx.providers %}<li data-provider="{{ p.provider }}"><span class="font-medium">{{ p.provider }}</span>: {{ p.context_requests_today }} context requests today{% if p.requests_today %} · {{ p.requests_today }} total{% if p.daily_budget %} of {{ p.daily_budget }}{% endif %}{% endif %}{% if p.cooldown_seconds %} · <span class="text-amber-700 dark:text-amber-400">cooling down {{ p.cooldown_seconds }} s</span>{% endif %}</li>{% endfor %}
       </ul>
+      {% if cx.waiting_reason %}<p class="mt-1 text-xs text-amber-700 dark:text-amber-400" data-context-waiting-reason>Waiting: {{ cx.waiting_reason }}</p>{% endif %}
+      {% if cx.timings %}<p class="mt-1 text-xs text-slate-500 dark:text-slate-400" data-context-timings>Median per story: {% for stage, s in cx.timings.items() %}{{ stage }} {{ s }}s{% if not loop.last %} · {% endif %}{% endfor %}</p>{% endif %}
+      {% if cx.waiting_reasons %}<p class="mt-1 text-xs text-slate-500 dark:text-slate-400" data-context-waiting-reasons>Waited for: {% for reason, n in cx.waiting_reasons.items() %}{{ reason }} ({{ n }}){% if not loop.last %}, {% endif %}{% endfor %}</p>{% endif %}
     </div>
   </div>
 </section>

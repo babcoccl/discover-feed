@@ -3,16 +3,34 @@
 ## What it does
 
 Separate from enrichment: for each eligible published story the context finder
-looks for 1-3 pages from *other* sources that add background — history,
-context, data, opposing views — **related, never coverage of the same event**.
-They appear in a "Background and context" section on the story page, clearly
-marked "found via web search; not part of the event reporting".
+finds pages from *other* sources that add background — **related, never
+coverage of the same event**. Two modes:
+
+- **`query_mode: planner` (default)** — a planner LLM picks up to
+  `context.max_tasks` (3) research tasks from a fixed catalog (history,
+  quotes, financials, related developments, background), each naming a story
+  entity; deterministic retrieval recipes turn each task into dated window
+  queries (news first, then web; older windows for history mark items
+  `origin = archive`); a verified per-page extractor produces a fact + a
+  verbatim evidence quote (rejected when the quote isn't on the page, its
+  numbers aren't, or a dated page is too recent to be history); one composer
+  call writes a ≤30-word note per item and, for history items with verified
+  earlier + current quotes, a "then and now" comparison (`changed` |
+  `expanded` only — `consistent` stays timeline-only and loaded words like
+  "reversal" are rejected unless they're in a cited quote). The story page
+  shows them as **Additional detail** grouped by type, and API v1 exposes
+  `story.context[]` (type/subject/fact/quote/date/origin) +
+  `story.then_and_now`.
+- **`query_mode: angles`** — the Phase-14 pipeline (queries per angle,
+  similarity band, same-event signals, optional LLM judge) surfacing 1-3
+  "Background and context" links.
 
 They are stored as `Article` rows with `origin = "context"` (plus
-`context_note` / `context_angle`) and are excluded everywhere enrichment is
-excluded — source counts, clustering, alerts, brief/report inputs, citations,
-word budget, Q&A — *and additionally from the story's member set itself*, so
-they can never influence the published document.
+`context_task` / `context_fact` / `context_quote` / `context_origin` in
+planner mode, `context_note` / `context_angle`) and are excluded everywhere
+enrichment is excluded — source counts, clustering, alerts, brief/report
+inputs, citations, word budget, Q&A — *and additionally from the story's
+member set itself*, so they can never influence the published document.
 
 ## How it works
 

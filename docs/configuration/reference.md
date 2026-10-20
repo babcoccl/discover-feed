@@ -259,6 +259,7 @@ Each entry under `enrichment.providers` / `context.providers`
 | `search_type` | `news` | tinyfish `domain_type`: `news` or `web` |
 | `max_results` | `10` | Results requested per query (max 50) |
 | `timeout_seconds` | `15` | Per-request timeout |
+| `fetch_url` | unset | TinyFish Fetch endpoint used by `context.fetch_via` (planner mode) |
 
 ## Context
 
@@ -288,8 +289,37 @@ block.
 | `language` | `en` | Hit language must match when reported |
 | `cache_hours` | `24` | Search-result cache |
 | `empty_cache_minutes` | `10` | Empty results cached this long at most |
-| `max_age_hours` | `168` | Stories eligible while published within this |
+| `max_age_hours` | `48` | Stories eligible while published within this |
 | `concurrency` | `2` | Stories processed at once |
+
+### Planner mode
+
+`query_mode` picks the pipeline: `planner` (default; LLM-picked tasks from a
+fixed catalog -> verified 'Additional detail' items) or `angles` (the
+similarity/judge pipeline above — its rows apply only there; `max_tasks`,
+`max_extracted` and the `actions` map below apply only to `planner`).
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `query_mode` | `planner` | `planner` or `angles` (rollback path) |
+| `max_tasks` | `3` | Retrieval tasks the planner may pick per story |
+| `max_queries_per_task` | `2` | Queries each task's recipe may run |
+| `max_judged` | `8` | Candidates sent to the extractor per story |
+| `max_extracted` | `8` | Pages fetched + LLM-extracted per story |
+| `fetch_via` | unset | `tinyfish`: Fetch-API fallback for 403/empty/timeout pages |
+| `archive` | `true` | Allow older-window queries (items get `origin: archive`) |
+| `actions` | `{}` | Per-task-type overrides — below |
+
+### `actions` (per task type: `history`/`quotes`/`financials`/`related_developments`/`background`)
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `enabled` | `true` | Turn one task type off |
+| `max_queries` | unset | Override `max_queries_per_task` |
+| `pages_per_query` | `2` | Hits kept per query |
+| `window_days` | per type | Recent window override (quotes 90, financials 180, related 30) |
+| `min_age_days` | `3` | A dated page newer than this is rejected for `history` |
+| `research` | `false` | `background`: use `domain_type: research_paper` + pub_year bounds |
 
 ### `same_event` rules
 

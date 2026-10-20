@@ -19,11 +19,13 @@ import asyncio
 import sys
 from collections import Counter
 
-from sqlalchemy import select
+import yaml
+from sqlalchemy import func, select
 
 from app.context.cli import build, only_providers, respect_cooldowns, wait_for_cooldowns
 from app.context.service import ContextResult
-from app.models import Story
+from app.models import ContextCandidate, Story
+from app.normalize import canonicalize_url
 
 
 def _f(x: float | None) -> str:
@@ -144,6 +146,110 @@ def _summary(results: list[ContextResult], markdown: bool) -> str:
     return "\n".join(lines)
 
 
+def _gold_report(results: list[ContextResult], gold: dict, markdown: bool) -> str:
+    """Gold evaluation: ``{story_id: [urls considered good context]}``. Splits misses
+    into 'not retrieved' (no candidate ever saw the URL) and 'retrieved but rejected'
+    (with the reason and scores that fired), and reports retrieval recall (gold URLs
+    seen as candidates) and final recall (gold URLs accepted)."""
+    by_story = {r.story_id: r for r in results}
+    lines = ["# Gold evaluation", ""]
+    total = retrieved = kept = 0
+    rows = []
+    for sid, urls in gold.items():
+        result = by_story.get(int(sid))
+        for url in urls or []:
+            total += 1
+            canonical = canonicalize_url(str(url))
+            candidate = None
+            if result is not None:
+                candidate = next(
+                    (c for c in result.candidates if canonicalize_url(c.hit.url) == canonical),
+                    None,
+                )
+            if candidate is None:
+                rows.append([str(sid), "not retrieved", "-", "-", str(url)])
+                continue
+            retrieved += 1
+            if candidate.decision == "accepted":
+                kept += 1
+                rows.append([str(sid), "accepted", "-", "-", str(url)])
+            else:
+                scores = (
+                    f"sim={_f(candidate.text_similarity)} "
+                    f"ents={candidate.shared_entities} judge={candidate.judge}"
+                )
+                rows.append(
+                    [
+                        str(sid),
+                        f"rejected: {candidate.reason}",
+                        scores,
+                        candidate.same_event_signal or "-",
+                        str(url),
+                    ]
+                )
+    if total:
+        lines.append(f"- retrieval recall: {retrieved}/{total} ({retrieved / total:.0%})")
+        lines.append(f"- final recall: {kept}/{total} ({kept / total:.0%})")
+    lines += _table(["story", "outcome", "scores", "signal", "gold url"], rows, markdown)
+    return "\n".join(lines)
+
+
+def _audit_rejects(factory, n: int, labels_path: str | None, markdown: bool) -> str:
+    """``--audit-rejects N``: N random rejected candidates (title, URL, date, reason,
+    scores) for eyeballing. ``--labels file`` (YAML ``{url: true}`` = the rejection
+    was wrong — the page was good context) reports the false-reject rate per reason."""
+    with factory() as session:
+        rows = list(
+            session.scalars(
+                select(ContextCandidate)
+                .where(ContextCandidate.decision == "rejected")
+                .order_by(func.random())
+                .limit(n)
+            )
+        )
+    if not rows:
+        return "no rejected candidates in context_candidates"
+    labels = {}
+    if labels_path:
+        with open(labels_path, encoding="utf-8") as fh:
+            labels = yaml.safe_load(fh) or {}
+    lines = [f"# Reject audit — {len(rows)} sampled", ""]
+    lines += _table(
+        ["story", "reason", "judge", "sim", "ents", "url"],
+        [
+            [
+                str(r.story_id),
+                r.reason or "?",
+                str(r.judge) if r.judge is not None else "-",
+                _f(r.text_similarity),
+                str(r.shared_entities) if r.shared_entities is not None else "-",
+                r.url,
+            ]
+            for r in rows
+        ],
+        markdown,
+    )
+    if labels:
+        per_reason: dict[str, list[int]] = {}
+        for r in rows:
+            labeled = labels.get(r.url) or labels.get(canonicalize_url(r.url))
+            if labeled is None:
+                continue
+            bucket = per_reason.setdefault(r.reason or "?", [0, 0])
+            bucket[0] += 1
+            bucket[1] += 1 if labeled else 0
+        lines.append("\n## False-reject rate per reason (labeled only)")
+        lines += _table(
+            ["reason", "labeled", "false rejects", "rate"],
+            [
+                [reason, str(tot), str(false), f"{false / tot:.0%}"]
+                for reason, (tot, false) in sorted(per_reason.items())
+            ],
+            markdown,
+        )
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.context.evaluate")
     which = parser.add_mutually_exclusive_group()
@@ -152,13 +258,40 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--provider", action="append", help="only this provider (repeatable)")
     parser.add_argument("--markdown", action="store_true")
     parser.add_argument("--wait", action="store_true", help="wait out provider cooldowns")
+    parser.add_argument(
+        "--gold",
+        metavar="PATH",
+        help="gold file (YAML {story_id: [urls considered good context]}); the run "
+        "covers those story ids and reports retrieval vs final recall",
+    )
+    parser.add_argument(
+        "--audit-rejects",
+        type=int,
+        metavar="N",
+        help="print N random rejected candidates (no search run)",
+    )
+    parser.add_argument(
+        "--labels",
+        metavar="PATH",
+        help="YAML {url: true} marking sampled rejects that were actually good "
+        "context; reports the false-reject rate per reason (with --audit-rejects)",
+    )
     args = parser.parse_args(argv)
     factory, finder = build()
+    if args.audit_rejects:
+        print(_audit_rejects(factory, args.audit_rejects, args.labels, args.markdown))
+        return 0
     only_providers(finder, args.provider)
     if not respect_cooldowns(finder, wait=args.wait):
         return 3
+    gold = {}
+    if args.gold:
+        with open(args.gold, encoding="utf-8") as fh:
+            gold = yaml.safe_load(fh) or {}
     with factory() as session:
-        if args.story_ids:
+        if gold and not args.story_ids:
+            ids = [int(s) for s in gold]
+        elif args.story_ids:
             ids = [int(x) for x in args.story_ids.split(",") if x.strip()]
         else:
             ids = list(
@@ -181,7 +314,11 @@ def main(argv: list[str] | None = None) -> int:
             out.append(await finder.find_story(sid, dry_run=True))
         return out
 
-    print(_summary(asyncio.run(run()), args.markdown))
+    results = asyncio.run(run())
+    print(_summary(results, args.markdown))
+    if gold:
+        print()
+        print(_gold_report(results, gold, args.markdown))
     return 0
 
 
