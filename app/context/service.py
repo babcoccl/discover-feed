@@ -21,23 +21,26 @@ from datetime import datetime, timedelta
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.config import ContextConfig, EnrichmentConfig, LLMRole
+from app.config import ContextConfig, ContextQueryMode, EnrichmentConfig, LLMRole
 from app.context.angles import FACT_CHECK_LABEL
 from app.enrich.domains import canonical_domain
 from app.enrich.filters import StoryContext
 from app.enrich.query import story_terms
 from app.enrich.service import retry_delay
 from app.ingest import usage_periods
-from app.llm.client import LLMClient
+from app.llm.client import INFLIGHT, LLMClient
 from app.models import (
     CONTEXT,
     Article,
+    ArticleDigest,
     BlockedDomain,
     ContextCandidate,
+    ContextTrace,
     ProfileRecord,
     SourceUsage,
     Story,
     StoryState,
+    StorySummary,
     TextStatus,
     profile_sources,
     utcnow,
@@ -85,6 +88,13 @@ OVERSHOOT = 3
 re-ranked (older pages first) instead of first-come-first-served."""
 
 
+def _parse_date(value: str):
+    """The extractor's ``date_from_page`` (only used when the page declares no date)."""
+    from app.context.extract import _parse_date as parse
+
+    return parse(value or "")
+
+
 def _similar_angle():
     from app.context.angles import Angle
 
@@ -120,6 +130,24 @@ class Candidate:
     ``date_band``/``entities_verb``/``judge``); empty when not a same_event reject."""
     judge_same_event: bool | None = None
     """The judge's ``same_event`` flag, kept separate from the rule-based decision."""
+    # --- planner mode fields (context.query_mode == planner) --------------------------
+    task_type: str = ""
+    """The catalog task that produced this hit (history/quotes/financials/...)."""
+    subject: str = ""
+    question: str = ""
+    """The planner's reader-intent question — passed to the extractor, never searched."""
+    window: str = ""
+    """The retrieval query's window (recent|earlier|long_ago|none) -> web_origin."""
+    fact: str = ""
+    quote: str = ""
+    speaker: str = ""
+    """The verified extraction (fact <= 30w, verbatim quote <= 25w, speaker)."""
+    web_origin: str = ""
+    """``archive`` (older-window retrieval) | ``web``."""
+    attribution: str = ""
+    """Where the subject appeared relative to the quote: paragraph | page | absent."""
+    extract_raw: str = ""
+    """The extractor's raw JSON answer, kept for the trace/diagnose."""
 
 
 @dataclass
@@ -135,6 +163,17 @@ class ContextResult:
     answered: bool = False
     """At least one provider answered (hits or none); otherwise the story is retried."""
     retry_at: datetime | None = None
+    # --- planner mode ------------------------------------------------------------------
+    planner: dict | None = None
+    """The planner's output (tasks + raw answer), persisted in the trace."""
+    tasks: list = field(default_factory=list)
+    """``planner.ContextTask`` objects for this run (planner mode)."""
+    composed: dict | None = None
+    """The composer's notes + then_and_now (planner mode), persisted with the items."""
+    timings: dict = field(default_factory=dict)
+    """Stage seconds: planner / search / fetch / extract / compose / total."""
+    waiting: list = field(default_factory=list)
+    """``{reason, seconds}`` waits: llm | cooldown | budget | priority_gate."""
 
     @property
     def accepted(self) -> list[Candidate]:
@@ -180,10 +219,16 @@ class ContextFinder:
         self.peer_running = peer_running
         """True while another worker (enrichment) holds the shared search providers;
         wired by ``Pipeline.attach_context``."""
+        self.llm_busy: Callable[[], bool] | None = None
+        """True while briefs/reports/perspectives hold the LLM slot (wired by
+        ``Pipeline.attach_context``); planner-mode calls yield to it."""
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._again = False
         self.last_run: dict | None = None
+        self.waiting_reason: str | None = None
+        """Why the worker is paused right now: ``llm`` | ``cooldown`` | ``budget`` |
+        ``priority_gate`` (None: running or idle)."""
 
     # --- eligibility ------------------------------------------------------------------
 
@@ -331,7 +376,19 @@ class ContextFinder:
             .order_by(Story.last_updated_at.desc())
             .limit(BATCH)
         )
-        return list(session.scalars(stmt))
+        ids = list(session.scalars(stmt))
+
+        # Priority order: deep tier, then newest, then most publishers first.
+        def _key(sid: int):
+            story = session.get(Story, sid)
+            deep = story is not None and story.enrich_depth == "deep"
+            return (
+                0 if deep else 1,
+                -(story.last_updated_at.timestamp() if story else 0),
+                -self.publishers(session, sid),
+            )
+
+        return sorted(ids, key=_key)
 
     async def run_pending(self) -> list[ContextResult]:
         results: list[ContextResult] = []
@@ -376,10 +433,12 @@ class ContextFinder:
             if not busy and not all_cooling:
                 if waited:
                     logger.info("context: providers usable again after %.0f s (%s)", waited, why)
+                self.waiting_reason = None
                 return True
             if waited >= WAIT_CAPACITY_SECONDS:
                 return False
             why = "enrichment running" if busy else "providers cooling down"
+            self.waiting_reason = "priority_gate" if busy else "cooldown"
             step = POLL_SECONDS if busy else max(1.0, min(POLL_SECONDS, min(cooling.values())))
             await self.sleep(step)
             waited += step
@@ -472,6 +531,9 @@ class ContextFinder:
                 *session.scalars(select(BlockedDomain.domain)),
                 *session.scalars(select(BlockedDomain.canonical)),
             ]
+            if cfg.query_mode == ContextQueryMode.PLANNER:
+                await self._find_planner(result, story, anchor, brief, deny, session, dry_run)
+                return
         terms = story_terms(story.headlines)
         result.angles = await make_angles(
             story.title,
@@ -506,6 +568,420 @@ class ContextFinder:
         result.reason = result.reason or coverage_reason(result)
         if not dry_run:
             self._finish(result, anchor_id=anchor.id)
+
+    # --- planner mode ------------------------------------------------------------------
+
+    async def _wait_llm(self, result: ContextResult) -> None:
+        """Yield to briefs, chat and perspective digests: pause while the LLM slot is
+        held (``INFLIGHT`` serializes the calls themselves; this gives the foreground
+        work a gap to claim it). Recorded as a ``waiting`` entry (``llm``)."""
+        waited = 0.0
+        while True:
+            busy = INFLIGHT.active > 0 or (self.llm_busy is not None and self.llm_busy())
+            if not busy:
+                break
+            self.waiting_reason = "llm"
+            await self.sleep(POLL_SECONDS)
+            waited += POLL_SECONDS
+        if waited:
+            result.waiting.append({"reason": "llm", "seconds": round(waited, 1)})
+        self.waiting_reason = None
+        await INFLIGHT.wait_for_chat()
+
+    def _digests(self, session: Session, story_id: int) -> list[str]:
+        """The story's stored per-source digests (``app.perspectives``), one line each —
+        the planner's second input after the brief."""
+        rows = session.scalars(
+            select(ArticleDigest)
+            .where(ArticleDigest.story_id == story_id, ArticleDigest.status == "ok")
+            .limit(6)
+        )
+        out = []
+        for row in rows:
+            article = session.get(Article, row.article_id)
+            outlet = (
+                canonical_domain(article.url, self.enrichment.publisher_aliases) if article else ""
+            )
+            digest = row.digest_json or {}
+            claims = digest.get("claims") or []
+            parts = [f"{outlet}:" if outlet else "-"]
+            for claim in claims[:2]:
+                if isinstance(claim, dict):
+                    parts.append(str(claim.get("claim") or ""))
+            if len(parts) > 1:
+                out.append(" ".join(p for p in parts if p))
+        return out
+
+    def _cached_page(self, session: Session, url: str):
+        """Text already fetched for this URL by ingestion/enrichment — the planner
+        reuses it instead of fetching the page again (cache by URL)."""
+        from app.enrich.fetch import FetchedPage
+        from app.page_meta import PageMeta
+
+        canonical = canonicalize_url(url)
+        article = session.scalar(
+            select(Article)
+            .where(Article.canonical_url == canonical, Article.text_status == TextStatus.OK.value)
+            .limit(1)
+        )
+        if article is None or not article.text:
+            return None
+        return FetchedPage(
+            url=url,
+            status="ok",
+            text=article.text,
+            words=article.word_count or len(article.text.split()),
+            image_url=article.image_url,
+            meta=PageMeta(published_at=article.published_at),
+        )
+
+    async def _find_planner(
+        self,
+        result: ContextResult,
+        story: StoryContext,
+        anchor: Article,
+        brief: str,
+        deny: list[str],
+        session: Session,
+        dry_run: bool,
+    ) -> None:
+        """Planner mode: planner tasks -> deterministic retrieval recipes -> fetch +
+        verified extraction -> compose -> persist. One planner call, at most
+        ``max_extracted`` pages extracted, one compose call per story."""
+        import time
+
+        from app.context import catalog, planner
+        from app.context.extract import extract, verify
+
+        cfg = self.config
+        terms = story_terms(story.headlines)
+        subjects = [t.text for t in terms[:8]]
+        now = self.now()
+        t0 = time.perf_counter()
+
+        await self._wait_llm(result)
+        planned = await planner.plan_tasks(
+            story.title,
+            brief,
+            self._digests(session, result.story_id),
+            subjects,
+            max_tasks=cfg.max_tasks,
+            llm_role=self.llm_role,
+            llm_transport=self.llm_transport,
+        )
+        result.timings["planner"] = round(time.perf_counter() - t0, 2)
+        result.tasks = planned.tasks
+        result.planner = {
+            "raw": planned.raw,
+            "error": planned.error,
+            "fallback": planned.fallback,
+            "tasks": [
+                {
+                    "type": t.type,
+                    "subject": t.subject,
+                    "question": t.question,
+                    "priority": t.priority,
+                }
+                for t in planned.tasks
+            ],
+        }
+        if not planned.tasks:
+            result.status, result.reason = "done", "no_tasks"
+            return
+
+        own = tuple(sorted(story.domains))
+        # --- retrieval: each task's recipe queries over each provider ------------------
+        t1 = time.perf_counter()
+        seen_canonical: set[str] = set(story.canonical_urls)
+        seen_domains: set[str] = set(story.domains)
+        candidates: list[Candidate] = []
+        for task in planned.tasks:
+            action = cfg.actions.get(task.type)
+            if action is not None and not action.enabled:
+                continue
+            tq = catalog.recipes(
+                task,
+                terms=[t.text for t in terms],
+                own_domains=own,
+                first_at=story.first_at,
+                now=now,
+                cfg=cfg,
+            )
+            max_queries = (
+                action.max_queries if action and action.max_queries else cfg.max_queries_per_task
+            )
+            for rq in tq.queries[:max_queries]:
+                for provider in cfg.providers:
+                    entry = {
+                        "provider": provider.name,
+                        "query": rq.query,
+                        "task": rq.task_type,
+                        "window": rq.window,
+                        "domain_type": rq.domain_type,
+                        "after": rq.after.date().isoformat() if rq.after else None,
+                        "before": rq.before.date().isoformat() if rq.before else None,
+                    }
+                    if not self._budget_ok():
+                        result.waiting.append({"reason": "budget", "seconds": 0})
+                        result.searches.append({**entry, "hits": 0, "skipped": "context_budget"})
+                        continue
+                    outcome = await self.search.search(
+                        provider,
+                        rq.query,
+                        since=rq.after or (now - timedelta(days=3650)),
+                        before=rq.before,
+                        domain_type=rq.domain_type,
+                        pub_year_min=rq.pub_year_min,
+                        pub_year_max=rq.pub_year_max,
+                        language=cfg.language,
+                        limit=(
+                            action.pages_per_query
+                            if action and action.pages_per_query
+                            else catalog.PAGES_PER_QUERY
+                        )
+                        * 2,
+                        cache_hours=cfg.cache_hours,
+                        empty_cache_minutes=cfg.empty_cache_minutes,
+                        store=not dry_run,
+                        exclude=rq.exclude,
+                    )
+                    result.searches.append(
+                        {
+                            **entry,
+                            "hits": len(outcome.hits),
+                            "cached": outcome.cached,
+                            "error": outcome.error,
+                            "kind": outcome.kind,
+                            "requests": outcome.requests,
+                            "skipped": outcome.skipped,
+                            "cooldown_seconds": round(outcome.cooldown_seconds, 1),
+                            "fields": outcome.fields,
+                            "raw": outcome.raw[:600],
+                        }
+                    )
+                    if outcome.skipped == "cooldown":
+                        result.waiting.append(
+                            {"reason": "cooldown", "seconds": round(outcome.cooldown_seconds)}
+                        )
+                    self._count_requests(provider.name, outcome.requests)
+                    if outcome.error is None or outcome.hits:
+                        result.answered = True
+                    per_query = (
+                        action.pages_per_query
+                        if action and action.pages_per_query
+                        else catalog.PAGES_PER_QUERY
+                    )
+                    for h in outcome.hits[:per_query]:
+                        canonical = canonicalize_url(h.url)
+                        domain = canonical_domain(
+                            h.domain or h.url, self.enrichment.publisher_aliases
+                        )
+                        if canonical in seen_canonical or domain in seen_domains:
+                            continue
+                        if (
+                            rq.before is not None
+                            and h.published_at is not None
+                            and (
+                                h.published_at > rq.before
+                                or (rq.after is not None and h.published_at < rq.after)
+                            )
+                        ):
+                            continue
+                        seen_canonical.add(canonical)
+                        seen_domains.add(domain)
+                        candidates.append(
+                            Candidate(
+                                hit=h,
+                                provider=provider.name,
+                                query=rq.query,
+                                angle=rq.task_type,
+                                task_type=rq.task_type,
+                                subject=rq.subject,
+                                question=rq.question,
+                                window=rq.window,
+                                web_origin="archive" if rq.archive else "web",
+                                published_at=h.published_at,
+                            )
+                        )
+        result.timings["search"] = round(time.perf_counter() - t1, 2)
+        result.candidates = candidates[: cfg.max_judged]
+        for dropped in candidates[cfg.max_judged :]:
+            dropped.decision, dropped.reason = "rejected", "candidate_cap"
+            result.candidates.append(dropped)
+        self._prescreen(result.candidates, story, deny)
+        for c in result.candidates:
+            c.decision = "rejected" if c.reason else "pending"
+
+        # --- fetch + verified extraction (at most max_extracted pages) -------------------
+        t2 = time.perf_counter()
+        extracted = 0
+        with self.session_factory() as fetch_session:
+            for c in result.candidates:
+                if c.decision == "rejected":
+                    continue
+                if extracted >= cfg.max_extracted:
+                    c.decision, c.reason = "rejected", "extract_cap"
+                    continue
+                c.page = self._cached_page(fetch_session, c.hit.url)
+                if c.page is None:
+                    c.page = await self.fetcher.fetch(c.hit.url)
+                    c.fetch_detail = c.page.reason
+                else:
+                    c.fetch_detail = "cached"
+                if c.page.status != "ok" or not c.page.text:
+                    c.page = await self._fetch_via(c.page)
+                if c.page.status != "ok" or not c.page.text:
+                    c.decision, c.reason = "rejected", c.page.status or "fetch_failed"
+                    continue
+                if c.page.words < cfg.min_words:
+                    c.decision, c.reason = "rejected", "thin_page"
+                    continue
+                extracted += 1
+                if c.published_at is None and c.page.meta.published_at:
+                    c.published_at = c.page.meta.published_at
+                await self._wait_llm(result)
+                ex = await extract(
+                    c.page.text,
+                    task_type=c.task_type,
+                    subject=c.subject,
+                    question=c.question,
+                    story_title=story.title,
+                    llm_role=self.llm_role,
+                    llm_transport=self.llm_transport,
+                )
+                c.extract_raw = ex.raw or ex.error
+                if c.published_at is None:
+                    c.published_at = _parse_date(ex.date_from_page)
+                action = cfg.actions.get(c.task_type)
+                ok, reason = verify(
+                    ex,
+                    task_type=c.task_type,
+                    subject=c.subject,
+                    page_text=c.page.text,
+                    page_date=c.page.meta.published_at or c.published_at,
+                    first_at=story.first_at,
+                    min_age_days=(
+                        action.min_age_days
+                        if action and action.min_age_days is not None
+                        else catalog.HISTORY_MIN_AGE_DAYS
+                    ),
+                    now=now,
+                )
+                if not ok:
+                    c.decision, c.reason = "rejected", reason
+                    continue
+                from app.context.extract import subject_attribution
+
+                c.decision, c.reason = "accepted", ""
+                c.fact, c.quote, c.speaker = ex.fact, ex.quote, ex.speaker
+                c.attribution = subject_attribution(c.subject, ex.quote, c.page.text)
+        result.timings["fetch_extract"] = round(time.perf_counter() - t2, 2)
+        if not result.accepted:
+            result.reason = result.reason or coverage_reason(result)
+            result.timings["total"] = round(time.perf_counter() - t0, 2)
+            if not dry_run:
+                self._finish(result, anchor_id=anchor.id)
+            return
+
+        # --- compose (one call, only when something was accepted) -----------------------
+        t3 = time.perf_counter()
+        from app.context.compose import DetailItem, compose
+
+        items = [
+            DetailItem(
+                id=n + 1,
+                task_type=c.task_type,
+                subject=c.subject,
+                fact=c.fact,
+                quote=c.quote,
+                speaker=c.speaker,
+                date=c.published_at,
+                url=c.hit.url,
+                outlet=canonical_domain(
+                    c.hit.domain or c.hit.url, self.enrichment.publisher_aliases
+                ),
+                origin=c.web_origin,
+            )
+            for n, c in enumerate(result.accepted)
+        ]
+        await self._wait_llm(result)
+        composed = await compose(
+            story.title,
+            brief,
+            items,
+            llm_role=self.llm_role,
+            llm_transport=self.llm_transport,
+        )
+        result.timings["compose"] = round(time.perf_counter() - t3, 2)
+        result.timings["total"] = round(time.perf_counter() - t0, 2)
+        for item in items:
+            item.note = composed.notes.get(item.id, item.fact)
+        result.composed = {
+            "items": [
+                {
+                    "id": i.id,
+                    "type": i.task_type,
+                    "subject": i.subject,
+                    "url": i.url,
+                    "outlet": i.outlet,
+                    "date": i.date.isoformat() if i.date else None,
+                    "fact": i.fact,
+                    "quote": i.quote,
+                    "speaker": i.speaker,
+                    "origin": i.origin,
+                    "note": i.note,
+                }
+                for i in items
+            ],
+            "then_and_now": composed.then_and_now,
+            "raw": composed.raw,
+            "error": composed.error,
+        }
+        notes = {i.id: i.note for i in items}
+        for n, c in enumerate(result.accepted):
+            c.note = notes.get(n + 1, c.fact)
+        result.reason = result.reason or coverage_reason(result)
+        if not dry_run:
+            self._finish(result, anchor_id=anchor.id)
+
+    async def _fetch_via(self, page):
+        """Opt-in TinyFish Fetch fallback for pages our extractor cannot read
+        (403/empty/timeout). Robots-blocked and paywalled pages are never retried;
+        one request per call, counted against the context budget."""
+        if self.config.fetch_via != "tinyfish" or page.status in (
+            "skipped",
+            "paywalled",
+            "blocked",
+        ):
+            return page
+        provider_cfg = next((p for p in self.config.providers if p.name == "tinyfish"), None)
+        if provider_cfg is None or not self._budget_ok():
+            return page
+        try:
+            import httpx
+
+            async with httpx.AsyncClient(
+                timeout=provider_cfg.timeout_seconds,
+                headers={"User-Agent": "discover-feed context fetch"},
+                transport=self.search.transport,
+            ) as client:
+                from app.search.base import create_provider
+                from app.sources.base import Quota
+
+                provider = create_provider(provider_cfg, client)
+                texts = await provider.fetch_pages([page.url], Quota())
+        except Exception as exc:
+            logger.info("tinyfish fetch fallback failed for %s: %s", page.url, exc)
+            return page
+        self._count_requests("tinyfish", 1)
+        text = texts.get(page.url)
+        if text:
+            from app.enrich.fetch import FetchedPage
+
+            return FetchedPage(
+                url=page.url, status="ok", text=text, words=len(text.split()), meta=page.meta
+            )
+        return page
 
     async def _search_all(
         self, result: ContextResult, anchor: Article, dry_run: bool
@@ -916,6 +1392,11 @@ class ContextFinder:
                 if c.angle == FACT_CHECK_LABEL
                 else "article"
             ),
+            context_task=c.task_type or None,
+            context_fact=c.fact or None,
+            context_quote=c.quote or None,
+            context_speaker=c.speaker or None,
+            context_origin=c.web_origin or None,
         )
         session.add(article)
         session.flush()
@@ -924,6 +1405,7 @@ class ContextFinder:
     def _finish(self, result: ContextResult, *, anchor_id: int | None = None) -> None:
         now = self.now()
         run_id = uuid.uuid4().hex
+        self._save_trace(result, run_id, now)
         with self.session_factory() as session:
             story = session.get(Story, result.story_id)
             if story is None or story.state == StoryState.MERGED:
@@ -942,6 +1424,31 @@ class ContextFinder:
             for c in result.accepted:
                 c.article_id = self._add_link(session, story, c, anchor_id, now)
             result.added = sum(1 for c in result.accepted if c.article_id is not None)
+            if result.composed is not None:
+                version = (
+                    session.scalar(
+                        select(func.max(StorySummary.version)).where(
+                            StorySummary.story_id == story.id
+                        )
+                    )
+                    or 0
+                ) + 1
+                session.add(
+                    StorySummary(
+                        story_id=story.id,
+                        version=version,
+                        kind="context",
+                        text="",
+                        content_json=result.composed,
+                        article_ids=[c.article_id for c in result.accepted if c.article_id],
+                        basis="planner",
+                        model=self.llm_role.model if self.llm_role else "",
+                        prompt_version="context-v1",
+                        input_hash=run_id,
+                        status="ok",
+                        reason=result.reason,
+                    )
+                )
             for c in result.candidates:
                 session.add(
                     ContextCandidate(
@@ -973,6 +1480,59 @@ class ContextFinder:
             story.context_attempts, story.context_next_attempt_at = 0, None
             story.context_reason = result.reason
             session.commit()
+
+    def _save_trace(self, result: ContextResult, run_id: str, now) -> None:
+        """Persist the run's full trace (planner output, tasks, queries with windows,
+        every candidate's decision + scores + the rule that fired, raw extractor/
+        compose outputs, stage timings and waiting reasons) for ``diagnose``."""
+        trace = {
+            "mode": "planner" if result.planner is not None else "angles",
+            "planner": result.planner,
+            "searches": result.searches,
+            "candidates": [
+                {
+                    "url": c.hit.url,
+                    "domain": c.hit.domain,
+                    "title": c.hit.title,
+                    "provider": c.provider,
+                    "query": c.query,
+                    "task": c.task_type,
+                    "window": c.window,
+                    "decision": c.decision,
+                    "reason": c.reason,
+                    "shared_entities": c.shared_entities,
+                    "text_similarity": c.text_similarity,
+                    "judge": c.judge,
+                    "flagged": c.flagged,
+                    "attribution": c.attribution,
+                    "fetch": c.fetch_detail,
+                    "published_at": c.published_at.isoformat() if c.published_at else None,
+                    "fact": c.fact,
+                    "quote": c.quote,
+                    "speaker": c.speaker,
+                    "extract": c.extract_raw,
+                }
+                for c in result.candidates
+            ],
+            "composed": result.composed,
+            "timings": result.timings,
+            "waiting": result.waiting,
+            "status": result.status,
+            "reason": result.reason,
+        }
+        try:
+            with self.session_factory() as session:
+                session.add(
+                    ContextTrace(
+                        story_id=result.story_id,
+                        run_id=run_id,
+                        trace=trace,
+                        created_at=now,
+                    )
+                )
+                session.commit()
+        except Exception:
+            logger.exception("could not persist the context trace for story %s", result.story_id)
 
     def stats(self, session: Session, days: int = 7) -> dict:
         cfg = self.config
@@ -1031,9 +1591,26 @@ class ContextFinder:
                     "cooldown_seconds": int(cooling + 0.999) if cooling > 0 else 0,
                 }
             )
+        # Stage timings (planner mode): median seconds per stage over recent traces,
+        # plus the waiting reasons recorded in them.
+        stage_medians: dict[str, list[float]] = {}
+        waiting_totals = Counter()
+        for trace in session.scalars(
+            select(ContextTrace).where(ContextTrace.created_at >= since).limit(50)
+        ):
+            for stage, seconds in (trace.trace.get("timings") or {}).items():
+                stage_medians.setdefault(stage, []).append(seconds)
+            for w in trace.trace.get("waiting") or []:
+                waiting_totals[w.get("reason") or "?"] += 1
+        timings = {
+            stage: round(sorted(v)[len(v) // 2], 1) for stage, v in stage_medians.items() if v
+        }
         return {
             "enabled": bool(self.enabled_profiles(session)),
             "running": self.running,
+            "waiting_reason": self.waiting_reason,
+            "timings": timings,
+            "waiting_reasons": dict(waiting_totals.most_common(5)),
             "eligible": len(self.eligible(session)),
             "pending": pending or 0,
             "retry": retry or 0,

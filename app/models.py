@@ -96,6 +96,17 @@ class Article(Base):
     context_kind: Mapped[str | None] = mapped_column(String(10))
     """Context links only: ``article`` | ``opinion`` (badged in the context section,
     capped by ``context.max_opinion``)."""
+    context_task: Mapped[str | None] = mapped_column(String(24))
+    """Planner mode: the catalog task the item serves (history | quotes | financials |
+    related_developments | background); NULL for angles-mode links."""
+    context_fact: Mapped[str | None] = mapped_column(Text)
+    """Planner mode: the verified <= 30-word grounded fact."""
+    context_quote: Mapped[str | None] = mapped_column(Text)
+    """Planner mode: the verified verbatim evidence quote (<= 25 words)."""
+    context_speaker: Mapped[str | None] = mapped_column(String(200))
+    """Planner mode: who said the evidence quote, when the extractor named them."""
+    context_origin: Mapped[str | None] = mapped_column(String(10))
+    """Planner mode: ``archive`` (older-window retrieval) | ``web``."""
 
 
 ENRICHMENT = "enrichment"
@@ -778,6 +789,21 @@ class ContextCandidate(Base):
     note: Mapped[str] = mapped_column(Text, default="")
     """The judge's one-line reason shown to readers (``context_note`` on the article)."""
     article_id: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
+
+
+class ContextTrace(Base):
+    """One context-finder run's full per-story trace (planner mode): planner output,
+    every task, every query with window/filters, every candidate's decision with
+    scores and the rule that fired, raw extractor/compose outputs and stage timings.
+    ``python -m app.context.diagnose --story-id N`` prints the newest row."""
+
+    __tablename__ = "context_traces"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    story_id: Mapped[int] = mapped_column(Integer, index=True)
+    run_id: Mapped[str] = mapped_column(String(32), index=True)
+    trace: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
 
 

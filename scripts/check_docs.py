@@ -118,6 +118,7 @@ def main() -> int:
         cfg.EnrichmentQualityConfig,
         cfg.SearchProviderConfig,
         cfg.ContextConfig,
+        cfg.ContextActionConfig,
         SameEventRules,
         cfg.SummariesConfig,
         cfg.AlertsConfig,

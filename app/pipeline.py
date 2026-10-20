@@ -231,7 +231,7 @@ def context_from_settings(
         profile_defaults={p.id: p.context.enabled for p in config.profiles},
         search=SearchService(session_factory, transport=search_transport),
         fetcher=fetcher,
-        llm_role=profile.llm.summarizer if profile else None,
+        llm_role=(profile.llm.context or profile.llm.summarizer) if profile else None,
         llm_transport=llm_transport,
     )
 
@@ -269,6 +269,9 @@ class Pipeline:
         self.context = finder
         # context waits for enrichment passes (they share provider slots + cooldowns)
         finder.peer_running = lambda: self.enricher is not None and self.enricher.running
+        # planner-mode LLM calls yield to briefs/reports/perspectives (chat already
+        # takes priority slots inside INFLIGHT)
+        finder.llm_busy = lambda: self.summaries is not None and self.summaries.state.running
         return finder
 
     def find_context(self, story_ids: list[int] | None = None, *, force: bool = False) -> int:

@@ -162,6 +162,8 @@ async def no_sleep(_seconds: float) -> None:
 def config(**kw) -> ContextConfig:
     base = {
         "enabled": True,
+        # these tests cover the angles path; planner mode lives in test_context_planner.py
+        "query_mode": "angles",
         "providers": [SearchProviderConfig(name="tinyfish", min_interval_seconds=0)],
         "similarity_floor": 0.05,
         "similarity_ceiling": 0.7,

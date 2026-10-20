@@ -352,7 +352,38 @@ update it when fixtures or defaults change. docs/features/clustering.md has the 
 
 ## Background and context links
 
-- Code: `app/context/` (`angles.py` = LLM angles + `heuristic_angles` fallback pairing the
+- **Two modes** via `context.query_mode` — `planner` (default) and `angles`
+  (Phase-14 pipeline below, kept for rollback). Planner mode (Phase 15):
+  `planner.py` (one LLM call picks ≤ `max_tasks` (3) tasks from a fixed
+  catalog — history/quotes/financials/related_developments/background —
+  naming story entities; invalid types/subjects dropped; LLM failure falls
+  back to history + related_developments on the top entity) ->
+  `catalog.py` (deterministic recipes per type: dated window queries, news
+  then web, own domains excluded; `archive: false` drops older windows;
+  items from earlier/long_ago windows get `origin = archive`) ->
+  `extract.py` (one LLM extraction per page — fact ≤30w + verbatim quote
+  ≤25w; `verify()` rejects non-verbatim quotes, numbers missing from the
+  page, subject absent, undated pages for dated types, and `history` pages
+  inside `min_age_days` (3)) -> `compose.py` (one call: ≤30w notes per item +
+  `then_and_now` for history when verified earlier+current quotes exist —
+  `changed`/`expanded` show a box, `consistent` stays timeline-only, loaded
+  words (reversal/flip-flop/u-turn/backtrack/contradicts) rejected unless in
+  a cited quote). Stored: `context_task`/`context_fact`/`context_quote`/
+  `context_origin` on the Article + a `StorySummary kind="context"` row
+  (items + then_and_now) + a `context_traces` row (planner output, queries,
+  decisions, timings, waits) printed by `diagnose`. Caps per story: 1
+  planner call, `max_judged` (8) candidates, `max_extracted` (8) pages, 1
+  compose call — all on the optional `llm.context` role (fallback
+  `llm.summarizer`); calls yield while `llm_busy` (briefs/reports/
+  perspectives running, wired by `Pipeline.attach_context`) or INFLIGHT is
+  busy — the `waiting_reason` shows in Settings > Pipeline. Optional
+  `context.fetch_via: tinyfish` retries 403/empty/timeout pages through the
+  Fetch API (never robots/paywalled). `evaluate --gold file` reports
+  retrieval vs final recall with per-reason reject splits;
+  `--audit-rejects N [--labels f]` samples rejected candidates.
+  `pages_per_query`/`window_days`/`min_age_days`/`research`/`max_queries`/
+  `enabled` are per-type `actions:` overrides (unknown keys rejected).
+- **Angles mode** (the description below): `app/context/` (`angles.py` = LLM angles + `heuristic_angles` fallback pairing the
   top entity with history/explained/background, `filters.py` = `context_pre_filter` +
   `context_text_check` + `StoryContext`, `service.py` = `ContextFinder` + `ContextResult` +
   `ContextCandidate` rows, `cli.py`, `diagnose.py`, `evaluate.py`). Config `context:` under

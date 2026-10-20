@@ -710,10 +710,34 @@
             "description": "The search angle that surfaced it (`history`, `opposing view`...).",
             "title": "Angle"
           },
+          "date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Planner mode: the page's verified publication date.",
+            "title": "Date"
+          },
           "domain": {
             "description": "The page's registrable domain (`wikipedia.org`).",
             "title": "Domain",
             "type": "string"
+          },
+          "fact": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Planner mode: the verified <=30-word grounded fact.",
+            "title": "Fact"
           },
           "kind": {
             "default": "article",
@@ -738,9 +762,73 @@
             "description": "What it adds (the LLM judge's <=25-word note).",
             "title": "Note"
           },
+          "origin": {
+            "anyOf": [
+              {
+                "enum": [
+                  "archive",
+                  "web"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Planner mode: `archive` when the page came from an older-window retrieval query, `web` otherwise.",
+            "title": "Origin"
+          },
+          "outlet": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Planner mode: the publisher alias (== `domain`).",
+            "title": "Outlet"
+          },
+          "quote": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Planner mode: the verbatim evidence quote (<=25 words) from the page.",
+            "title": "Quote"
+          },
+          "subject": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Planner mode: the named entity the task covers.",
+            "title": "Subject"
+          },
           "title": {
             "title": "Title",
             "type": "string"
+          },
+          "type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Planner mode: the retrieval-catalog task the item serves (history | quotes | financials | related_developments | background); null for angles-mode links.",
+            "title": "Type"
           },
           "url": {
             "title": "Url",
@@ -2885,6 +2973,19 @@
             },
             "title": "Sources",
             "type": "array"
+          },
+          "then_and_now": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Planner mode: a verified earlier-vs-current quote comparison ({relation, summary, references}) — present only when relation is `changed` or `expanded` and both quotes verified verbatim in their pages.",
+            "title": "Then And Now"
           },
           "title": {
             "title": "Title",

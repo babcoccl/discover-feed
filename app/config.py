@@ -23,7 +23,7 @@ from pydantic import (
     model_validator,
 )
 
-from app.context.rules import SameEventRules
+from app.context.rules import CONTEXT_TASK_TYPES, SameEventRules
 from app.enrich.quality import (
     DEFAULT_DENY_DOMAINS,
     DEFAULT_SUSPICIOUS_PATTERNS,
@@ -81,6 +81,11 @@ class LLMConfig(_Model):
         default=None,
         description="Role for the per-source digests and the 'how outlets differ' "
         "synthesis; unset: the summarizer role.",
+    )
+    context: LLMRole | None = Field(
+        default=None,
+        description="Role for the context planner, page extractor and 'additional detail' "
+        "composer; unset: the summarizer role.",
     )
 
 
@@ -508,6 +513,9 @@ class SearchProviderConfig(_Model):
     name: str = Field(pattern=r"^(tinyfish|gdelt|searxng|guardian|newsdata|brave|exa)$")
     base_url: str | None = None
     """API root (required for ``searxng``: your instance, with ``json`` in search.formats)."""
+    fetch_url: str | None = None
+    """tinyfish Fetch API endpoint used when ``context.fetch_via`` = ``tinyfish``
+    (unset: ``base_url``)."""
     api_key: str | None = None
     """Name of the environment variable holding the key (tinyfish / guardian / newsdata /
     brave)."""
@@ -564,6 +572,14 @@ class SearchProviderConfig(_Model):
 class QueryMode(StrEnum):
     HEURISTIC = "heuristic"
     LLM = "llm"
+
+
+class ContextQueryMode(StrEnum):
+    ANGLES = "angles"
+    """Phase-14 behavior: LLM/heuristic search angles, similarity band, LLM judge."""
+    PLANNER = "planner"
+    """LLM planner picks retrieval tasks (history, quotes, financials,
+    related_developments, background) run by deterministic recipes."""
 
 
 def _default_providers() -> list[SearchProviderConfig]:
@@ -837,6 +853,25 @@ class EnrichmentConfig(_Model):
         return self
 
 
+class ContextActionConfig(_Model):
+    """Per-task-type overrides for the planner's retrieval catalog (``context.actions``).
+    Unset fields fall back to the recipe defaults / ``context.max_queries_per_task``."""
+
+    enabled: bool = True
+    max_queries: int | None = Field(default=None, ge=1, le=6)
+    """Queries run for one task of this type."""
+    pages_per_query: int | None = Field(default=None, ge=1, le=5)
+    """Hits fetched per query (default 2)."""
+    window_days: int | None = Field(default=None, ge=1)
+    """Recent-window override in days (quotes 90, financials 180,
+    related_developments 30)."""
+    min_age_days: float | None = Field(default=None, ge=0)
+    """history only: a dated page newer than this before the story is not history."""
+    research: bool | None = None
+    """background only: use domain_type research_paper (pub_year_min/max) for
+    technical topics instead of web."""
+
+
 class ContextConfig(_Model):
     """Background-and-context links (``app.context``): 1-3 pages from other sources that
     add history, context, data or opposing views — never coverage of the same event, never
@@ -845,6 +880,29 @@ class ContextConfig(_Model):
     profile's ``enrichment`` block."""
 
     enabled: bool = False
+    query_mode: ContextQueryMode = ContextQueryMode.PLANNER
+    """``planner``: an LLM picks 2-4 tasks from the retrieval catalog and each accepted
+    page yields a grounded 'Additional detail' item. ``angles``: the Phase-14
+    angle/judge pipeline (kept for rollback)."""
+    max_tasks: int = Field(default=3, ge=1, le=6)
+    """Planner mode: retrieval tasks per story (one planner LLM call)."""
+    max_queries_per_task: int = Field(default=2, ge=1, le=6)
+    """Planner mode: cap on queries each retrieval recipe may run."""
+    max_extracted: int = Field(default=8, ge=1, le=30)
+    """Planner mode: pages fetched + LLM-extracted per story (per-story LLM cap)."""
+    max_judged: int = Field(default=8, ge=1, le=30)
+    """Planner mode: candidates sent to the page extractor per story."""
+    fetch_via: str | None = Field(default=None, pattern=r"^(tinyfish)?$")
+    """Optional fallback fetcher for pages our extractor cannot read (403/empty/
+    timeout): ``tinyfish`` POSTs the URLs to the provider's Fetch API (markdown).
+    Off by default; costs one request per call, budget-capped. Robots-blocked and
+    paywalled pages are never retried."""
+    archive: bool = True
+    """Planner mode: let recipes query older windows (items shown with
+    ``origin=archive``); off: recent windows only."""
+    actions: dict[str, ContextActionConfig] = Field(default_factory=dict)
+    """Per-type overrides keyed by catalog type: history, quotes, financials,
+    related_developments, background. Unknown keys are rejected."""
     providers: list[SearchProviderConfig] = Field(default_factory=_default_providers)
     """Same provider registry/budget keys as enrichment (``search:tinyfish`` is shared);
     ``exa`` additionally supports ``find_similar`` on the anchor URL."""
@@ -885,7 +943,7 @@ class ContextConfig(_Model):
     language: str = "en"
     cache_hours: float = Field(default=24, ge=0)
     empty_cache_minutes: float = Field(default=10, ge=0)
-    max_age_hours: float = Field(default=168, gt=0)
+    max_age_hours: float = Field(default=48, gt=0)
     """Stories are eligible while published within this window."""
     concurrency: int = Field(default=2, ge=1, le=8)
 
@@ -899,6 +957,9 @@ class ContextConfig(_Model):
                 raise ValueError("the searxng provider needs base_url")
         if self.similarity_floor >= self.similarity_ceiling:
             raise ValueError("context.similarity_floor must be below similarity_ceiling")
+        unknown = set(self.actions) - set(CONTEXT_TASK_TYPES)
+        if unknown:
+            raise ValueError(f"unknown context.actions keys: {sorted(unknown)}")
         return self
 
 

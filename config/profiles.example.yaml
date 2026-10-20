@@ -129,6 +129,29 @@ profiles:
     # own daily_request_budget. (docs/features/context/)
     context:
       enabled: false
+      # query_mode: planner       # planner (default): an LLM picks 2-4 tasks from a
+      #                            # fixed catalog (history, quotes, financials,
+      #                            # related_developments, background) -> deterministic
+      #                            # retrieval recipes -> verified per-page extraction
+      #                            # -> 'Additional detail' on the story page.
+      #                            # angles: the Phase-14 angle/similarity/LLM-judge
+      #                            # pipeline (kept for rollback).
+      # max_tasks: 3               # planner: retrieval tasks per story (1 LLM call)
+      # max_queries_per_task: 2    # planner: queries each recipe may run
+      # max_extracted: 8           # planner: pages fetched + LLM-extracted per story
+      # max_judged: 8              # planner: candidates sent to the extractor
+      # fetch_via: tinyfish        # planner: optional Fetch-API fallback for pages our
+      #                            # extractor can't read (403/empty/timeout); off
+      #                            # by default, budget-capped, never robots/paywalled
+      # archive: true              # planner: allow older-window queries (origin=archive)
+      # actions:                   # per-type overrides (unknown keys rejected)
+      #   history:
+      #     min_age_days: 3        # a dated page newer than this isn't 'history'
+      #   background:
+      #     research: true         # use domain_type research_paper (pub_year bounds)
+      #   quotes:
+      #     window_days: 90        # recent-window override (financials 180,
+      #                            # related_developments 30)
       providers:
         - name: tinyfish
           min_interval_seconds: 2
