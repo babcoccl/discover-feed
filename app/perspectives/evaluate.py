@@ -90,9 +90,7 @@ def main() -> int:
     report = []
     for sid in ids:
         try:
-            outcome = asyncio.run(
-                service.run_story(story_id=sid, dry_run=not args.store)
-            )
+            outcome = asyncio.run(service.run_story(story_id=sid, dry_run=not args.store))
         except Exception as exc:  # transport failures: report, keep going
             from app.perspectives.service import PerspectiveOutcome
 
