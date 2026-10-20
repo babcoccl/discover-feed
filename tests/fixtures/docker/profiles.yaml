@@ -14,7 +14,8 @@ profiles:
     providers:
     - name: tinyfish
       base_url: http://otherwire:8081/tinyfish
-      min_interval_seconds: 2
+      min_interval_seconds: 0.5
+      override_min_interval: true  # fake provider is local; the 2s real limit doesn't apply
       timeout_seconds: 3
     - name: gdelt
       base_url: http://otherwire:8081/gdelt
@@ -23,6 +24,20 @@ profiles:
     max_age_hours: 1000000
     max_time_gap_hours: 1000000
     wait_seconds: 60
+    concurrency: 4
+    # Deep coverage on every story (one feed publisher already admits it): the fan-out
+    # — variants x pages, then the strongest query per location — must land one story
+    # on 5+ distinct outlets (each fake answer's hits live on another fixtures alias:
+    # tinywire, wirep1, wireus/wiregb/wireau — see app.fixture_server._fanout_base).
+    depth:
+      enabled: true
+      deep_min_publishers: 1
+      target_sources: 5
+      max_added_sources: 5
+      max_queries_per_story: 2
+      pages: 2
+      locations: [US, GB, AU]
+      daily_request_budget: 500
   # Background-and-context finder against the fixture's dedicated /context-search
   # (TinyFish shape) whose hits are generated backgrounder pages on the contextwire
   # host — always a different domain from feed and enrichment (wire) pages.
@@ -33,7 +48,8 @@ profiles:
     providers:
     - name: tinyfish
       base_url: http://otherwire:8081/context-search
-      min_interval_seconds: 2
+      min_interval_seconds: 0.5
+      override_min_interval: true
       timeout_seconds: 3
     min_publishers: 1
     llm_judge: false

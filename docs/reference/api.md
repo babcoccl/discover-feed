@@ -12,7 +12,7 @@ stories only and never the extracted article text.
 | --- | --- |
 | `GET /api/v1/profiles`, `/profiles/{slug}`, `/profiles/{slug}/topics` | profiles, sources, topics |
 | `GET /api/v1/profiles/{slug}/feed` | `topic`, `limit` (1-100), `cursor`, `since` (first published after), `updated_since` (current version published after), `include=card\|full` (`full` adds `report` and `sources`) |
-| `GET /api/v1/stories/{id}` | brief, report (or its `report_state`/`report_reason`), sources with raw URLs, `context[]` background links (url, title, domain, note, angle), model, versions; 301 for merged ids, 404 unless published |
+| `GET /api/v1/stories/{id}` | brief, report (or its `report_state`/`report_reason`), sources with raw URLs plus `outlet`/`country`/`kind`/`groups`/`headline_only` ([outlet registry](../features/enrichment/overview.md#outlet-registry) labels), `context[]` background links (url, title, domain, note, angle), model, versions; 301 for merged ids, 404 unless published |
 | `GET /api/v1/profiles/{slug}/feed.atom` | Atom: title = headline, content = lead + bullets, links to the story page and sources |
 | `GET /api/v1/stream` | SSE, see below |
 | `GET/POST /api/v1/profiles/{slug}/alert-rules`, `PUT/DELETE .../alert-rules/{id}` | alert rules (writes need the admin key) |

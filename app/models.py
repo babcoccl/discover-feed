@@ -204,6 +204,9 @@ class Story(Base):
     enrich_regens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     """Times late enrichment re-generated an already published story (at most once)."""
     enrich_reason: Mapped[str | None] = mapped_column(Text)
+    enrich_depth: Mapped[str | None] = mapped_column(String(10))
+    """The tier the last completed pass ran on: ``deep`` (``enrichment.depth``) |
+    ``standard`` (None: never enriched)."""
     context_status: Mapped[str | None] = mapped_column(String(10), index=True)
     """Background/context search (``app.context``): NULL (never ran) | ``pending`` |
     ``retry`` (provider failure; due at ``context_next_attempt_at``) | ``done`` | ``failed``.
@@ -697,8 +700,9 @@ class EnrichmentCandidate(Base):
     url: Mapped[str] = mapped_column(String(2048), default="")
     domain: Mapped[str] = mapped_column(String(300), default="")
     title: Mapped[str] = mapped_column(Text, default="")
-    decision: Mapped[str] = mapped_column(String(10))
-    """``accepted`` | ``rejected`` | ``link_only`` (a member stored without its text)."""
+    decision: Mapped[str] = mapped_column(String(20))
+    """``accepted`` | ``rejected`` | ``link_only`` / ``headline_only`` (a member stored
+    without its text)."""
     reason: Mapped[str] = mapped_column(String(40), default="")
     flagged: Mapped[str] = mapped_column(String(40), default="")
     """Source-quality flag (``tld:``/``name:``) — flagged, not rejected."""

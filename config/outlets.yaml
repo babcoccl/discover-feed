@@ -1,0 +1,913 @@
+# Outlet metadata used by enrichment's deep tier (Coverage section, API fields,
+# summarize diversity). One entry per outlet: name, every domain edition, the
+# ISO 3166-1 alpha-2 country of its home market and a kind — wire (news
+# agency), international (public/global broadcaster), national, local, trade
+# (sector press), state (state-run) or blog (born-digital commentary).
+#
+# `groups` is left empty on purpose: it is for your own labels, then
+# `enrichment.depth.ensure_groups` can require coverage from each. Example:
+#
+#   - name: Associated Press
+#     domains: [apnews.com]
+#     country: US
+#     kind: wire
+#     groups: [wire, mainstream]        # your own tags
+#
+# Unknown domains still resolve: kind = unknown and the country is guessed from
+# the TLD (elmundo.es -> ES). Run `python -m app.enrich.evaluate --deep` to see
+# the resolved labels per story.
+
+outlets:
+  # --- wire services -------------------------------------------------------
+  - name: Associated Press
+    domains: [apnews.com]
+    country: US
+    kind: wire
+    groups: []
+  - name: Reuters
+    domains: [reuters.com]
+    country: GB
+    kind: wire
+    groups: []
+  - name: AFP
+    domains: [afp.com]
+    country: FR
+    kind: wire
+    groups: []
+  - name: UPI
+    domains: [upi.com]
+    country: US
+    kind: wire
+    groups: []
+  - name: PA Media
+    domains: [pa.media]
+    country: GB
+    kind: wire
+    groups: []
+  - name: Deutsche Presse-Agentur
+    domains: [dpa.com]
+    country: DE
+    kind: wire
+    groups: []
+  - name: ANSA
+    domains: [ansa.it]
+    country: IT
+    kind: wire
+    groups: []
+  - name: EFE
+    domains: [efe.com]
+    country: ES
+    kind: wire
+    groups: []
+  - name: Kyodo News
+    domains: [kyodonews.net, english.kyodonews.net]
+    country: JP
+    kind: wire
+    groups: []
+  - name: Press Trust of India
+    domains: [ptinews.com]
+    country: IN
+    kind: wire
+    groups: []
+  - name: IANS
+    domains: [ians.in]
+    country: IN
+    kind: wire
+    groups: []
+  - name: New Zealand Herald wire / NZPA
+    domains: [nzpa.co.nz]
+    country: NZ
+    kind: wire
+    groups: []
+
+  # --- international / public broadcasters ---------------------------------
+  - name: BBC
+    domains: [bbc.com, bbc.co.uk]
+    country: GB
+    kind: international
+    groups: []
+  - name: Al Jazeera
+    domains: [aljazeera.com]
+    country: QA
+    kind: international
+    groups: []
+  - name: Deutsche Welle
+    domains: [dw.com]
+    country: DE
+    kind: international
+    groups: []
+  - name: France 24
+    domains: [france24.com]
+    country: FR
+    kind: international
+    groups: []
+  - name: Euronews
+    domains: [euronews.com]
+    country: FR
+    kind: international
+    groups: []
+  - name: NHK World
+    domains: [nhk.or.jp, www3.nhk.or.jp]
+    country: JP
+    kind: international
+    groups: []
+  - name: CBC
+    domains: [cbc.ca]
+    country: CA
+    kind: international
+    groups: []
+  - name: ABC (Australia)
+    domains: [abc.net.au]
+    country: AU
+    kind: international
+    groups: []
+  - name: Channel NewsAsia
+    domains: [channelnewsasia.com]
+    country: SG
+    kind: international
+    groups: []
+  - name: TRT World
+    domains: [trtworld.com]
+    country: TR
+    kind: state
+    groups: []
+  - name: RT
+    domains: [rt.com]
+    country: RU
+    kind: state
+    groups: []
+  - name: Sputnik
+    domains: [sputnikglobe.com, sputniknews.com]
+    country: RU
+    kind: state
+    groups: []
+  - name: Xinhua
+    domains: [xinhuanet.com, news.cn]
+    country: CN
+    kind: state
+    groups: []
+  - name: CGTN
+    domains: [cgtn.com]
+    country: CN
+    kind: state
+    groups: []
+  - name: TASS
+    domains: [tass.com]
+    country: RU
+    kind: state
+    groups: []
+  - name: Voice of America
+    domains: [voanews.com]
+    country: US
+    kind: state
+    groups: []
+
+  # --- United States -------------------------------------------------------
+  - name: The New York Times
+    domains: [nytimes.com]
+    country: US
+    kind: national
+    groups: []
+  - name: The Washington Post
+    domains: [washingtonpost.com]
+    country: US
+    kind: national
+    groups: []
+  - name: The Wall Street Journal
+    domains: [wsj.com]
+    country: US
+    kind: national
+    groups: []
+  - name: USA Today
+    domains: [usatoday.com]
+    country: US
+    kind: national
+    groups: []
+  - name: NPR
+    domains: [npr.org]
+    country: US
+    kind: national
+    groups: []
+  - name: PBS NewsHour
+    domains: [pbs.org]
+    country: US
+    kind: national
+    groups: []
+  - name: CNN
+    domains: [cnn.com]
+    country: US
+    kind: national
+    groups: []
+  - name: Fox News
+    domains: [foxnews.com]
+    country: US
+    kind: national
+    groups: []
+  - name: NBC News
+    domains: [nbcnews.com]
+    country: US
+    kind: national
+    groups: []
+  - name: ABC News
+    domains: [abcnews.go.com]
+    country: US
+    kind: national
+    groups: []
+  - name: CBS News
+    domains: [cbsnews.com]
+    country: US
+    kind: national
+    groups: []
+  - name: Axios
+    domains: [axios.com]
+    country: US
+    kind: national
+    groups: []
+  - name: Politico
+    domains: [politico.com]
+    country: US
+    kind: national
+    groups: []
+  - name: The Hill
+    domains: [thehill.com]
+    country: US
+    kind: national
+    groups: []
+  - name: Los Angeles Times
+    domains: [latimes.com]
+    country: US
+    kind: national
+    groups: []
+  - name: New York Post
+    domains: [nypost.com]
+    country: US
+    kind: national
+    groups: []
+  - name: The Atlantic
+    domains: [theatlantic.com]
+    country: US
+    kind: national
+    groups: []
+  - name: Bloomberg
+    domains: [bloomberg.com]
+    country: US
+    kind: trade
+    groups: []
+  - name: CNBC
+    domains: [cnbc.com]
+    country: US
+    kind: trade
+    groups: []
+  - name: MarketWatch
+    domains: [marketwatch.com]
+    country: US
+    kind: trade
+    groups: []
+  - name: Business Insider
+    domains: [businessinsider.com]
+    country: US
+    kind: trade
+    groups: []
+  - name: Fortune
+    domains: [fortune.com]
+    country: US
+    kind: trade
+    groups: []
+  - name: Forbes
+    domains: [forbes.com]
+    country: US
+    kind: trade
+    groups: []
+  - name: Boston Globe
+    domains: [bostonglobe.com]
+    country: US
+    kind: local
+    groups: []
+  - name: San Francisco Chronicle
+    domains: [sfchronicle.com]
+    country: US
+    kind: local
+    groups: []
+  - name: Chicago Tribune
+    domains: [chicagotribune.com]
+    country: US
+    kind: local
+    groups: []
+  - name: Seattle Times
+    domains: [seattletimes.com]
+    country: US
+    kind: local
+    groups: []
+  - name: Houston Chronicle
+    domains: [houstonchronicle.com]
+    country: US
+    kind: local
+    groups: []
+  - name: The Denver Post
+    domains: [denverpost.com]
+    country: US
+    kind: local
+    groups: []
+  - name: Star Tribune
+    domains: [startribune.com]
+    country: US
+    kind: local
+    groups: []
+  - name: Detroit Free Press
+    domains: [freep.com]
+    country: US
+    kind: local
+    groups: []
+  - name: The Dallas Morning News
+    domains: [dallasnews.com]
+    country: US
+    kind: local
+    groups: []
+  - name: Atlanta Journal-Constitution
+    domains: [ajc.com]
+    country: US
+    kind: local
+    groups: []
+  - name: Miami Herald
+    domains: [miamiherald.com]
+    country: US
+    kind: local
+    groups: []
+  - name: HuffPost
+    domains: [huffpost.com]
+    country: US
+    kind: blog
+    groups: []
+  - name: Vox
+    domains: [vox.com]
+    country: US
+    kind: blog
+    groups: []
+  - name: Slate
+    domains: [slate.com]
+    country: US
+    kind: blog
+    groups: []
+  - name: The Daily Beast
+    domains: [thedailybeast.com]
+    country: US
+    kind: blog
+    groups: []
+  - name: Salon
+    domains: [salon.com]
+    country: US
+    kind: blog
+    groups: []
+  - name: Mother Jones
+    domains: [motherjones.com]
+    country: US
+    kind: blog
+    groups: []
+
+  # --- United Kingdom ------------------------------------------------------
+  - name: The Guardian
+    domains: [theguardian.com, guardian.co.uk]
+    country: GB
+    kind: national
+    groups: []
+  - name: The Telegraph
+    domains: [telegraph.co.uk]
+    country: GB
+    kind: national
+    groups: []
+  - name: The Times
+    domains: [thetimes.co.uk, thetimes.com]
+    country: GB
+    kind: national
+    groups: []
+  - name: The Independent
+    domains: [independent.co.uk]
+    country: GB
+    kind: national
+    groups: []
+  - name: Sky News
+    domains: [news.sky.com, sky.com]
+    country: GB
+    kind: national
+    groups: []
+  - name: ITV News
+    domains: [itv.com]
+    country: GB
+    kind: national
+    groups: []
+  - name: Daily Mail
+    domains: [dailymail.co.uk, mailonline.com]
+    country: GB
+    kind: national
+    groups: []
+  - name: Daily Mirror
+    domains: [mirror.co.uk]
+    country: GB
+    kind: national
+    groups: []
+  - name: The Sun
+    domains: [thesun.co.uk]
+    country: GB
+    kind: national
+    groups: []
+  - name: Evening Standard
+    domains: [standard.co.uk]
+    country: GB
+    kind: national
+    groups: []
+  - name: Metro
+    domains: [metro.co.uk]
+    country: GB
+    kind: national
+    groups: []
+  - name: Financial Times
+    domains: [ft.com]
+    country: GB
+    kind: trade
+    groups: []
+  - name: The Economist
+    domains: [economist.com]
+    country: GB
+    kind: trade
+    groups: []
+  - name: The Register
+    domains: [theregister.com]
+    country: GB
+    kind: trade
+    groups: []
+
+  # --- Australia / New Zealand ----------------------------------------------
+  - name: Sydney Morning Herald
+    domains: [smh.com.au]
+    country: AU
+    kind: national
+    groups: []
+  - name: The Age
+    domains: [theage.com.au]
+    country: AU
+    kind: national
+    groups: []
+  - name: The Australian
+    domains: [theaustralian.com.au]
+    country: AU
+    kind: national
+    groups: []
+  - name: news.com.au
+    domains: [news.com.au]
+    country: AU
+    kind: national
+    groups: []
+  - name: SBS News
+    domains: [sbs.com.au]
+    country: AU
+    kind: national
+    groups: []
+  - name: Nine News
+    domains: [9news.com.au]
+    country: AU
+    kind: national
+    groups: []
+  - name: The Guardian Australia
+    domains: [guardian.com.au]
+    country: AU
+    kind: national
+    groups: []
+  - name: NZ Herald
+    domains: [nzherald.co.nz]
+    country: NZ
+    kind: national
+    groups: []
+  - name: Stuff
+    domains: [stuff.co.nz]
+    country: NZ
+    kind: national
+    groups: []
+  - name: RNZ
+    domains: [rnz.co.nz]
+    country: NZ
+    kind: national
+    groups: []
+
+  # --- Canada ---------------------------------------------------------------
+  - name: The Globe and Mail
+    domains: [theglobeandmail.com]
+    country: CA
+    kind: national
+    groups: []
+  - name: Toronto Star
+    domains: [thestar.com]
+    country: CA
+    kind: national
+    groups: []
+  - name: National Post
+    domains: [nationalpost.com]
+    country: CA
+    kind: national
+    groups: []
+  - name: CTV News
+    domains: [ctvnews.ca]
+    country: CA
+    kind: national
+    groups: []
+  - name: Global News
+    domains: [globalnews.ca]
+    country: CA
+    kind: national
+    groups: []
+  - name: Montreal Gazette
+    domains: [montrealgazette.com]
+    country: CA
+    kind: local
+    groups: []
+
+  # --- India ----------------------------------------------------------------
+  - name: The Times of India
+    domains: [timesofindia.indiatimes.com, indiatimes.com]
+    country: IN
+    kind: national
+    groups: []
+  - name: The Hindu
+    domains: [thehindu.com]
+    country: IN
+    kind: national
+    groups: []
+  - name: Hindustan Times
+    domains: [hindustantimes.com]
+    country: IN
+    kind: national
+    groups: []
+  - name: The Indian Express
+    domains: [indianexpress.com]
+    country: IN
+    kind: national
+    groups: []
+  - name: NDTV
+    domains: [ndtv.com]
+    country: IN
+    kind: national
+    groups: []
+  - name: Economic Times
+    domains: [economictimes.indiatimes.com]
+    country: IN
+    kind: trade
+    groups: []
+  - name: LiveMint
+    domains: [livemint.com]
+    country: IN
+    kind: trade
+    groups: []
+  - name: Scroll.in
+    domains: [scroll.in]
+    country: IN
+    kind: blog
+    groups: []
+  - name: Deccan Herald
+    domains: [deccanherald.com]
+    country: IN
+    kind: national
+    groups: []
+
+  # --- Europe ----------------------------------------------------------------
+  - name: Le Monde
+    domains: [lemonde.fr]
+    country: FR
+    kind: national
+    groups: []
+  - name: Le Figaro
+    domains: [lefigaro.fr]
+    country: FR
+    kind: national
+    groups: []
+  - name: Libération
+    domains: [liberation.fr]
+    country: FR
+    kind: national
+    groups: []
+  - name: Der Spiegel
+    domains: [spiegel.de]
+    country: DE
+    kind: national
+    groups: []
+  - name: Die Zeit
+    domains: [zeit.de]
+    country: DE
+    kind: national
+    groups: []
+  - name: Frankfurter Allgemeine
+    domains: [faz.net]
+    country: DE
+    kind: national
+    groups: []
+  - name: Die Welt
+    domains: [welt.de]
+    country: DE
+    kind: national
+    groups: []
+  - name: El País
+    domains: [elpais.com]
+    country: ES
+    kind: national
+    groups: []
+  - name: El Mundo
+    domains: [elmundo.es]
+    country: ES
+    kind: national
+    groups: []
+  - name: Corriere della Sera
+    domains: [corriere.it]
+    country: IT
+    kind: national
+    groups: []
+  - name: la Repubblica
+    domains: [repubblica.it]
+    country: IT
+    kind: national
+    groups: []
+  - name: Il Sole 24 Ore
+    domains: [ilsole24ore.com]
+    country: IT
+    kind: trade
+    groups: []
+  - name: NOS
+    domains: [nos.nl]
+    country: NL
+    kind: national
+    groups: []
+  - name: SVT Nyheter
+    domains: [svt.se]
+    country: SE
+    kind: national
+    groups: []
+  - name: NRK
+    domains: [nrk.no]
+    country: 'NO'
+    kind: national
+    groups: []
+  - name: DR
+    domains: [dr.dk]
+    country: DK
+    kind: national
+    groups: []
+  - name: Yle
+    domains: [yle.fi]
+    country: FI
+    kind: national
+    groups: []
+  - name: RTÉ
+    domains: [rte.ie]
+    country: IE
+    kind: national
+    groups: []
+  - name: ORF
+    domains: [orf.at]
+    country: AT
+    kind: national
+    groups: []
+  - name: SwissInfo
+    domains: [swissinfo.ch]
+    country: CH
+    kind: national
+    groups: []
+  - name: Gazeta Wyborcza
+    domains: [wyborcza.pl]
+    country: PL
+    kind: national
+    groups: []
+
+  # --- Middle East / Africa ---------------------------------------------------
+  - name: Haaretz
+    domains: [haaretz.com]
+    country: IL
+    kind: national
+    groups: []
+  - name: The Times of Israel
+    domains: [timesofisrael.com]
+    country: IL
+    kind: national
+    groups: []
+  - name: The Jerusalem Post
+    domains: [jpost.com]
+    country: IL
+    kind: national
+    groups: []
+  - name: Arab News
+    domains: [arabnews.com]
+    country: SA
+    kind: national
+    groups: []
+  - name: Al Arabiya
+    domains: [english.alarabiya.net, alarabiya.net]
+    country: AE
+    kind: national
+    groups: []
+  - name: Gulf News
+    domains: [gulfnews.com]
+    country: AE
+    kind: national
+    groups: []
+  - name: Daily Nation
+    domains: [nation.africa, nation.co.ke]
+    country: KE
+    kind: national
+    groups: []
+  - name: Premium Times
+    domains: [premiumtimesng.com]
+    country: NG
+    kind: national
+    groups: []
+  - name: The Punch
+    domains: [punchng.com]
+    country: NG
+    kind: national
+    groups: []
+  - name: Mail & Guardian
+    domains: [mg.co.za]
+    country: ZA
+    kind: national
+    groups: []
+  - name: News24
+    domains: [news24.com]
+    country: ZA
+    kind: national
+    groups: []
+  - name: TimesLIVE
+    domains: [timeslive.co.za]
+    country: ZA
+    kind: national
+    groups: []
+
+  # --- Asia / Pacific ---------------------------------------------------------
+  - name: South China Morning Post
+    domains: [scmp.com]
+    country: HK
+    kind: national
+    groups: []
+  - name: The Straits Times
+    domains: [straitstimes.com]
+    country: SG
+    kind: national
+    groups: []
+  - name: The Japan Times
+    domains: [japantimes.co.jp]
+    country: JP
+    kind: national
+    groups: []
+  - name: The Asahi Shimbun
+    domains: [asahi.com]
+    country: JP
+    kind: national
+    groups: []
+  - name: Korea Herald
+    domains: [koreaherald.com]
+    country: KR
+    kind: national
+    groups: []
+  - name: The Bangkok Post
+    domains: [bangkokpost.com]
+    country: TH
+    kind: national
+    groups: []
+  - name: The Jakarta Post
+    domains: [thejakartapost.com]
+    country: ID
+    kind: national
+    groups: []
+  - name: Rappler
+    domains: [rappler.com]
+    country: PH
+    kind: national
+    groups: []
+  - name: Dawn
+    domains: [dawn.com]
+    country: PK
+    kind: national
+    groups: []
+  - name: The Manila Times
+    domains: [manilatimes.net]
+    country: PH
+    kind: national
+    groups: []
+
+  # --- Latin America ------------------------------------------------------------
+  - name: Clarín
+    domains: [clarin.com]
+    country: AR
+    kind: national
+    groups: []
+  - name: La Nación
+    domains: [lanacion.com.ar]
+    country: AR
+    kind: national
+    groups: []
+  - name: Folha de S.Paulo
+    domains: [folha.uol.com.br]
+    country: BR
+    kind: national
+    groups: []
+  - name: O Globo
+    domains: [oglobo.globo.com]
+    country: BR
+    kind: national
+    groups: []
+  - name: El Universal
+    domains: [eluniversal.com.mx]
+    country: MX
+    kind: national
+    groups: []
+  - name: El Tiempo
+    domains: [eltiempo.com]
+    country: CO
+    kind: national
+    groups: []
+  - name: El Mercurio
+    domains: [emol.com]
+    country: CL
+    kind: national
+    groups: []
+
+  # --- trade / sector press -----------------------------------------------------
+  - name: TechCrunch
+    domains: [techcrunch.com]
+    country: US
+    kind: trade
+    groups: []
+  - name: Ars Technica
+    domains: [arstechnica.com]
+    country: US
+    kind: trade
+    groups: []
+  - name: The Verge
+    domains: [theverge.com]
+    country: US
+    kind: trade
+    groups: []
+  - name: Wired
+    domains: [wired.com]
+    country: US
+    kind: trade
+    groups: []
+  - name: ZDNet
+    domains: [zdnet.com]
+    country: US
+    kind: trade
+    groups: []
+  - name: Engadget
+    domains: [engadget.com]
+    country: US
+    kind: trade
+    groups: []
+  - name: IEEE Spectrum
+    domains: [spectrum.ieee.org]
+    country: US
+    kind: trade
+    groups: []
+  - name: Nature
+    domains: [nature.com]
+    country: GB
+    kind: trade
+    groups: []
+  - name: Science
+    domains: [science.org]
+    country: US
+    kind: trade
+    groups: []
+  - name: New Scientist
+    domains: [newscientist.com]
+    country: GB
+    kind: trade
+    groups: []
+  - name: Defense News
+    domains: [defensenews.com]
+    country: US
+    kind: trade
+    groups: []
+  - name: Aviation Week
+    domains: [aviationweek.com]
+    country: US
+    kind: trade
+    groups: []
+  - name: SpaceNews
+    domains: [spacenews.com]
+    country: US
+    kind: trade
+    groups: []
+  - name: Deadline
+    domains: [deadline.com]
+    country: US
+    kind: trade
+    groups: []
+  - name: Variety
+    domains: [variety.com]
+    country: US
+    kind: trade
+    groups: []
+  - name: The Hollywood Reporter
+    domains: [hollywoodreporter.com]
+    country: US
+    kind: trade
+    groups: []
+  - name: TMZ
+    domains: [tmz.com]
+    country: US
+    kind: trade
+    groups: []

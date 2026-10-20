@@ -153,6 +153,20 @@ class SummariesConfig(_Model):
         ge=4,
         description="Reject a report that copies this many consecutive words from a source.",
     )
+    summarize_max_articles_per_story: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="Full-text members picked for a brief (sources beyond it are listed, "
+        "not dropped). Deep-tier stories use summarize_max_articles_per_story_deep.",
+    )
+    summarize_max_articles_per_story_deep: int = Field(
+        default=8,
+        ge=1,
+        le=20,
+        description="Brief and report source cap for stories enriched on the deep tier "
+        "(enrichment.depth); also raises report_max_articles for them.",
+    )
     verbatim_max_ratio: float = Field(
         default=0.20,
         gt=0,
@@ -650,6 +664,55 @@ class EnrichmentQualityConfig(_Model):
         return self
 
 
+class EnrichmentDepthConfig(_Model):
+    """The deep tier (``enrichment.depth``): important stories get more queries, pages and
+    locations so they end up with many distinct outlets. Stories qualify when they have
+    at least ``deep_min_publishers`` distinct feed publishers, a priority above
+    ``deep_min_priority``, or an alert that fired; everything else keeps the standard
+    (cheap) behavior."""
+
+    enabled: bool = True
+    """Off: every story is enriched on the standard tier."""
+    deep_min_publishers: int = Field(default=2, ge=1)
+    """Deep tier for stories whose feed members already come from this many distinct
+    publishers (set very high to rely on priority / alerts instead)."""
+    deep_min_priority: int | None = Field(default=None, ge=0)
+    """Deep tier for stories whose ``priority`` is above this (None: priority alone
+    never admits)."""
+    deep_on_alert: bool = True
+    """Deep tier for stories an alert rule already fired on."""
+    target_sources: int = Field(default=12, ge=2, le=30)
+    """Distinct publishers a deep-tier story is searched for up to."""
+    max_added_sources: int = Field(default=12, ge=1, le=30)
+    """Web members added per pass on the deep tier."""
+    max_queries_per_story: int = Field(default=4, ge=1, le=8)
+    """Query variants per provider (core entities, a paraphrase, key numbers, the main
+    action phrase)."""
+    pages: int = Field(default=2, ge=1, le=10)
+    """Result pages fetched per query (TinyFish ``page`` 0..pages-1); a page with no
+    usable candidates stops early."""
+    locations: list[str] = Field(default_factory=lambda: ["US", "GB", "AU", "CA", "IN"])
+    """Country codes the strongest query is repeated once each for
+    (TinyFish ``location``); empty: no location fan-out."""
+    daily_request_budget: int | None = Field(default=1500, ge=0)
+    """Search requests/day spent on the deep tier across all providers, on top of each
+    provider's own budget; None: unlimited."""
+    ensure_groups: list[str] = Field(default_factory=list)
+    """Outlet groups (``config/outlets.yaml``) a deep story should have a source from:
+    missing groups get one targeted query each (``include_domains``)."""
+    max_group_queries: int = Field(default=3, ge=0, le=10)
+    """At most this many ensure-groups queries per story."""
+
+    @model_validator(mode="after")
+    def _check(self) -> "EnrichmentDepthConfig":
+        self.locations = [loc.strip().upper() for loc in self.locations if loc.strip()]
+        for loc in self.locations:
+            if len(loc) != 2 or not loc.isalpha():
+                raise ValueError(f"invalid depth.locations entry {loc!r}: country codes only")
+        self.ensure_groups = [g.strip() for g in self.ensure_groups if g.strip()]
+        return self
+
+
 class EnrichmentConfig(_Model):
     """Web-search enrichment: find other publishers' coverage of single-sourced stories."""
 
@@ -678,6 +741,13 @@ class EnrichmentConfig(_Model):
     whose page cannot be fetched (failed / blocked / paywalled, never robots-disallowed)
     are stored as ``text_status = none`` members: shown as \"also reported by (link only)\",
     never summarized, cited or counted in the word budget."""
+    headline_only_title_similarity: float = Field(default=0.50, ge=0, le=1)
+    """Headline-only members: an unfetchable candidate (never robots-disallowed) whose
+    title is at least this similar to the story headlines is stored as a
+    ``text_status = none`` member — shown in coverage, never summarized or cited."""
+    headline_only_min_entities: int = Field(default=2, ge=0, le=10)
+    """Headline-only members also need this many shared entities (names/numbers) between
+    the hit's title and the story headlines."""
     max_time_gap_hours: float = Field(default=72, gt=0)
     duplicate_overlap: float = Field(default=0.6, gt=0, le=1)
     """Shingle overlap at which a candidate counts as a copy (syndicated wire text)."""
@@ -696,6 +766,9 @@ class EnrichmentConfig(_Model):
     one in the same-domain and publisher-count checks, before any fetch."""
     extra_rules: ExtraRulesConfig = Field(default_factory=ExtraRulesConfig)
     quality: EnrichmentQualityConfig = Field(default_factory=EnrichmentQualityConfig)
+    depth: EnrichmentDepthConfig = Field(default_factory=EnrichmentDepthConfig)
+    """The deep tier: more queries, pages, locations and a bigger source target for
+    stories that qualify (publishers / priority / alerts)."""
     reenrich_hours: float = Field(default=24, ge=0)
     query_mode: QueryMode = QueryMode.HEURISTIC
     resummarize_on_enrichment: bool = True

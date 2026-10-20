@@ -253,6 +253,20 @@ update it when fixtures or defaults change. docs/features/clustering.md has the 
   `query.signal_tokens`) marks stories `done` with `skipped:pattern|no_signal` in
   `schedule()`. Test headlines need 1+ name/number (capitalized words count, the first
   word too) or they are skipped, e.g. "Fresno council backs new water plant" is skipped.
+- Deep tier (`enrichment.depth`, `Story.enrich_depth`): deep stories (>=
+  `deep_min_publishers` feed publishers / priority / fired alert) run `Enricher._deep_pass`
+  — up to `max_queries_per_story` query variants x `pages` result pages, then the strongest
+  query once per `locations` country, then one `include_domains` query per missing
+  `ensure_groups` group (TinyFish-only params `page`/`location`/`include_domains`; the
+  `PROVIDERS` map fills lazily in `create_provider` — check capabilities via
+  `_provider_cls`, not a bare `PROVIDERS.get`). Every request counts in `source_usage` as
+  `enrich:deep` against `daily_request_budget`; exhausted budget records
+  `stopped: deep_budget`. Unfetchable hits matching the headline become `headline_only`
+  members (`text_status=none`, `raw_json["headline_only"]`). Outlet labels come from
+  `config/outlets.yaml` (`app/outlets.py`, `DISCOVER_OUTLETS_PATH`; `groups` are
+  user-defined); the docker e2e fans the fake TinyFish out over `wirep1`/`wireus`/`wiregb`/
+  `wireau`/`wireca`/`wirein` compose aliases so one story reaches 5+ outlets (these hosts
+  must stay in `DISCOVER_IMAGES_ALLOW_HOSTS` — the fetcher Guard shares it).
 - Enrichment members: `Article.origin = "enrichment"`, `source_id = web:<domain>` (no
   `sources` row; `SourceNames.get` falls back to the domain), `anchor_article_id` re-pins
   them after `--rebuild`. Queries over members that feed alerts, cards or profile visibility

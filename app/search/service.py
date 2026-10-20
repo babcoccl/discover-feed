@@ -94,9 +94,22 @@ def usage_id(config: SearchProviderConfig) -> str:
     return config.budget_source or f"search:{config.name}"
 
 
-def cache_key(name: str, query: str, language: str | None, exclude=()) -> str:
+def cache_key(
+    name: str,
+    query: str,
+    language: str | None,
+    exclude=(),
+    *,
+    page: int = 0,
+    location: str | None = None,
+    include=(),
+) -> str:
     skipped = ",".join(sorted({d.casefold() for d in exclude}))
-    raw = f"{name}\0{' '.join(query.split()).casefold()}\0{language or ''}\0{skipped}"
+    wanted = ",".join(sorted({d.casefold() for d in include}))
+    raw = (
+        f"{name}\0{' '.join(query.split()).casefold()}\0{language or ''}\0{skipped}"
+        f"\0{page}\0{location or ''}\0{wanted}"
+    )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
@@ -211,15 +224,21 @@ class SearchService:
         empty_cache_minutes: float = 10,
         store: bool = True,
         exclude: Sequence[str] = (),
+        page: int = 0,
+        location: str | None = None,
+        include: Sequence[str] = (),
     ) -> SearchOutcome:
         """One query. ``store=False`` (dry runs) reads the cache but never writes it.
         ``exclude``: domains to keep out of the results (providers with
-        ``supports_exclude``; part of the cache key)."""
+        ``supports_exclude``; part of the cache key, as are the deep-tier ``page``,
+        ``location`` and ``include``)."""
         name = config.name
         limit = limit or config.max_results
         outcome = SearchOutcome(provider=name, query=query)
         health = self._health(name)
-        key = cache_key(name, query, language, exclude)
+        key = cache_key(
+            name, query, language, exclude, page=page, location=location, include=include
+        )
         if cache_hours > 0:
             hits = self._cached(key, cache_hours, empty_cache_minutes)
             if hits is not None:
@@ -244,7 +263,9 @@ class SearchService:
             provider = create_provider(config, client)
             sent_before = health.requests
             try:
-                outcome.hits = await self._call(provider, query, since, language, limit, exclude)
+                outcome.hits = await self._call(
+                    provider, query, since, language, limit, exclude, page, location, include
+                )
             except FetchError as exc:
                 outcome.requests = health.requests - sent_before
                 message = scrub(str(exc), *provider.secrets())
@@ -296,6 +317,9 @@ class SearchService:
         language: str | None,
         limit: int,
         exclude: Sequence[str] = (),
+        page: int = 0,
+        location: str | None = None,
+        include: Sequence[str] = (),
     ) -> list[SearchHit]:
         config = provider.config
         name = config.name
@@ -312,7 +336,17 @@ class SearchService:
             if wait > 0:
                 await self.sleep(wait)
             try:
-                return await provider.search(query, since, language, limit, quota, exclude)
+                return await provider.search(
+                    query,
+                    since,
+                    language,
+                    limit,
+                    quota,
+                    exclude,
+                    page=page,
+                    location=location,
+                    include=include,
+                )
             except RateLimited as exc:
                 health.rate_limited += 1
                 retry = exc.retry_after

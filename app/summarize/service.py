@@ -183,6 +183,8 @@ def _attempt_reason(errors: Sequence[str]) -> str:
 def summarizer_options(o: SummariesConfig) -> dict[str, Any]:
     """:class:`Summarizer` keyword arguments from a profile's ``summaries:`` section."""
     return {
+        "max_articles": o.summarize_max_articles_per_story,
+        "deep_max_articles": o.summarize_max_articles_per_story_deep,
         "report_max_articles": o.report_max_articles,
         "report_total_words": o.report_total_words,
         "report_max_tokens": o.report_max_tokens,
@@ -205,6 +207,7 @@ class Summarizer:
         *,
         max_articles: int = 5,
         max_words: int = 1200,
+        deep_max_articles: int = 8,
         report_max_articles: int = 4,
         report_total_words: int = 2400,
         report_max_tokens: int | None = None,
@@ -233,6 +236,8 @@ class Summarizer:
         self.followups_client = LLMClient(followups_role, transport=client.transport)
         self.max_articles = max_articles
         self.max_words = max_words
+        self.deep_max_articles = deep_max_articles
+        """Brief/report source cap for deep-tier stories (``story.enrich_depth``)."""
         self.report_max_articles = report_max_articles
         self.report_total_words = report_total_words
         self.duplicate_threshold = duplicate_threshold
@@ -449,28 +454,26 @@ class Summarizer:
     def sources_for(
         self, item: repo.StoryItem, names: dict[str, str], kind: str
     ) -> list[SourceDoc]:
-        # link-only members (``text_status = none``) are never summarized or cited
+        # headline-only members (``text_status = none``) are never summarized or cited
         members = [m for m in item.members if m.text_status != TextStatus.NONE]
+        deep = item.depth == "deep"
+        cap = self.deep_max_articles if deep else self.max_articles
         if kind == SummaryKind.REPORT:
             role = self.report_client.role
             return trim_sources(
                 select_sources(
                     members,
                     names,
-                    max_articles=self.report_max_articles,
+                    max_articles=self.deep_max_articles if deep else self.report_max_articles,
                     total_words=self.report_total_words,
-                    numbered_first=self.max_articles,
+                    numbered_first=cap,
                 ),
                 context_tokens=role.context_tokens,
                 max_tokens=role.max_tokens,
             )
         if kind == FOLLOWUPS:
-            return select_sources(
-                members, names, max_articles=self.max_articles, total_words=FOLLOWUPS_WORDS
-            )
-        return select_sources(
-            members, names, max_articles=self.max_articles, max_words=self.max_words
-        )
+            return select_sources(members, names, max_articles=cap, total_words=FOLLOWUPS_WORDS)
+        return select_sources(members, names, max_articles=cap, max_words=self.max_words)
 
     def key_for(self, item: repo.StoryItem, sources: Sequence[SourceDoc], kind: str) -> str:
         return input_hash(

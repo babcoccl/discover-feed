@@ -10,7 +10,7 @@ services:
       DISCOVER_EXTRACT_DOMAIN_DELAY_SECONDS: "0.2"
       DISCOVER_EXTRACT_MAX_ARTICLES: "100"
       # The fixture service is on the private compose network; the image SSRF guard allows it.
-      DISCOVER_IMAGES_ALLOW_HOSTS: fixtures,otherwire,tinywire,contextwire
+      DISCOVER_IMAGES_ALLOW_HOSTS: fixtures,otherwire,tinywire,contextwire,wirep1,wireus,wiregb,wireau,wireca,wirein
     volumes:
       - ./tests/fixtures:/fixtures:ro
     depends_on:
@@ -28,7 +28,10 @@ services:
               # replies fail too; stories must be retried, then enriched. The first good
               # TinyFish answer puts every hit on the feed host itself (all same_domain),
               # so the looser second query must run to find the wire pages.
-              "--tinyfish-faults", "malformed,malformed,empty,empty,429",
+              # Extra trailing 429s: deep stories usually fill their source target on
+              # TinyFish alone now, so the extra cooldowns are what still routes enough
+              # traffic to GDELT for its fault modes to be served and recovered from.
+              "--tinyfish-faults", "malformed,malformed,empty,empty,429,429,429,429,429",
               "--tinyfish-own-first", "1",
               "--gdelt-faults", "429,limit,timeout,empty,429",
               # Context-finder E2E: /context-search hits live on a fourth host so they
@@ -36,8 +39,19 @@ services:
               "--context-wire-base", "http://contextwire:8081"]
     networks:
       default:
-        # More host names: the fake web-search hits look like other publishers.
-        aliases: [otherwire, tinywire, contextwire]
+        # More host names: the fake web-search hits look like other publishers. The
+        # wire* aliases host the deep-coverage fan-out hits (page > 0 -> wirep<N>,
+        # location=<cc> -> wire<cc>).
+        aliases:
+          - otherwire
+          - tinywire
+          - contextwire
+          - wirep1
+          - wireus
+          - wiregb
+          - wireau
+          - wireca
+          - wirein
     volumes:
       - ./tests/fixtures:/fixtures:ro
     ports:

@@ -83,6 +83,10 @@ class ExaProvider(SearchProvider):
         limit: int,
         quota: Quota,
         exclude=(),
+        *,
+        page: int = 0,
+        location: str | None = None,
+        include=(),
     ) -> list[SearchHit]:
         body: dict[str, Any] = {
             "query": query,

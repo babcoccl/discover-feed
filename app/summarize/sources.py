@@ -43,8 +43,36 @@ def _by_published(articles: Sequence[Article]) -> list[Article]:
     return sorted(articles, key=lambda m: (m.published_at, m.id))
 
 
+def _diverse(articles: Sequence[Article]) -> list[Article]:
+    """Outlet-diversity order: the earliest article of each distinct outlet ``kind``
+    (config/outlets.yaml), then one for each new country, then one for each new
+    ``groups`` tag — the rest in publication order. Unknown outlets share the
+    ``unknown`` kind bucket, so one is picked early at most."""
+    from app.outlets import outlets
+
+    registry = outlets()
+    ordered = _by_published(articles)
+    labels = {a.id: registry.for_url(a.url or "") for a in ordered}
+    picked: list[Article] = []
+    chosen: set[int] = set()
+    for attr in ("kind", "country", "groups"):
+        covered: set[str] = set()
+        for article in ordered:
+            if article.id in chosen:
+                continue
+            values = getattr(labels[article.id], attr) or set()
+            values = {values} if isinstance(values, str) else set(values)
+            values.discard(None)
+            if values - covered:
+                covered |= values
+                picked.append(article)
+                chosen.add(article.id)
+    return picked + [a for a in ordered if a.id not in chosen]
+
+
 def _priority(members: Sequence[Article]) -> list[Article]:
-    """One per source first (earliest coverage first), then the rest."""
+    """One per source first (earliest coverage first), then the rest — the picks ordered
+    by outlet diversity (kinds, then countries, then groups)."""
     ordered = _by_published(members)
     picked: list[Article] = []
     seen: set[str] = set()
@@ -52,7 +80,7 @@ def _priority(members: Sequence[Article]) -> list[Article]:
         if article.source_id not in seen:
             seen.add(article.source_id)
             picked.append(article)
-    return picked + [a for a in ordered if a not in picked]
+    return _diverse(picked) + [a for a in ordered if a not in picked]
 
 
 def share_budget(sizes: Sequence[int], total: int) -> list[int]:

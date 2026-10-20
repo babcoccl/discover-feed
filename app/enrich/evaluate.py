@@ -92,7 +92,79 @@ def _fetch_cause(detail: str) -> str:
     return "other"
 
 
-def summary(results: list[tuple[str, StoryEnrichment]], *, markdown: bool) -> str:
+def _deep_summary(results: list[tuple[str, StoryEnrichment]], *, markdown: bool) -> list[str]:
+    """``--deep`` additions: per-story deep-tier detail (queries / pages / locations /
+    full-text + headline-only accepts / outlets / countries / groups) and the
+    sources-per-story distribution (0, 1-3, 4-7, 8+ distinct canonical domains:
+    feed publishers plus accepted and headline-only enrichment members)."""
+    from app.outlets import outlets
+
+    registry = outlets()
+    h = "## " if markdown else ""
+    lines = ["", f"{h}Deep coverage"]
+    requests = sum(r.deep_requests for _t, r in results)
+    lines.append(
+        f"- deep stories: {sum(1 for _t, r in results if r.tier == 'deep')}, "
+        f"deep requests: {requests}"
+    )
+    buckets = {"0": 0, "1-3": 0, "4-7": 0, "8+": 0}
+    rows = []
+    for title, r in results:
+        domains = {
+            canonical_domain(c.hit.url, None) for c in [*r.accepted, *r.untexted] if c.hit.url
+        }
+        domains.discard(None)
+        n = r.publishers_before + len(domains)
+        bucket = "0" if n == 0 else "1-3" if n <= 3 else "4-7" if n <= 7 else "8+"
+        buckets[bucket] += 1
+        pages = sorted({s["page"] for s in r.searches if s.get("page")})
+        locations = sorted({s["location"] for s in r.searches if s.get("location")})
+        labels = [registry.for_url(c.hit.url) for c in [*r.accepted, *r.untexted] if c.hit.url]
+        outlets_ = sorted({o.name for o in labels})
+        countries = sorted({o.country for o in labels if o.country})
+        groups = sorted({g for o in labels for g in o.groups})
+        rows.append(
+            [
+                f"{r.story_id}: {title[:40]}",
+                r.tier,
+                str(len(r.queries)),
+                ",".join(str(p) for p in pages) or "-",
+                ",".join(locations) or "-",
+                str(len(r.accepted)),
+                str(len(r.untexted)),
+                str(n),
+                ", ".join(outlets_[:6]) or "-",
+                ",".join(countries) or "-",
+                ",".join(groups) or "-",
+            ]
+        )
+    lines.append(
+        "- outlets per story (feed + accepted + headline-only): "
+        + ", ".join(f"{k}: {v}" for k, v in buckets.items())
+    )
+    lines += _table(
+        [
+            "story",
+            "tier",
+            "queries",
+            "pages",
+            "locations",
+            "full-text",
+            "headline-only",
+            "outlets",
+            "outlet names",
+            "countries",
+            "groups",
+        ],
+        rows,
+        markdown,
+    )
+    return lines
+
+
+def summary(
+    results: list[tuple[str, StoryEnrichment]], *, markdown: bool, deep: bool = False
+) -> str:
     """Precision first: every accepted page with its scores (check them for false matches),
     then rejections by reason with their average scores, then per-story query results."""
     n = len(results) or 1
@@ -263,6 +335,8 @@ def summary(results: list[tuple[str, StoryEnrichment]], *, markdown: bool) -> st
         rows,
         markdown,
     )
+    if deep:
+        lines += _deep_summary(results, markdown=markdown)
     return "\n".join(lines)
 
 
@@ -318,6 +392,7 @@ def backtest_summary(
     *,
     markdown: bool,
     aliases: dict[str, str] | None = None,
+    deep: bool = False,
 ) -> str:
     """Recall against ground truth: each row is
     ``(story_id, title, anchor_domain, expected_domains, result)``."""
@@ -361,7 +436,7 @@ def backtest_summary(
         ["story", "anchor", "expected", "found", "missed", "recall"], rows_out, markdown
     )
     lines += ["", f"{h}Search detail"]
-    lines.append(summary([(t, r) for _i, t, _a, _e, r in rows], markdown=markdown))
+    lines.append(summary([(t, r) for _i, t, _a, _e, r in rows], markdown=markdown, deep=deep))
     return "\n".join(lines)
 
 
@@ -375,6 +450,13 @@ def main(argv: list[str] | None = None) -> int:
         help="comma-separated story ids to evaluate (overrides --stories selection)",
     )
     parser.add_argument("--markdown", action="store_true")
+    parser.add_argument(
+        "--deep",
+        action="store_true",
+        help="run every evaluated story on the deep tier (enrichment.depth) and report "
+        "queries, pages, locations, headline-only accepts and the outlets-per-story "
+        "distribution",
+    )
     parser.add_argument("--provider", action="append", help="only this provider (repeatable)")
     parser.add_argument(
         "--wait", action="store_true", help="wait out provider cooldowns (also mid-run)"
@@ -408,7 +490,9 @@ def main(argv: list[str] | None = None) -> int:
             for story_id, title, anchor, expected in picks:
                 if args.wait:
                     await asyncio.to_thread(wait_for_cooldowns, enricher)
-                result = await enricher.enrich_story(story_id, dry_run=True, anchor_only=True)
+                result = await enricher.enrich_story(
+                    story_id, dry_run=True, anchor_only=True, force_deep=args.deep
+                )
                 out.append((story_id, title or "", anchor, expected, result))
             return out
 
@@ -417,6 +501,7 @@ def main(argv: list[str] | None = None) -> int:
                 asyncio.run(run_backtest()),
                 markdown=args.markdown,
                 aliases=enricher.config.publisher_aliases,
+                deep=args.deep,
             )
         )
         return 0
@@ -438,10 +523,15 @@ def main(argv: list[str] | None = None) -> int:
         for story_id, title in rows:
             if args.wait:
                 await asyncio.to_thread(wait_for_cooldowns, enricher)
-            out.append((title or "", await enricher.enrich_story(story_id, dry_run=True)))
+            out.append(
+                (
+                    title or "",
+                    await enricher.enrich_story(story_id, dry_run=True, force_deep=args.deep),
+                )
+            )
         return out
 
-    print(summary(asyncio.run(run()), markdown=args.markdown))
+    print(summary(asyncio.run(run()), markdown=args.markdown, deep=args.deep))
     return 0
 
 

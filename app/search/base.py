@@ -134,6 +134,12 @@ class SearchProvider(ABC):
     """The provider can exclude domains server-side (TinyFish ``exclude_domains``)."""
     supports_find_similar: bool = False
     """The provider offers a ``find_similar`` endpoint keyed on a URL (Exa)."""
+    supports_pages: bool = False
+    """The provider can page results server-side (TinyFish ``page`` 0-10)."""
+    supports_location: bool = False
+    """The provider can scope results to a country code (TinyFish ``location``)."""
+    supports_include: bool = False
+    """The provider can restrict results to listed domains (TinyFish ``include_domains``)."""
 
     def __init__(self, config: SearchProviderConfig, client: httpx.AsyncClient) -> None:
         self.config = config
@@ -178,11 +184,17 @@ class SearchProvider(ABC):
         limit: int,
         quota: Quota,
         exclude: Sequence[str] = (),
+        *,
+        page: int = 0,
+        location: str | None = None,
+        include: Sequence[str] = (),
     ) -> list[SearchHit]:
         """Hits for ``query`` published after ``since`` (best effort per provider).
         ``quota.before_request()`` is called once per HTTP request (budgets).
         ``exclude``: registrable domains the caller does not want back (only honored by
-        providers with ``supports_exclude``)."""
+        providers with ``supports_exclude``). ``page``, ``location`` and ``include``
+        are deep-tier knobs honored by providers with ``supports_pages`` /
+        ``supports_location`` / ``supports_include`` and ignored elsewhere."""
 
     async def find_similar(
         self,

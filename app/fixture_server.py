@@ -21,6 +21,7 @@ client retries it once) so stories fall back to ``/gdelt``; ``/tinyfish-stats`` 
 import argparse
 import html as htmllib
 import json
+import random
 import re
 import threading
 import time
@@ -77,9 +78,25 @@ def gdelt_json(fixture_dir: Path, query: str, wire_base: str) -> bytes:
     return json.dumps({"articles": articles}).encode()
 
 
-def tinyfish_json(fixture_dir: Path, query: str, wire_base: str) -> bytes:
+def _fanout_base(wire_base: str, page: int, location: str | None) -> str:
+    """Where the hits of a paged / localized answer live: page > 0 -> ``wirep<page>``,
+    a ``location`` country code -> ``wire<loc>`` — more network aliases of this same
+    container, so the deep-coverage fan-out sees a distinct publisher per extra call."""
+    parts = urlsplit(wire_base)
+    port = f":{parts.port}" if parts.port else ""
+    if location:
+        return f"{parts.scheme}://wire{location.lower()}{port}"
+    if page:
+        return f"{parts.scheme}://wirep{page}{port}"
+    return wire_base
+
+
+def tinyfish_json(
+    fixture_dir: Path, query: str, wire_base: str, *, page: int = 0, location: str | None = None
+) -> bytes:
     """The same matches in the TinyFish Search API shape, with a snippet (the reworded
     first paragraph) and the site name."""
+    hits_base = _fanout_base(wire_base, page, location)
     results = []
     for n, (_, stem, title) in enumerate(_matches(fixture_dir, query), start=1):
         parts = _page_parts(fixture_dir, stem)
@@ -88,13 +105,13 @@ def tinyfish_json(fixture_dir: Path, query: str, wire_base: str) -> bytes:
         results.append(
             {
                 "position": n,
-                "site_name": urlsplit(wire_base).hostname or "tinywire",
+                "site_name": urlsplit(hits_base).hostname or "tinywire",
                 "title": title,
                 "snippet": snippet,
-                "url": f"{wire_base.rstrip('/')}/wire/{stem}",
+                "url": f"{hits_base.rstrip('/')}/wire/{stem}",
             }
         )
-    body = {"query": query, "results": results, "total_results": len(results), "page": 0}
+    body = {"query": query, "results": results, "total_results": len(results), "page": page}
     return json.dumps(body).encode()
 
 
@@ -179,17 +196,29 @@ def context_html(fixture_dir: Path, article_id: str) -> bytes | None:
     ).encode()
 
 
-def wire_html(fixture_dir: Path, article_id: str) -> bytes | None:
+def _scrambled(sentence: str, rng: random.Random) -> str:
+    """The sentence with its 2-word chunks shuffled: the bag of words (so TF-IDF
+    similarity and shared entities) is unchanged while almost no 5-word shingle
+    survives — different ``Host`` aliases therefore never read as near-duplicates."""
+    words = sentence.rstrip(".!?").split()
+    chunks = [words[i : i + 2] for i in range(0, len(words), 2)]
+    rng.shuffle(chunks)
+    return " ".join(w for c in chunks for w in c) + "."
+
+
+def wire_html(fixture_dir: Path, article_id: str, host: str = "") -> bytes | None:
+    """The article reworded differently per ``Host``: the deep-tier fan-out serves the
+    same piece on wirep*/wire* aliases and identical text would trip the near-duplicate
+    shingle check, so each host gets its own deterministic chunk shuffle."""
     parts = _page_parts(fixture_dir, article_id)
     if parts is None:
         return None
     title, paras = parts
+    rng = random.Random(host)
     reworded = []
     for para in paras:
         sentences = [s for s in re.split(r"(?<=[.!?])\s+", para) if s]
-        reworded.append(
-            " ".join(" ".join(reversed(s.rstrip(".!?").split())) + "." for s in sentences)
-        )
+        reworded.append(" ".join(_scrambled(s, rng) for s in sentences))
     body = "".join(f"<p>{htmllib.escape(p)}</p>" for p in reworded)
     return (
         f"<!doctype html><html><head><title>{htmllib.escape(title)}</title></head><body>"
@@ -297,14 +326,24 @@ def make_handler(
                 query = parse_qs(urlsplit(self.path).query).get("query", [""])[0]
                 body, ctype = gdelt_json(fixture_dir, query, wire_base), "application/json"
             elif wire_base and path == "/tinyfish":
-                query = parse_qs(urlsplit(self.path).query).get("query", [""])[0]
+                params = parse_qs(urlsplit(self.path).query)
+                query = params.get("query", [""])[0]
                 hits_base = tinyfish_base or wire_base
                 if own_remaining[0] > 0:
                     # first response(s): every hit on the feed host itself, so all of
                     # them are rejected as same_domain and the looser query must run
                     own_remaining[0] -= 1
                     hits_base = base
-                body, ctype = tinyfish_json(fixture_dir, query, hits_base), "application/json"
+                body, ctype = (
+                    tinyfish_json(
+                        fixture_dir,
+                        query,
+                        hits_base,
+                        page=int(params.get("page", ["0"])[0] or 0),
+                        location=params.get("location", [None])[0],
+                    ),
+                    "application/json",
+                )
             elif wire_base and path == "/context-search":
                 # Context-finder E2E: TinyFish-shaped search whose hits point at the
                 # generated backgrounder pages (on the context wire host).
@@ -321,7 +360,9 @@ def make_handler(
             elif wire_base and path.startswith("/context/"):
                 body = context_html(fixture_dir, path.removeprefix("/context/"))
             elif wire_base and path.startswith("/wire/"):
-                body = wire_html(fixture_dir, path.removeprefix("/wire/"))
+                body = wire_html(
+                    fixture_dir, path.removeprefix("/wire/"), self.headers.get("Host", "")
+                )
             elif path.startswith("/demo-image/"):
                 found = demo_image(path.removeprefix("/demo-image/"))
                 if found is not None:

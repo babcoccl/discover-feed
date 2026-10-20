@@ -18,6 +18,19 @@ from app.topics import TopicRule, matches
 
 SCHEMA_VERSION = 1
 
+# Outlet kinds in coverage order — mirrors ``app.outlets.KINDS`` (kept literal here: this
+# module stays free of non-model app imports for ``tests/test_architecture.py``).
+_KINDS = (
+    "wire",
+    "international",
+    "national",
+    "local",
+    "trade",
+    "state",
+    "blog",
+    "unknown",
+)
+
 
 def _dt(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value) if value else None
@@ -131,11 +144,25 @@ class Member:
     flag: str = ""
     """Source-quality flag (``tld:``/``name:``): enrichment member whose domain looks
     like a content farm — still shown and cited, with a "quality uncertain" badge."""
+    outlet: str = ""
+    """Outlet name from ``config/outlets.yaml`` (the feed's display name / the domain
+    when not listed)."""
+    country: str | None = None
+    """ISO country code of the outlet's home market (from the registry or the TLD)."""
+    kind: str = "unknown"
+    """``wire`` | ``international`` | ``national`` | ``local`` | ``trade`` | ``state`` |
+    ``blog`` | ``unknown``."""
+    groups: list[str] = field(default_factory=list)
+    """User-defined outlet tags (``config/outlets.yaml``)."""
+    headline_only: bool = False
+    """Member stored without text: shown in the coverage panel only — never
+    numbered, summarized or cited."""
 
     @property
     def link_only(self) -> bool:
-        """Enrichment member stored without its text (``enrichment.link_only``): shown as
-        \"also reported by\", never numbered, summarized or cited."""
+        """Enrichment member stored without its text: shown as \"also reported by\",
+        never numbered, summarized or cited (``enrichment.link_only`` /
+        ``headline_only``)."""
         return self.text_status == "none"
 
     @property
@@ -196,6 +223,25 @@ class PublishedStory:
         for member in self.members:
             seen.setdefault(member.source_id, member)
         return list(seen.values())
+
+    @property
+    def coverage(self) -> dict | None:
+        """Coverage-panel data: distinct outlets and countries, the headline-only
+        count, and members grouped by outlet ``kind`` (registry order)."""
+        if not self.members:
+            return None
+        order = {k: i for i, k in enumerate(_KINDS)}
+        by_kind: dict[str, list[Member]] = {}
+        for m in self.members:
+            by_kind.setdefault(m.kind or "unknown", []).append(m)
+        return {
+            "outlets": len({m.outlet or m.source for m in self.members}),
+            "countries": sorted({m.country for m in self.members if m.country}),
+            "headline_only": sum(1 for m in self.members if m.headline_only),
+            "by_kind": sorted(
+                by_kind.items(), key=lambda kv: (order.get(kv[0], len(order)), kv[0])
+            ),
+        }
 
 
 def _citations(items: Sequence[dict]) -> list[Citation]:
@@ -266,6 +312,11 @@ def load(view: StoryView, source_ids: Sequence[str] | None = None) -> PublishedS
             via=m.get("via"),
             origin=m.get("origin") or "feed",
             flag=m.get("flag") or "",
+            outlet=m.get("outlet") or m["source"],
+            country=m.get("country"),
+            kind=m.get("kind") or "unknown",
+            groups=m.get("groups") or [],
+            headline_only=bool(m.get("headline_only")) or m.get("text_status") == "none",
         )
         for m in doc.get("members", [])
     ]

@@ -85,11 +85,14 @@ def summary_worker_from_settings(
     options = profile.summaries if profile else SummariesConfig()
     summarizer = None
     if profile is not None:
+        opts = summarizer_options(options)
+        if "summarize_max_articles_per_story" not in options.model_fields_set:
+            # env default wins unless the profile's summaries: section sets it
+            opts["max_articles"] = settings.summarize_max_articles_per_story
         summarizer = Summarizer(
             LLMClient(profile.llm.summarizer, transport=transport),
-            max_articles=settings.summarize_max_articles_per_story,
             max_words=settings.summarize_max_words_per_article,
-            **summarizer_options(options),
+            **opts,
         )
     if summarizer is not None:
         set_max_inflight(options.max_inflight)

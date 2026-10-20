@@ -120,6 +120,8 @@ Read from the YAML on every start (not stored in the DB).
 | `summarize_backfill_hours` | `24` | Unpublished stories older than this are not generated |
 | `summarize_backfill_max` | `40` | At most this many unpublished stories are worked on |
 | `report_max_articles` | `4` | Members sent to a report prompt (one per source first) |
+| `summarize_max_articles_per_story` | `5` | Full-text members picked for a brief (the rest are listed, not dropped) |
+| `summarize_max_articles_per_story_deep` | `8` | Same cap for deep-tier stories; also their report article cap |
 | `report_total_words` | `2400` | Source words per report, shared by its articles |
 | `report_max_tokens` | `1400` | `max_tokens` for report requests (briefs use the role's) |
 | `report_timeout_seconds` | `300` | Timeout for report requests |
@@ -158,6 +160,9 @@ Per profile (`enrichment:`). The UI toggle in Settings > Pipeline overrides
 | `min_snippet_strong` | `0.45` | Rule B: snippet this strong can carry weaker text |
 | `min_text_floor` | `0.25` | Rule B: text must still reach this |
 | `link_only` | `false` | Keep strong-snippet unfetchable hits as link-only members |
+| `headline_only_title_similarity` | `0.50` | Unfetchable hits with a title this similar (plus entities, below) become headline-only members |
+| `headline_only_min_entities` | `2` | Shared names/numbers a headline-only member needs |
+| `depth` | on | Deep coverage tier — see [depth](#enrichment-depth) |
 | `max_time_gap_hours` | `72` | Publication-time gap vs the story |
 | `duplicate_overlap` | `0.6` | 5-word shingle overlap that counts as a copy |
 | `deny_domains` | `[]` | Blocked candidate domains |
@@ -204,6 +209,36 @@ hard-denied.
 | `suspicious_tlds` | `edu.pl`, `club`, `shop`, `online`, `site`, `xyz`, `top`, `icu`, `info`, `biz`, `click`, `link`, `work`, `buzz`, `vip`, `website`, `space`, `today`, `live` | Domain endings that flag a hit (`tld:<suffix>`) |
 | `suspicious_patterns` | `(news\|wire\|daily\|hub\|insider\|feed)` token on the registrable domain | Keyword-stuffed farm names flag (`name:<token>`); fused names like `wired.com` do not |
 | `deny_domains` | farms confirmed in live evals | Hard-denied like `deny_domains`; a YAML list replaces the defaults entirely |
+
+### Enrichment `depth`
+
+The deep coverage tier (`enrichment.depth`): important stories get more
+queries, pages and per-country repeats so they end up with many distinct
+outlets; niche stories keep the cheap standard behavior. A story is deep when
+its feed members span `deep_min_publishers` distinct publishers, its priority
+exceeds `deep_min_priority`, or an alert already fired on it — and
+`enabled`/`daily_request_budget` still admit it.
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `enabled` | `true` | Off: every story is enriched on the standard tier |
+| `deep_min_publishers` | `2` | Deep tier at this many distinct feed publishers |
+| `deep_min_priority` | unset | Deep tier above this story `priority` (unset: priority never admits) |
+| `deep_on_alert` | `true` | Deep tier for stories an alert rule already fired on |
+| `target_sources` | `12` | Distinct publishers a deep story is searched for up to |
+| `max_added_sources` | `12` | Web members added per pass on the deep tier |
+| `max_queries_per_story` | `4` | Query variants per provider (entities, paraphrase, key numbers, action phrase) |
+| `pages` | `2` | Result pages per query (TinyFish `page` 0..n-1); an empty page stops early |
+| `locations` | `[US, GB, AU, CA, IN]` | Country codes the strongest query is repeated for (TinyFish `location`); `[]` = off |
+| `daily_request_budget` | `1500` | Deep-tier requests/day across providers (`enrich:deep` usage row); unset = unlimited |
+| `ensure_groups` | `[]` | Outlet groups ([outlets.yaml](../features/enrichment/overview.md#outlet-registry)) a deep story should cover; missing groups get one `include_domains` query each |
+| `max_group_queries` | `3` | At most this many ensure-groups queries per story |
+
+Deep-tier candidates follow the same acceptance rules; headline-only members
+(`headline_only_title_similarity`/`headline_only_min_entities` above) count
+separately and are never summarized or cited. The Pipeline panel shows the
+sources-per-story distribution; `python -m app.enrich.evaluate --deep` forces
+every story onto the deep tier for evaluation.
 
 ## Search providers
 

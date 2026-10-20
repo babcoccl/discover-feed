@@ -28,6 +28,7 @@ the YAML (`${VAR}`) — values live only here or in `.env`.
 | `DISCOVER_IMAGES_DIR` | `data/images` | Card-image cache (`/data/images` in Docker) |
 | `DISCOVER_NO_IMAGE_STYLE` | unset | Overrides `images.no_image_style` (`logo`/`text_only`/`gradient`) |
 | `DISCOVER_IMAGES_ALLOW_HOSTS` | unset | Comma-separated hosts exempt from the image SSRF guard |
+| `DISCOVER_OUTLETS_PATH` | `config/outlets.yaml` | Outlet registry (names/countries/kinds/groups) used for coverage labels |
 | `DISCOVER_CLUSTER_THRESHOLD` | `0.45` | Min cosine similarity to join a story |
 | `DISCOVER_CLUSTER_WINDOW_HOURS` | `72` | Article must be within this of the story's first/latest member |
 | `DISCOVER_CLUSTER_SAME_SOURCE_THRESHOLD` | `0.7` | Stricter threshold when the story already has that source |

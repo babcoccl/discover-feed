@@ -255,6 +255,7 @@ _ENRICHMENT_COLUMNS = {
         "enrich_wait_until": "DATETIME",
         "enrich_passes": "INTEGER NOT NULL DEFAULT 0",
         "enrich_regen_at": "DATETIME",
+        "enrich_depth": "VARCHAR(10)",
     },
     "enrichment_candidates": {
         "title_similarity": "FLOAT",

@@ -145,6 +145,29 @@ class StorySourceV1(BaseModel):
         description="`feed`: a configured source; `enrichment`: found by web search for "
         "this story (it never makes a story visible on its own).",
     )
+    outlet: str = Field(
+        default="",
+        description="Outlet name from config/outlets.yaml (the source name or domain when "
+        "not listed).",
+    )
+    country: str | None = Field(
+        default=None,
+        description="ISO 3166-1 alpha-2 country of the outlet's home market (registry or "
+        "TLD guess; null when unknown).",
+    )
+    kind: str = Field(
+        default="unknown",
+        description="wire | international | national | local | trade | state | blog | unknown.",
+    )
+    groups: list[str] = Field(
+        default_factory=list,
+        description="User-defined outlet tags (the `groups` list in config/outlets.yaml).",
+    )
+    headline_only: bool = Field(
+        default=False,
+        description="Stored without text: counted in coverage, never summarized or cited "
+        "as evidence.",
+    )
 
 
 class ContextLinkV1(BaseModel):
@@ -394,6 +417,11 @@ def _sources(members: Sequence[views.Member]) -> list[StorySourceV1]:
             publisher=m.publisher,
             via=m.via,
             origin="enrichment" if m.found_by_search else "feed",
+            outlet=m.outlet or m.source,
+            country=m.country,
+            kind=m.kind,
+            groups=m.groups,
+            headline_only=m.headline_only,
         )
         for m in members
     ]
