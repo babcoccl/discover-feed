@@ -231,7 +231,7 @@ exceeds `deep_min_priority`, or an alert already fired on it — and
 | `pages` | `2` | Result pages per query (TinyFish `page` 0..n-1); an empty page stops early |
 | `locations` | `[US, GB, AU, CA, IN]` | Country codes the strongest query is repeated for (TinyFish `location`); `[]` = off |
 | `daily_request_budget` | `1500` | Deep-tier requests/day across providers (`enrich:deep` usage row); unset = unlimited |
-| `ensure_groups` | `[]` | Outlet groups ([outlets.yaml](../../features/enrichment/overview.md#outlet-registry)) a deep story should cover; missing groups get one `include_domains` query each |
+| `ensure_groups` | `[]` | Outlet groups ([outlets.yaml](../features/enrichment/overview.md#outlet-registry)) a deep story should cover; missing groups get one `include_domains` query each |
 | `max_group_queries` | `3` | At most this many ensure-groups queries per story |
 
 Deep-tier candidates follow the same acceptance rules; headline-only members
