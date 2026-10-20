@@ -34,6 +34,7 @@ from app.models import (
     SummaryJob,
     SummaryKind,
     SummaryStatus,
+    TextStatus,
     utcnow,
 )
 from app.story_views import SCHEMA_VERSION
@@ -155,12 +156,16 @@ def _iso(value: datetime | None) -> str | None:
 
 
 def _members(item: repo.StoryItem, names: dict[str, str]) -> list[dict]:
+    from app.outlets import outlets
+
+    registry = outlets()
     return [
         {
             "id": m.id,
             "source_id": m.source_id,
             "source": names.get(m.source_id, m.source_id),
             **_labels(m, names),
+            **_outlet(m, names, registry),
             "title": m.title,
             "url": m.url,
             "published_at": _iso(m.published_at),
@@ -170,9 +175,24 @@ def _members(item: repo.StoryItem, names: dict[str, str]) -> list[dict]:
             "words": m.word_count or 0,
             "origin": m.origin or "feed",
             "flag": (m.raw_json or {}).get("flag") or "",
+            "headline_only": bool((m.raw_json or {}).get("headline_only"))
+            or m.text_status == TextStatus.NONE,
         }
         for m in item.members
     ]
+
+
+def _outlet(article, names: dict[str, str], registry) -> dict:
+    """Coverage labels (``config/outlets.yaml``): outlet name — the feed's display name
+    when it has no registry entry — country, kind and user ``groups``."""
+    o = registry.for_url(article.url or "")
+    known = o.kind != "unknown"
+    return {
+        "outlet": o.name if known else names.get(article.source_id, o.name),
+        "country": o.country,
+        "kind": o.kind,
+        "groups": o.groups,
+    }
 
 
 def _labels(article, names: dict[str, str]) -> dict:

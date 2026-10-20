@@ -14,7 +14,7 @@ import re
 import threading
 import uuid
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from urllib.parse import urlsplit
@@ -29,6 +29,7 @@ from app.enrich.filters import (
     StoryContext,
     pre_filter,
     shared_entities,
+    similarity,
     snippet_check,
     text_check,
     title_check,
@@ -36,6 +37,7 @@ from app.enrich.filters import (
 from app.enrich.quality import flag_reason
 from app.enrich.query import (
     build_queries,
+    deep_queries,
     drop_short_terms,
     provider_queries,
     signal_tokens,
@@ -46,11 +48,13 @@ from app.models import (
     CONTEXT,
     ENRICHMENT,
     NON_FEED,
+    AlertFiring,
     Article,
     BlockedDomain,
     EnrichmentCandidate,
     ProfileRecord,
     SearchProviderState,
+    SourceUsage,
     Story,
     StoryState,
     TextStatus,
@@ -62,6 +66,16 @@ from app.search.base import PROVIDERS, SearchHit
 from app.search.service import SearchService, budget_use
 
 logger = logging.getLogger(__name__)
+
+
+def _provider_cls(name: str):
+    """The provider class for ``name`` — the ``PROVIDERS`` map fills lazily inside
+    ``create_provider``, so import the modules that register first (deep-tier checks
+    like ``supports_pages`` must not silently miss before any provider ran)."""
+    from app.search import exa, providers, tinyfish  # noqa: F401
+
+    return PROVIDERS.get(name)
+
 
 STALE_PENDING = timedelta(hours=1)
 """A ``pending`` mark older than this (the process died mid-run) is picked up again."""
@@ -79,6 +93,8 @@ DEGRADED = "degraded"
 answered: the story is retried (``retry``) until the primary answers again."""
 DEGRADED_MAX_ATTEMPTS = 3
 """Degraded passes in a row before the story is marked done with what the fallback found."""
+DEEP_USAGE = "enrich:deep"
+"""``source_usage`` key the deep tier's request budget (``enrichment.depth``) is kept under."""
 
 
 def retry_delay(attempts: int) -> timedelta:
@@ -146,8 +162,12 @@ class StoryEnrichment:
     added: int = 0
     status: str = "done"
     reason: str | None = None
+    tier: str = "standard"
+    """``deep`` (``enrichment.depth`` admission: publishers / priority / alert) | standard."""
     answered: bool = False
     """At least one provider answered (hits or none); otherwise the story is retried."""
+    deep_requests: int = 0
+    """HTTP requests the deep tier sent for this story (recorded against the day budget)."""
     degraded: str | None = None
     """The primary provider's error when only a fallback answered (a degraded pass)."""
     retry_at: datetime | None = None
@@ -160,6 +180,16 @@ class StoryEnrichment:
     def link_only(self) -> list[Candidate]:
         """Members stored without text (``enrichment.link_only``): never summarized."""
         return [c for c in self.candidates if c.decision == "link_only"]
+
+    @property
+    def headline_only(self) -> list[Candidate]:
+        """Unfetchable members kept for the coverage panel (headline + time only)."""
+        return [c for c in self.candidates if c.decision == "headline_only"]
+
+    @property
+    def untexted(self) -> list[Candidate]:
+        """Members stored with ``text_status = none`` (link_only and headline_only)."""
+        return [c for c in self.candidates if c.decision in ("link_only", "headline_only")]
 
 
 class Enricher:
@@ -242,7 +272,9 @@ class Enricher:
         if story_ids is not None:
             stmt = stmt.where(Story.id.in_(story_ids))
         out = []
-        for story in session.scalars(stmt.order_by(Story.last_updated_at.desc())):
+        for story in session.scalars(
+            stmt.order_by(Story.priority.desc(), Story.last_updated_at.desc())
+        ):
             if not self._due(story, now):
                 continue
             if (
@@ -256,7 +288,12 @@ class Enricher:
                 not cfg.resummarize_on_enrichment or story.enrich_regens >= 1
             ):
                 continue  # late sources would re-generate a published story more than once
-            if self.publishers(session, story.id) >= cfg.target_sources:
+            publishers = self.publishers(session, story.id)
+            if publishers >= cfg.target_sources and not (
+                cfg.depth.enabled
+                and publishers < cfg.depth.target_sources
+                and self._deep_admitted(session, story)
+            ):
                 continue
             out.append(story.id)
         return out
@@ -317,6 +354,61 @@ class Enricher:
             story.enriched_at, story.enrich_next_attempt_at = now, None
             story.enrich_passes = (story.enrich_passes or 0) + 1
         return keep
+
+    def _feed_publishers(self, session: Session, story_id: int) -> int:
+        """Distinct publishers among feed members only (canonical domains; enrichment
+        members do not count — ``deep_min_publishers`` is about real coverage)."""
+        urls = session.scalars(
+            select(Article.url).where(Article.story_id == story_id, Article.origin.not_in(NON_FEED))
+        )
+        return len({canonical_domain(u, self.config.publisher_aliases) for u in urls if u})
+
+    def _deep_admitted(self, session: Session, story: Story) -> bool:
+        """The deep tier (``enrichment.depth``): stories with ``deep_min_publishers``
+        feed publishers, a priority above ``deep_min_priority``, or an alert that
+        already fired on this story."""
+        cfg = self.config.depth
+        if not cfg.enabled:
+            return False
+        if self._feed_publishers(session, story.id) >= cfg.deep_min_publishers:
+            return True
+        if cfg.deep_min_priority is not None and (story.priority or 0) > cfg.deep_min_priority:
+            return True
+        return bool(
+            cfg.deep_on_alert
+            and session.scalar(
+                select(func.count())
+                .select_from(AlertFiring)
+                .where(AlertFiring.lineage_id == story.id)
+            )
+        )
+
+    def _deep_budget_left(self) -> float:
+        """Requests the deep tier may still send today (inf when unbounded)."""
+        budget = self.config.depth.daily_request_budget
+        if budget is None:
+            return float("inf")
+        with self.session_factory() as session:
+            from app.ingest import usage_periods
+
+            day, _ = usage_periods(self.now())
+            row = session.get(SourceUsage, (DEEP_USAGE, day))
+            return budget - (row.requests if row else 0)
+
+    def _record_deep_requests(self, count: int) -> None:
+        """Add ``count`` requests to today's deep-tier usage (``enrich:deep``)."""
+        if count <= 0:
+            return
+        from app.ingest import usage_periods
+
+        with self.session_factory() as session:
+            day, _ = usage_periods(self.now())
+            row = session.get(SourceUsage, (DEEP_USAGE, day))
+            if row is None:
+                row = SourceUsage(source_id=DEEP_USAGE, period=day, requests=0)
+                session.add(row)
+            row.requests = (row.requests or 0) + count
+            session.commit()
 
     def publishers(self, session: Session, story_id: int) -> int:
         """Distinct publishers on the story: registrable domains, with editions of the
@@ -549,13 +641,20 @@ class Enricher:
         )
 
     async def enrich_story(
-        self, story_id: int, *, dry_run: bool = False, anchor_only: bool = False
+        self,
+        story_id: int,
+        *,
+        dry_run: bool = False,
+        anchor_only: bool = False,
+        force_deep: bool = False,
     ) -> StoryEnrichment:
         """``anchor_only`` (evaluate ``--backtest``): pretend the story only has its
-        anchor member, so a multi-publisher story exercises the whole pipeline."""
+        anchor member, so a multi-publisher story exercises the whole pipeline.
+        ``force_deep`` (evaluate ``--deep``): run the deep tier even when the story
+        would not be admitted on its own."""
         result = StoryEnrichment(story_id=story_id)
         try:
-            await self._enrich(result, dry_run, anchor_only=anchor_only)
+            await self._enrich(result, dry_run, anchor_only=anchor_only, force_deep=force_deep)
         except Exception as exc:
             logger.exception("enrichment of story %s failed", story_id)
             result.status, result.reason = "failed", f"{type(exc).__name__}: {exc}"[:500]
@@ -564,7 +663,12 @@ class Enricher:
         return result
 
     async def _enrich(
-        self, result: StoryEnrichment, dry_run: bool, *, anchor_only: bool = False
+        self,
+        result: StoryEnrichment,
+        dry_run: bool,
+        *,
+        anchor_only: bool = False,
+        force_deep: bool = False,
     ) -> None:
         cfg = self.config
         with self.session_factory() as session:
@@ -586,10 +690,16 @@ class Enricher:
             if not dry_run:
                 self._finish(result)
             return
+        with self.session_factory() as session:
+            result.tier = self._tier(session, result.story_id, force_deep=force_deep)
+        depth = cfg.depth
+        deep = result.tier == "deep" and depth.enabled
         headlines = [strip_boilerplate(h, cfg.strip_title_prefixes) for h in story.headlines]
-        need = max(0, min(cfg.max_added_sources, cfg.target_sources - result.publishers_before))
+        cap_added = depth.max_added_sources if deep else cfg.max_added_sources
+        target = depth.target_sources if deep else cfg.target_sources
+        need = max(0, min(cap_added, target - result.publishers_before))
         if dry_run:
-            need = need or cfg.max_added_sources
+            need = need or cap_added
         base, result.query_mode = await build_queries(
             headlines,
             mode=cfg.query_mode.value,
@@ -598,12 +708,22 @@ class Enricher:
         )
         llm = base if result.query_mode == "llm" else None
         plans = {
-            p.name: provider_queries(
-                p.name,
-                headlines,
-                llm=llm,
-                max_queries=cfg.max_queries_per_story,
-                strip_prefixes=cfg.strip_title_prefixes,
+            p.name: (
+                deep_queries(
+                    p.name,
+                    headlines,
+                    llm=llm,
+                    max_queries=depth.max_queries_per_story,
+                    strip_prefixes=cfg.strip_title_prefixes,
+                )
+                if deep and getattr(_provider_cls(p.name), "supports_pages", False)
+                else provider_queries(
+                    p.name,
+                    headlines,
+                    llm=llm,
+                    max_queries=cfg.max_queries_per_story,
+                    strip_prefixes=cfg.strip_title_prefixes,
+                )
             )
             for p in cfg.providers
         }
@@ -620,8 +740,22 @@ class Enricher:
         for provider in cfg.providers:
             if len(result.accepted) >= need:
                 break
-            fresh: list[Candidate] = []
             exclude = self._excluded(provider.name, story)
+            if deep and getattr(_provider_cls(provider.name), "supports_pages", False):
+                await self._deep_pass(
+                    provider,
+                    plans[provider.name],
+                    story,
+                    result,
+                    since,
+                    need,
+                    dry_run,
+                    seen,
+                    accepted_texts,
+                    exclude,
+                )
+                continue
+            fresh: list[Candidate] = []
             for query in plans[provider.name]:
                 outcome = await self._search(
                     provider, query, since, dry_run, result, exclude=exclude
@@ -670,6 +804,137 @@ class Enricher:
         if not dry_run:
             self._finish(result, anchor_id=anchor.id)
 
+    def _tier(self, session: Session, story_id: int, *, force_deep: bool = False) -> str:
+        """``deep`` for stories the depth config admits (feed publishers / priority /
+        fired alert) — or evaluate's ``--deep``; ``standard`` otherwise."""
+        if force_deep:
+            return "deep"
+        if not self.config.depth.enabled:
+            return "standard"
+        story = session.get(Story, story_id)
+        if story is None or not self._deep_admitted(session, story):
+            return "standard"
+        return "deep"
+
+    async def _deep_pass(
+        self,
+        provider,
+        queries: list[str],
+        story: StoryContext,
+        result: StoryEnrichment,
+        since: datetime,
+        need: int,
+        dry_run: bool,
+        seen: set[str],
+        accepted_texts: list,
+        exclude: list[str],
+    ) -> None:
+        """Deep-tier search loop (``enrichment.depth``): each query variant on pages
+        0..pages-1 (a page with no usable candidates stops it early, as does reaching
+        ``need``), then the strongest query once per configured ``location``, then one
+        ``include_domains`` query per missing ``ensure_groups`` group. Every request
+        counts against ``daily_request_budget``; when it runs out the story keeps what
+        it has (``deep_budget`` in ``searches``)."""
+        cfg = self.config.depth
+        seen_domains: set[str] = set()
+
+        def coverage() -> int:
+            return len(result.accepted) + len(result.untexted)
+
+        async def collect(query: str, **kw) -> int | None:
+            """One search + prescreen + judge on a fresh batch: its usable-candidate
+            count, or None when the provider failed (stops the whole deep pass)."""
+            if not dry_run and self._deep_budget_left() <= 0:
+                result.searches.append(
+                    {"provider": provider.name, "query": query, "stopped": "deep_budget"}
+                )
+                return 0  # budget is not a provider failure — stop quietly
+            outcome = await self._search(
+                provider, query, since, dry_run, result, exclude=exclude, **kw
+            )
+            result.deep_requests += outcome.requests
+            if not dry_run:
+                self._record_deep_requests(outcome.requests)
+            if outcome.kind == "query_rejected":
+                rebuilt = drop_short_terms(provider.name, query)
+                if rebuilt:
+                    outcome = await self._search(
+                        provider, rebuilt, since, dry_run, result, exclude=exclude, **kw
+                    )
+                    result.deep_requests += outcome.requests
+                    if not dry_run:
+                        self._record_deep_requests(outcome.requests)
+                if outcome.kind == "query_rejected":
+                    result.searches[-1]["skipped"] = QUERY_TOO_SHORT
+                    return 0
+            if not outcome.ok:
+                return None
+            result.answered = True
+            fresh = []
+            for hit in outcome.hits:
+                key = canonicalize_url(hit.url) if hit.url.startswith("http") else hit.url
+                domain = canonical_domain(hit.url, self.config.publisher_aliases)
+                if key in seen or domain in seen_domains or domain in story.domains:
+                    continue
+                seen.add(key)
+                seen_domains.add(domain)  # one candidate per publisher across all calls
+                fresh.append(Candidate(hit=hit, provider=provider.name, query=query))
+            usable = self._prescreen(fresh, story)
+            if usable:
+                await self._judge(fresh, story, need - coverage(), accepted_texts)
+            result.candidates += fresh
+            return usable
+
+        usable_by_query: dict[str, int] = {}
+        for query in queries:
+            for page in range(cfg.pages):
+                if coverage() >= need:
+                    break
+                got = await collect(query, page=page)
+                if got is None:
+                    return
+                usable_by_query[query] = usable_by_query.get(query, 0) + got
+                if not got:  # a page with no usable candidates ends this variant
+                    break
+            if coverage() >= need:
+                break
+        strong = max(
+            usable_by_query, key=usable_by_query.get, default=queries[0] if queries else ""
+        )
+        if strong and coverage() < need:
+            for location in cfg.locations:
+                got = await collect(strong, location=location)
+                if got is None:
+                    return
+                if coverage() >= need:
+                    break
+        if cfg.ensure_groups and cfg.max_group_queries and coverage() < need:
+            from app.outlets import outlets
+
+            registry = outlets()
+            covered = registry.groups_covered(
+                [
+                    registry.for_url(c.hit.url)
+                    for c in result.candidates
+                    if c.decision != "rejected"
+                ],
+                cfg.ensure_groups,
+            )
+            domains_by_group = registry.group_domains(cfg.ensure_groups)
+            for group in cfg.ensure_groups:
+                if group in covered or not domains_by_group.get(group):
+                    continue
+                if (
+                    coverage() >= need
+                    or sum(1 for s in result.searches if s.get("group")) >= cfg.max_group_queries
+                ):
+                    break
+                got = await collect(strong or queries[0], include=domains_by_group[group])
+                if got is None:
+                    return
+                if result.searches:
+                    result.searches[-1]["group"] = group
+
     def _primary_down(self, result: StoryEnrichment) -> str | None:
         """The first provider's error when it never answered for this story (auth, rate
         limit, cooldown, timeout, budget) while a fallback did; None otherwise."""
@@ -688,7 +953,7 @@ class Enricher:
         social hits are always rejected, so keeping them out of the results frees slots
         for real coverage. Fediverse hosts on arbitrary domains (``mastodon.`` /
         ``mstdn.`` substrings) cannot be enumerated and stay post-filtered."""
-        cls = PROVIDERS.get(provider)
+        cls = _provider_cls(provider)
         if cls is None or not cls.supports_exclude:
             return []
         return sorted({*story.domains, *SOCIAL, *self.config.social_domains})
@@ -701,6 +966,9 @@ class Enricher:
         dry_run: bool,
         result,
         exclude: list[str] | None = None,
+        page: int = 0,
+        location: str | None = None,
+        include: Sequence[str] = (),
     ):
         cfg = self.config
         outcome = await self.search.search(
@@ -712,11 +980,17 @@ class Enricher:
             empty_cache_minutes=cfg.empty_cache_minutes,
             store=not dry_run,
             exclude=exclude or (),
+            page=page,
+            location=location,
+            include=include,
         )
         result.searches.append(
             {
                 "provider": provider.name,
                 "query": query,
+                "page": page,
+                "location": location,
+                "include": list(include) or None,
                 "hits": len(outcome.hits),
                 "cached": outcome.cached,
                 "error": outcome.error,
@@ -815,15 +1089,19 @@ class Enricher:
                     "paywalled": "paywalled",
                     "skipped": "robots",
                 }.get(c.page.status, "fetch_failed")
-                if (
-                    cfg.link_only
-                    and c.page.status in ("failed", "blocked", "paywalled")  # never robots
-                    and (c.similarity or 0.0) >= cfg.min_snippet_strong
-                    and (c.shared_entities or 0) >= cfg.min_shared_entities
-                ):
-                    c.decision, c.reason = "link_only", reason
-                    c.flag = self._flag(c)
-                    continue
+                if c.page.status in ("failed", "blocked", "paywalled"):  # never robots
+                    if (
+                        cfg.link_only
+                        and (c.similarity or 0.0) >= cfg.min_snippet_strong
+                        and (c.shared_entities or 0) >= cfg.min_shared_entities
+                    ):
+                        c.decision, c.reason = "link_only", reason
+                        c.flag = self._flag(c)
+                        continue
+                    if self._headline_only(c, story):
+                        c.decision, c.reason = "headline_only", reason
+                        c.flag = self._flag(c)
+                        continue
                 c.reason = reason
                 continue
             verdict = text_check(
@@ -854,6 +1132,26 @@ class Enricher:
             story.domains.add(domain)
             need -= 1
 
+    def _headline_only(self, c: Candidate, story: StoryContext) -> bool:
+        """Headline-only member (``enrichment.headline_only_*``): the hit's title is
+        clearly the same event — inside the time window (the pre-filter's), at least
+        ``headline_only_title_similarity`` similar to the headlines and sharing
+        ``headline_only_min_entities`` of them — but its page cannot be fetched. Kept
+        for the coverage panel only: never summarized or cited."""
+        cfg = self.config
+        c.title_similarity = (
+            c.title_similarity
+            if c.title_similarity is not None
+            else round(similarity(c.hit.title, " ".join(story.headlines)), 4)
+        )
+        entities = shared_entities(c.hit.title, story)
+        if c.shared_entities is None or entities > c.shared_entities:
+            c.shared_entities = entities
+        return (
+            c.title_similarity >= cfg.headline_only_title_similarity
+            and entities >= cfg.headline_only_min_entities
+        )
+
     def _finish(self, result: StoryEnrichment, *, anchor_id: int | None = None) -> None:
         now = self.now()
         run_id = uuid.uuid4().hex
@@ -867,7 +1165,7 @@ class Enricher:
                 session.commit()
                 return
             accepted = result.accepted
-            link_only = result.link_only
+            untexted = result.untexted
             late = story.published_version is not None
             if (
                 accepted
@@ -878,10 +1176,10 @@ class Enricher:
                     c.decision, c.reason = "rejected", "late"
                 accepted = []
             regenerate = late and accepted and self._regen_allowed(session, now)
-            for c in accepted + link_only:
+            for c in accepted + untexted:
                 c.article_id = self._add_member(session, story, c, anchor_id, now)
             result.added = sum(1 for c in accepted if c.article_id is not None)
-            link_only_added = sum(1 for c in link_only if c.article_id is not None)
+            untexted_added = sum(1 for c in untexted if c.article_id is not None)
             for c in result.candidates:
                 session.add(
                     EnrichmentCandidate(
@@ -910,13 +1208,14 @@ class Enricher:
                     result.reason = f"{RECOVERED} after {story.enrich_attempts} failed attempt(s)"
                 result.status = "failed" if result.status == "failed" else "done"
                 story.enrich_status = result.status
+                story.enrich_depth = result.tier
                 story.enriched_at = now
                 story.enrich_passes = (story.enrich_passes or 0) + 1
                 story.enrich_attempts, story.enrich_next_attempt_at = 0, None
                 if result.added and late and not regenerate:
                     result.reason = "late_regen_deferred"  # kept for the next regeneration
                 story.enrich_reason = result.reason
-            if result.added or link_only_added:
+            if result.added or untexted_added:
                 from app.cluster.service import refresh_stories
 
                 story.enrich_added = (story.enrich_added or 0) + result.added
@@ -991,7 +1290,7 @@ class Enricher:
         if session.scalar(select(Article.id).where(Article.canonical_url == canonical)):
             c.decision, c.reason = "rejected", "already_ingested"
             return None
-        link_only = c.decision == "link_only"
+        untexted = c.decision in ("link_only", "headline_only")
         article = Article(
             source_id=web_source_id(url),
             url=url,
@@ -1007,11 +1306,12 @@ class Enricher:
                 "query": c.query,
                 "similarity": c.similarity,
                 "flag": c.flag,
+                "headline_only": untexted,
             },
-            text=None if link_only else (page.text if page else None),
-            text_status=TextStatus.NONE.value if link_only else TextStatus.OK.value,
+            text=None if untexted else (page.text if page else None),
+            text_status=TextStatus.NONE.value if untexted else TextStatus.OK.value,
             text_fetched_at=now,
-            word_count=None if link_only else (page.words if page else None),
+            word_count=None if untexted else (page.words if page else None),
             story_id=story.id,
             origin=ENRICHMENT,
             discovered_for_story_id=story.id,
@@ -1137,6 +1437,49 @@ class Enricher:
         flagged_domains = Counter(
             canonical_domain(url, self.config.publisher_aliases) for url, _ in flagged_rows
         )
+        # Deep tier (``enrichment.depth``): stories, the sources-per-story
+        # distribution, distinct outlets/countries, and today's request use.
+        deep_rows = session.execute(
+            select(Story.id, Article.url)
+            .join(Article, Article.story_id == Story.id)
+            .where(
+                Story.enrich_depth == "deep",
+                Story.enriched_at >= since,
+                Article.origin != CONTEXT,
+            )
+        ).all()
+        deep_total = session.scalar(
+            select(func.count())
+            .select_from(Story)
+            .where(Story.enrich_depth == "deep", Story.enriched_at >= since)
+        )
+        per_story: dict[int, set[str]] = {sid: set() for sid, _ in deep_rows}
+        deep_domains: set[str] = set()
+        for sid, url in deep_rows:
+            if not url:
+                continue
+            domain = canonical_domain(url, self.config.publisher_aliases)
+            per_story.setdefault(sid, set()).add(domain)
+            deep_domains.add(domain)
+        dist = {"0": 0, "1-3": 0, "4-7": 0, "8+": 0}
+        for sid in {sid for sid, _ in deep_rows} | set(per_story):
+            n = len(per_story.get(sid, ()))
+            dist["0" if n == 0 else "1-3" if n <= 3 else "4-7" if n <= 7 else "8+"] += 1
+        from app.ingest import usage_periods
+        from app.outlets import outlets
+
+        registry = outlets()
+        deep_countries = {c for d in deep_domains if (c := registry.for_domain(d).country)}
+        day, _ = usage_periods(self.now())
+        deep_used = session.get(SourceUsage, (DEEP_USAGE, day))
+        deep = {
+            "stories": deep_total or 0,
+            "distribution": dist,
+            "outlets": len(deep_domains),
+            "countries": len(deep_countries),
+            "requests_today": deep_used.requests if deep_used else 0,
+            "daily_budget": self.config.depth.daily_request_budget,
+        }
         waiting = (pending or 0) + (retry or 0)
         providers = []
         for row in budget_use(session, self.config.providers, self.now()):
@@ -1178,6 +1521,7 @@ class Enricher:
             "flagged_domains": flagged_domains.most_common(10),
             "blocked_domains": [d for (d,) in session.execute(select(BlockedDomain.domain)).all()],
             "providers": providers,
+            "deep": deep if (deep_total or 0) > 0 else None,
             "days": days,
         }
 
@@ -1189,7 +1533,7 @@ def summarize_run(results: list[StoryEnrichment]) -> dict:
         "stories": len(results),
         "enriched": sum(1 for r in results if r.added),
         "added": sum(r.added for r in results),
-        "link_only": sum(len(r.link_only) for r in results),
+        "link_only": sum(len(r.untexted) for r in results),
         "flagged": sum(1 for r in results for c in r.candidates if c.flag),
         "failed": sum(1 for r in results if r.status == "failed"),
         "retry": sum(1 for r in results if r.status == "retry"),

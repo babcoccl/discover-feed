@@ -87,12 +87,29 @@ class TinyFishProvider(SearchProvider):
     default_key_env = "TINYFISH_API_KEY"
     supports_exclude = True
     """``exclude_domains`` keeps the story's own publishers out of the results."""
+    supports_pages = True
+    """``page`` 0-10: the deep tier fetches page 1 for more outlets."""
+    supports_location = True
+    """``location`` (country code): the deep tier repeats its strongest query per
+    configured country for regional outlets."""
+    supports_include = True
+    """``include_domains``: ensure-groups queries restrict hits to a group's domains."""
 
     def optional_key(self) -> str:
         return os.environ.get(self.key_env or "", "").strip()
 
     async def search(
-        self, query, since, language, limit, quota: Quota, exclude=()
+        self,
+        query,
+        since,
+        language,
+        limit,
+        quota: Quota,
+        exclude=(),
+        *,
+        page: int = 0,
+        location: str | None = None,
+        include=(),
     ) -> list[SearchHit]:
         key = self.optional_key()
         params = {
@@ -105,6 +122,12 @@ class TinyFishProvider(SearchProvider):
             params["language"] = language
         if exclude:
             params["exclude_domains"] = ",".join(dict.fromkeys(exclude))
+        if include:
+            params["include_domains"] = ",".join(dict.fromkeys(include))
+        if page:
+            params["page"] = page
+        if location:
+            params["location"] = location
         headers = {"Accept": "application/json"}
         if key:
             headers["X-API-Key"] = key

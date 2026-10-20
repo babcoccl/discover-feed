@@ -73,6 +73,53 @@ fetched (failed, blocked or paywalled — never robots-disallowed) is stored as
 a member with `text_status = none`: the story page lists it as "also reported
 by (link only)"; it is never summarized, cited or counted in the sources.
 
+The same goes a step softer for unfetchable hits that pass the pre-filter and
+match the story closely by headline (`title similarity >=
+headline_only_title_similarity`, at least `headline_only_min_entities` shared
+names/numbers, inside the time window — the snippet is not needed): they are
+stored as members with `text_status = none` and `headline_only = true`, shown
+in the story's Coverage section under "N outlets reporting, K headline only",
+and never summarized or cited.
+
+## Deep coverage (`enrichment.depth`)
+
+Important stories get a deeper pass — more queries, result pages and
+per-country repeats — so they end up with many distinct outlets (8+ instead of
+0-3); niche stories keep the cheap standard behavior. A story is deep when its
+feed members span at least `deep_min_publishers` distinct publishers, its
+priority exceeds `deep_min_priority`, or an alert already fired on it
+(`deep_on_alert`); `enabled: false` disables the tier entirely. Every request
+counts against `daily_request_budget` in addition to each provider's own
+budget — when it runs out, searches record `stopped: deep_budget` and the
+story keeps what it found.
+
+A deep pass sends up to `max_queries_per_story` query variants (core entities;
+a paraphrase — the LLM's when `query_mode: llm`; key numbers; the main action
+phrase), each on result pages `0..pages-1` (a page with no usable candidates
+stops early, as does reaching `target_sources`). The strongest query is then
+repeated once per `locations` country code, and one `include_domains` query
+per missing `ensure_groups` group goes out (capped at `max_group_queries`).
+Candidates are deduplicated by canonical URL and publisher alias across all
+calls and follow the standard acceptance rules. `python -m
+app.enrich.evaluate --deep` forces every story onto the deep tier and prints
+the outlets-per-story distribution; the Pipeline panel shows the same numbers.
+Every key: [enrichment depth](../../configuration/reference.md#enrichment-depth).
+
+## Outlet registry
+
+`config/outlets.yaml` is a git-tracked starter list of widely known outlets —
+name, `domains`, `country` and `kind` (`wire` | `national` | `local` |
+`trade` | `international` | `state` | `blog`) — plus free-form `groups` tags
+that are yours to define (regions, beats, affiliations — the shipped list
+leaves `groups: []` and asserts no political bias or third-party ratings).
+Unknown domains fall back to a country guessed from the TLD where possible and
+`kind: unknown`. Point `DISCOVER_OUTLETS_PATH` at a different file to replace
+it. The registry labels story members: the Coverage section on the story page
+groups outlets by kind, API v1 `sources[]` carries `outlet` / `country` /
+`kind` / `groups` / `headline_only`, the summarizer picks its sources with a
+diversity rule (new kinds, then countries, then groups) before recency, and
+`enrichment.depth.ensure_groups` names groups from `groups` here.
+
 ## Configure
 
 ```yaml

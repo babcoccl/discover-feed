@@ -416,6 +416,40 @@ def provider_queries(
     return [q for q in dict.fromkeys(q for q in queries if q.strip())][:max_queries]
 
 
+def deep_queries(
+    provider: str,
+    headlines: list[str],
+    *,
+    llm: list[str] | None = None,
+    max_queries: int = 4,
+    strip_prefixes: list[str] | None = None,
+) -> list[str]:
+    """Query variants for the deep tier (``enrichment.depth``): up to ``max_queries``
+    differently-phrased searches — the core entities, a headline paraphrase (the LLM's
+    when ``query_mode`` is llm), the key numbers, and the main action phrase — so one
+    event is reached through several distinct query shapes instead of one strict one."""
+    headlines = [strip_boilerplate(h, strip_prefixes) for h in headlines]
+    terms = story_terms(headlines)
+    variants = [strict_query(provider, terms)]
+    paraphrase = (llm or [heuristic_query(headlines)])[0]
+    variants.append(adapt_query(provider, paraphrase))
+    numbers = _usable(provider, [t for t in terms if _NUMBER.match(t.text.split()[-1])])
+    if numbers:
+        anchor = next((t for t in terms if not _NUMBER.match(t.text.split()[-1])), None)
+        picked = ([anchor] if anchor else []) + numbers
+        variants.append(
+            _fit(
+                provider,
+                " ".join(t.query for t in picked[: STRICT_TERMS.get(provider, 6)]),
+                [t.query for t in picked],
+            )
+        )
+    action = heuristic_query(headlines)
+    variants.append(adapt_query(provider, action))
+    variants.append(loose_query(provider, terms))
+    return [q for q in dict.fromkeys(v for v in variants if v.strip())][:max_queries]
+
+
 def _llm_messages(headlines: list[str]) -> list[dict]:
     listed = "\n".join(f"- {h}" for h in headlines[:5])
     return [

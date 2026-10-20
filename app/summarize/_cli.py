@@ -125,11 +125,13 @@ def summarizer(env: Env, client=None):
     from app.summarize.service import Summarizer, summarizer_options
 
     o, st = env.options, env.settings
+    opts = summarizer_options(o)
+    if "summarize_max_articles_per_story" not in o.model_fields_set:
+        opts["max_articles"] = st.summarize_max_articles_per_story
     return Summarizer(
         client or env.client(),
-        max_articles=st.summarize_max_articles_per_story,
         max_words=st.summarize_max_words_per_article,
-        **summarizer_options(o),
+        **opts,
     )
 
 

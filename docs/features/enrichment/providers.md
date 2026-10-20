@@ -66,3 +66,4 @@ Every key: [search providers](../../configuration/reference.md#search-providers)
 | `429` / cooldown skips | Provider rate limit | Wait; `min_interval_seconds` higher, or a budget |
 | `query_too_short` | GDELT rejected a short keyword | By design; the rebuilt query also failed |
 | Provider error rows in Pipeline | Transient/network/auth | Exact error text is grouped per provider |
+| Deep stories stop early (`stopped: deep_budget` in `evaluate --deep`) | `enrichment.depth.daily_request_budget` spent | Raise it or wait for the next UTC day; it's the `enrich:deep` usage row |

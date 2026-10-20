@@ -2569,6 +2569,38 @@
       },
       "StorySourceV1": {
         "properties": {
+          "country": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ISO 3166-1 alpha-2 country of the outlet's home market (registry or TLD guess; null when unknown).",
+            "title": "Country"
+          },
+          "groups": {
+            "description": "User-defined outlet tags (the `groups` list in config/outlets.yaml).",
+            "items": {
+              "type": "string"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "headline_only": {
+            "default": false,
+            "description": "Stored without text: counted in coverage, never summarized or cited as evidence.",
+            "title": "Headline Only",
+            "type": "boolean"
+          },
+          "kind": {
+            "default": "unknown",
+            "description": "wire | international | national | local | trade | state | blog | unknown.",
+            "title": "Kind",
+            "type": "string"
+          },
           "name": {
             "description": "The source (outlet) name.",
             "title": "Name",
@@ -2582,6 +2614,12 @@
               "enrichment"
             ],
             "title": "Origin",
+            "type": "string"
+          },
+          "outlet": {
+            "default": "",
+            "description": "Outlet name from config/outlets.yaml (the source name or domain when not listed).",
+            "title": "Outlet",
             "type": "string"
           },
           "published_at": {

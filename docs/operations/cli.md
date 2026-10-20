@@ -13,7 +13,7 @@ app). Read-only tools are marked; the rest write state.
 | `python -m app.cluster --rebuild` | Re-cluster every article in the configured DB |
 | `python -m app.cluster.evaluate` | Precision/recall sweep on labelled fixtures — read-only; `--threshold`, `--window-hours`, `--min-shared-tokens`, `--same-source-threshold`, `--markdown` |
 | `python -m app.enrich.diagnose --auto\|--story-id N [--dry-run]` | One story's queries, raw responses, decisions; `--auto` without `--dry-run` adds pages |
-| `python -m app.enrich.evaluate` | Dry run over recent stories; `--stories`, `--story-ids`, `--provider`, `--wait`, `--backtest`, `--markdown` — read-only |
+| `python -m app.enrich.evaluate` | Dry run over recent stories; `--stories`, `--story-ids`, `--provider`, `--wait`, `--backtest`, `--markdown`, `--deep` (every story on the deep tier, prints the outlets-per-story distribution) — read-only |
 | `python -m app.context.diagnose --story-id N [--dry-run]` | One story's context queries + decisions — read-only |
 | `python -m app.context.evaluate` | Dry run over recent stories; `--stories`, `--markdown` — read-only |
 | `python -m app.summarize.diagnose --auto\|--story-id N` | Members, prompt, raw attempts, validation — read-only; `--kind`, `--dry-run`, `--full`, `--markdown` |

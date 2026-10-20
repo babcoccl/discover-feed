@@ -118,6 +118,20 @@
       {% if en.blocked_domains %}<p class="mt-2 text-xs text-slate-500 dark:text-slate-400" data-enrich-blocked>Blocked: {% for d in en.blocked_domains %}<code>{{ d }}</code>{% if not loop.last %}, {% endif %}{% endfor %}</p>{% endif %}
     </div>
   </div>
+  {% if en.deep %}
+  <div class="mt-4 border-t border-slate-100 pt-3 dark:border-slate-800" data-enrich-deep>
+    <h4 class="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Deep coverage</h4>
+    <p class="text-sm" data-enrich-deep-totals>{{ en.deep.stories }} deep stor{{ "y" if en.deep.stories == 1 else "ies" }} · {{ en.deep.outlets }} distinct outlet{{ "s" if en.deep.outlets != 1 }} · {{ en.deep.countries }} countr{{ "y" if en.deep.countries == 1 else "ies" }} · {{ en.deep.requests_today }}{% if en.deep.daily_budget %} of {{ en.deep.daily_budget }}{% endif %} requests today</p>
+    {% if en.deep.distribution %}
+    <div class="mt-2 flex flex-wrap items-end gap-3" data-enrich-deep-distribution>
+      {% for bucket, n in en.deep.distribution.items() %}
+      <div class="text-center"><div class="mx-auto w-8 rounded-t bg-sky-200 dark:bg-sky-800" style="height: {{ [4, (n * 36 / en.deep.stories) | round | int] | max }}px"></div><div class="text-xs font-medium tabular-nums">{{ n }}</div><div class="text-[0.65rem] text-slate-500 dark:text-slate-400">{{ bucket }}</div></div>
+      {% endfor %}
+    </div>
+    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Distinct outlets per deep story</p>
+    {% endif %}
+  </div>
+  {% endif %}
 </section>
 {% endif %}
 {% if context_stats %}

@@ -61,6 +61,29 @@
   </ol>
 </section>
 {% endif %}
+{% if story.coverage %}
+{% set coverage = story.coverage %}
+<section class="mb-6 max-w-3xl" aria-labelledby="coverage-heading" data-coverage>
+  <h2 id="coverage-heading" class="mb-1 text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Coverage</h2>
+  <p class="mb-2 text-xs text-slate-500 dark:text-slate-400" data-coverage-totals>{{ coverage.outlets }} outlet{{ "s" if coverage.outlets != 1 }} reporting{% if coverage.countries %} · {{ coverage.countries | join(", ") }}{% endif %}{% if coverage.headline_only %} · {{ coverage.headline_only }} headline only{% endif %}</p>
+  <div class="overflow-hidden rounded-xl border border-slate-200 bg-white text-sm dark:border-slate-800 dark:bg-slate-900">
+    {% for kind, kind_members in coverage.by_kind %}
+    <div class="border-b border-slate-100 p-3 last:border-0 dark:border-slate-800" data-coverage-kind="{{ kind }}">
+      <h3 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">{{ kind }}</h3>
+      <ul class="space-y-1">
+        {% for m in kind_members %}
+        <li class="flex flex-wrap items-baseline gap-x-1.5">
+          <span class="font-medium text-slate-700 dark:text-slate-300" data-outlet>{{ m.outlet or m.publisher or m.source }}</span>{% if m.country %}<span class="rounded bg-slate-100 px-1 py-0.5 text-[0.65rem] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400" data-country>{{ m.country }}</span>{% endif %}{% if m.found_by_search %}{{ web_badge() }}{% endif %}{% if m.headline_only %}<span class="inline-flex items-center rounded-full bg-slate-100 px-1.5 py-0.5 text-[0.7rem] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300" data-headline-only title="Stored without its text (the page could not be fetched): counted in coverage, never summarized or cited">headline only</span>{% endif %}{% if m.flag %}{{ flag_badge(m.flag) }}{% endif %}
+          <a href="{{ m.url }}" target="_blank" rel="noopener noreferrer" class="hover:underline">{{ m.title or m.url }} <span aria-hidden="true" class="text-xs text-sky-700 dark:text-sky-400">↗</span></a>
+          <time datetime="{{ m.published_at.isoformat() }}" class="text-xs text-slate-400" title="{{ m.published_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ m.published_at | reltime }}</time>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
 {%- set others = numbered_members | rejectattr("id", "in", cited_ids) | list -%}
 {% if others %}
 {% if numbered %}<h2 class="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">More coverage</h2>{% endif %}

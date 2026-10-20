@@ -97,6 +97,29 @@ profiles:
       #   rule_d_title: 0.55
       #   rule_d_entities: 3
       #   rule_d_text: 0.22
+      # Deep coverage tier: stories already covered by deep_min_publishers feed
+      # publishers (or above deep_min_priority, or with a fired alert) get extra
+      # queries/pages/locations so they end up with 8-15 distinct outlets; every
+      # request counts against depth.daily_request_budget. ensure_groups names
+      # groups from config/outlets.yaml — a missing group gets one
+      # include_domains query (TinyFish only). (docs: enrichment/overview.md)
+      # depth:
+      #   enabled: true
+      #   deep_min_publishers: 2
+      #   deep_min_priority: ~        # e.g. 0.8 to also admit high-priority stories
+      #   deep_on_alert: true
+      #   target_sources: 12          # distinct publishers a deep story searches up to
+      #   max_added_sources: 12
+      #   max_queries_per_story: 4
+      #   pages: 2                    # result pages per query (TinyFish page 0..1)
+      #   locations: [US, GB, AU, CA, IN]  # strongest query repeated per country code
+      #   daily_request_budget: 1500  # deep requests/day on top of provider budgets
+      #   ensure_groups: []           # e.g. [wire, state] — needs groups in outlets.yaml
+      #   max_group_queries: 3
+      # Unfetchable hits that closely match the headline become "headline only"
+      # coverage members (text_status none, never summarized or cited):
+      # headline_only_title_similarity: 0.50
+      # headline_only_min_entities: 2
     # Background-and-context links: 1-3 pages from OTHER sources that add history /
     # context / data / opposing views — related, never the same event. They are stored
     # with origin=context and shown in a separate "Background and context" section on

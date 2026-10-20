@@ -112,7 +112,18 @@ def poll(base: str, tl: Timeline, assert_published: bool) -> None:
                     tl.event(f"first story published: {item['title'][:60]}")
                 if "enriched" not in row or "context" not in row:
                     v1 = get(base, f"/api/v1/stories/{key}") or {}
-                    web = [s for s in v1.get("sources", []) if s.get("origin") == "enrichment"]
+                    sources = v1.get("sources", [])
+                    # Distinct outlets (canonical host) covering the story, feed +
+                    # enrichment: the deep-tier fan-out (pages, locations) must land
+                    # some story on 5+.
+                    hosts = {
+                        (s.get("url", "").split("/")[2] if "/" in s.get("url", "") else "")
+                        .split(":")[0]
+                        .removeprefix("www.")
+                        for s in sources
+                    }
+                    row["outlets"] = max(row.get("outlets", 0), len(hosts - {""}))
+                    web = [s for s in sources if s.get("origin") == "enrichment"]
                     if "enriched" not in row and web:
                         tl.mark(row, "enriched", len(web))
                         if any("tinywire" in json.dumps(s) for s in web):
@@ -144,18 +155,21 @@ def poll(base: str, tl: Timeline, assert_published: bool) -> None:
 def settled(tl: Timeline) -> bool:
     """At least 5 published stories with a final report, every shown card has a brief, and
     at least one story gained a web-search source from the fake TinyFish (the primary),
-    at least one story gained a background-and-context link from /context-search, and
-    both fakes served their failure modes and then answered (TinyFish failures fell back to
-    GDELT; GDELT failures were retried)."""
+    at least one story gained a background-and-context link from /context-search, at
+    least one story reached 5+ distinct outlets via the deep-tier fan-out (pages +
+    locations on the fake TinyFish), and both fakes served their failure modes and then
+    answered (TinyFish failures fell back to GDELT; GDELT failures were retried)."""
     rows = [r for r in tl.stories.values() if "clustered" in r]
     final = [r for r in rows if "report" in r]
     from_tinyfish = [r for r in rows if "tinyfish" in r]
     with_context = [r for r in rows if "context" in r]
+    deep = [r for r in rows if r.get("outlets", 0) >= 5]
     return (
         len(final) >= 5
         and all("brief" in r for r in rows)
         and bool(from_tinyfish)
         and bool(with_context)
+        and bool(deep)
         and faults_served(tl)
     )
 
@@ -174,6 +188,9 @@ def render(tl: Timeline) -> str:
         f"({sum(1 for r in tl.stories.values() if 'tinyfish' in r)} from the fake TinyFish)",
         f"stories with background/context links: "
         f"{sum(1 for r in tl.stories.values() if 'context' in r)}",
+        "outlets per story: "
+        + ", ".join(f"{r.get('outlets', 0)}" for r in tl.stories.values())
+        + f" (>=5: {sum(1 for r in tl.stories.values() if r.get('outlets', 0) >= 5)})",
         f"publish-gate violations: {len(tl.violations)}",
     ]
     lines += [f"  - {v}" for v in tl.violations[:20]]

@@ -373,6 +373,8 @@ class StoryItem:
     members: list[Article]
     """Oldest first."""
     representative: Article
+    depth: str | None = None
+    """The tier the last enrichment pass ran on (``deep`` | ``standard`` | None)."""
 
     @property
     def title(self) -> str:
@@ -421,7 +423,9 @@ class StoryPage:
     next_cursor: str | None
 
 
-def story_item(story_id: int | None, members: Sequence[Article]) -> StoryItem:
+def story_item(
+    story_id: int | None, members: Sequence[Article], *, depth: str | None = None
+) -> StoryItem:
     from app.cluster import representative
     from app.cluster.service import doc
 
@@ -432,6 +436,7 @@ def story_item(story_id: int | None, members: Sequence[Article]) -> StoryItem:
         story_id=story_id,
         members=ordered,
         representative=next(m for m in ordered if m.id == rep_id),
+        depth=depth,
     )
 
 
@@ -447,7 +452,12 @@ def get_story(session: Session, story_id: int, profile: ProfileRecord | None = N
         if not any(m.source_id in followed and m.origin != "enrichment" for m in members):
             return None
         members = [m for m in members if m.source_id in followed or m.origin == "enrichment"]
-    return story_item(story_id, members) if members else None
+    story = session.get(Story, story_id)
+    return (
+        story_item(story_id, members, depth=story.enrich_depth if story else None)
+        if members
+        else None
+    )
 
 
 def story_feed_page(

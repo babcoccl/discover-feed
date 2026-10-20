@@ -41,7 +41,17 @@ class GdeltProvider(SearchProvider):
     """GDELT DOC 2.0 ``artlist`` (free, no key; asks for one request per 5 seconds)."""
 
     async def search(
-        self, query, since, language, limit, quota: Quota, exclude=()
+        self,
+        query,
+        since,
+        language,
+        limit,
+        quota: Quota,
+        exclude=(),
+        *,
+        page: int = 0,
+        location: str | None = None,
+        include=(),
     ) -> list[SearchHit]:
         q = query
         if language and language in LANGUAGE_NAMES:
@@ -110,7 +120,17 @@ class SearxngProvider(SearchProvider):
     """A self-hosted SearXNG instance (``json`` must be listed in ``search.formats``)."""
 
     async def search(
-        self, query, since, language, limit, quota: Quota, exclude=()
+        self,
+        query,
+        since,
+        language,
+        limit,
+        quota: Quota,
+        exclude=(),
+        *,
+        page: int = 0,
+        location: str | None = None,
+        include=(),
     ) -> list[SearchHit]:
         hours = _hours_since(since)
         time_range = "day" if hours <= 24 else "week" if hours <= 24 * 7 else "month"
@@ -166,7 +186,17 @@ class GuardianSearchProvider(SearchProvider):
     needs_key = True
 
     async def search(
-        self, query, since, language, limit, quota: Quota, exclude=()
+        self,
+        query,
+        since,
+        language,
+        limit,
+        quota: Quota,
+        exclude=(),
+        *,
+        page: int = 0,
+        location: str | None = None,
+        include=(),
     ) -> list[SearchHit]:
         key = self.key()
         base = str(self.config.base_url or GUARDIAN_API).rstrip("/")
@@ -213,7 +243,17 @@ class NewsDataSearchProvider(SearchProvider):
     needs_key = True
 
     async def search(
-        self, query, since, language, limit, quota: Quota, exclude=()
+        self,
+        query,
+        since,
+        language,
+        limit,
+        quota: Quota,
+        exclude=(),
+        *,
+        page: int = 0,
+        location: str | None = None,
+        include=(),
     ) -> list[SearchHit]:
         key = self.key()
         base = str(self.config.base_url or NEWSDATA_API).rstrip("/")
@@ -259,7 +299,17 @@ class BraveProvider(SearchProvider):
     needs_key = True
 
     async def search(
-        self, query, since, language, limit, quota: Quota, exclude=()
+        self,
+        query,
+        since,
+        language,
+        limit,
+        quota: Quota,
+        exclude=(),
+        *,
+        page: int = 0,
+        location: str | None = None,
+        include=(),
     ) -> list[SearchHit]:
         key = self.key()
         hours = _hours_since(since)
