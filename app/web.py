@@ -23,7 +23,15 @@ from app.demo_images import demo_image
 from app.demo_pages import FIXTURE_DIR, page_html
 from app.images.cache import image_key, is_key
 from app.images.service import ImageWorker, image_stats
-from app.models import CONTEXT, ENRICHMENT, Article, ProfileRecord, StorySummary, Topic
+from app.models import (
+    CONTEXT,
+    ENRICHMENT,
+    Article,
+    ArticleDigest,
+    ProfileRecord,
+    StorySummary,
+    Topic,
+)
 from app.pipeline_panel import pipeline_queue, quality_metrics, recent_attempts
 from app.runs import last_runs, text_status_counts
 from app.secret_warnings import missing_secrets
@@ -346,10 +354,66 @@ def story_page(
             summary=story.brief,
             **_report_context(request, story),
             **_chat_context(request, session, story.story_id, p),
+            **_perspectives_context(request, session, story.story_id, profile),
             context_items=context_items,
             can_block=is_admin(request) and _enricher(request) is not None,
         )
     return TEMPLATES.TemplateResponse(request, "story.html", context)
+
+
+def _perspectives_context(
+    request: Request, session: Session, story_id: int, profile: ProfileRecord | None
+) -> dict:
+    """The "How outlets differ" section (latest stored synthesis) and per-source stance
+    badges for the Coverage panel. Read-only — generation happens in the summaries worker."""
+    worker = getattr(request.app.state, "summaries", None)
+    service = getattr(worker, "perspectives", None) if worker is not None else None
+    row = session.scalar(
+        select(StorySummary)
+        .where(
+            StorySummary.story_id == story_id,
+            StorySummary.kind == "perspectives",
+            StorySummary.status == "ok",
+        )
+        .order_by(StorySummary.id.desc())
+        .limit(1)
+    )
+    content = (row.content_json or {}) if row is not None else {}
+    content = content if any(content.get(k) for k in content) else None
+    # citation [n] -> source chip label
+    chips: dict[int, dict] = {}
+    if row is not None and row.article_ids:
+        names = repo.source_names(session)
+        for n, article_id in enumerate(row.article_ids, 1):
+            article = session.get(Article, article_id)
+            if article is None:
+                continue
+            name = names.get(article.source_id, article.source_id)
+            chips[n] = {"name": name, "url": article.url, "article_id": article_id}
+    stances: dict[int, dict] = {}
+    for digest in session.scalars(
+        select(ArticleDigest)
+        .where(ArticleDigest.story_id == story_id, ArticleDigest.status == "ok")
+        .order_by(ArticleDigest.id)
+    ):
+        stances[digest.article_id] = {
+            "stance": (digest.digest_json or {}).get("stance"),
+            "kind": (digest.digest_json or {}).get("kind"),
+        }
+    if service is not None:
+        on = (
+            service.profile_enabled(profile)
+            if profile is not None
+            else bool(service.enabled_profiles(session))
+        )
+    else:
+        on = profile is None or bool(profile.perspectives_enabled)
+    return {
+        "perspectives": content if on else None,
+        "perspectives_chips": chips,
+        "stances": stances if on else {},
+        "perspectives_on": on,
+    }
 
 
 def _chat_context(request: Request, session: Session, story_id: int, slug: str | None) -> dict:
@@ -502,9 +566,12 @@ def _pipeline_context(request: Request, session: Session) -> dict:
     finder = _context_finder(request)
     profile_slug = request.path_params.get("slug")
     record = session.scalar(select(ProfileRecord).where(ProfileRecord.slug == profile_slug))
+    service = getattr(worker, "perspectives", None) if worker is not None else None
     return {
         "enrich_on": bool(enricher and record and enricher.profile_enabled(record)),
         "context_on": bool(finder and record and finder.profile_enabled(record)),
+        "perspectives_on": bool(service and record and service.profile_enabled(record)),
+        "perspectives_available": service is not None,
         "text_counts": text_status_counts(session),
         "runs": last_runs(session),
         "summarizer": worker.status() if worker is not None else None,
@@ -780,6 +847,17 @@ async def settings_context(request: Request, slug: str) -> Response:
     with _session(request) as session:
         profile = _profile_or_404(session, slug)
         profile.context_enabled = form.get("enabled") in ("1", "on", "true")
+        session.commit()
+    return _pipeline_response(request, slug)
+
+
+@router.post("/p/{slug}/settings/perspectives")
+async def settings_perspectives(request: Request, slug: str) -> Response:
+    """The per-profile "how outlets differ" toggle (overrides the YAML default)."""
+    form = await request.form()
+    with _session(request) as session:
+        profile = _profile_or_404(session, slug)
+        profile.perspectives_enabled = form.get("enabled") in ("1", "on", "true")
         session.commit()
     return _pipeline_response(request, slug)
 

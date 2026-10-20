@@ -717,10 +717,11 @@
           },
           "kind": {
             "default": "article",
-            "description": "`opinion` when the page is an opinion/column piece (at most `context.max_opinion` per story); `article` otherwise.",
+            "description": "`opinion` when the page is an opinion/column piece (at most `context.max_opinion` per story); `fact_check` when the counter-narrative angle found a fact-check page; `article` otherwise.",
             "enum": [
               "article",
-              "opinion"
+              "opinion",
+              "fact_check"
             ],
             "title": "Kind",
             "type": "string"
@@ -2633,6 +2634,18 @@
             "title": "Publisher",
             "type": "string"
           },
+          "stance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "This article's stance toward the story's central claim — supports | disputes | adds | neutral | unclear — from the per-source digest (null until perspectives has run).",
+            "title": "Stance"
+          },
           "title": {
             "title": "Title",
             "type": "string"
@@ -2703,6 +2716,18 @@
             "id": 42,
             "last_updated_at": "2026-10-12T08:30:00Z",
             "model": "qwen3.5-9b",
+            "perspectives": {
+              "agreement": [
+                {
+                  "citations": [
+                    1
+                  ],
+                  "text": "Both outlets report the accelerator ships in March."
+                }
+              ],
+              "different_angles": [],
+              "disagreements": []
+            },
             "published_at": "2026-10-12T08:30:00Z",
             "report_reason": "published before its report",
             "report_state": "pending",
@@ -2783,6 +2808,19 @@
           "model": {
             "title": "Model",
             "type": "string"
+          },
+          "perspectives": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The 'how outlets differ' synthesis ({agreement, disagreements, different_angles}) after the perspectives pass ran with enough sources; null otherwise. Citations are indexes into `sources`.",
+            "title": "Perspectives"
           },
           "published_at": {
             "anyOf": [

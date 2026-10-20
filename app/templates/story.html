@@ -22,6 +22,7 @@
 {%- macro web_badge() -%}<span class="ml-1 inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[0.7rem] font-medium text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" data-web-search title="Not one of your sources: found via web search to add independent coverage">found via web search</span>{%- endmacro -%}
 {%- macro flag_badge(flag) -%}<span class="ml-1 inline-flex items-center rounded-full border border-amber-300 px-1.5 py-0.5 text-[0.7rem] font-medium text-amber-700 dark:border-amber-700 dark:text-amber-400" data-quality-flag title="Source quality uncertain: the domain was flagged by a content-farm heuristic ({{ flag }}). Kept because it passed every relevance check — block the domain below if it is a confirmed farm.">source quality uncertain</span>{%- endmacro -%}
 {%- macro block_button(article_id, target) -%}{% if can_block %}<button type="button" hx-post="/story/{{ story.story_id }}/members/{{ article_id }}/block-domain" hx-target="{{ target }}" hx-swap="outerHTML" hx-confirm="Block this domain? Every member it added via web search is removed from all stories and it is never accepted again." class="ml-1.5 text-[0.7rem] font-normal text-slate-400 underline decoration-dotted hover:text-rose-600 dark:hover:text-rose-400" data-block-domain title="Deny-list this domain and remove its web-search coverage">block domain</button>{% endif %}{%- endmacro -%}
+{%- macro stance_badge(digest) -%}{% if digest and digest.stance and digest.stance != "unclear" %}{% set cls = {"supports": "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300", "disputes": "bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300", "adds": "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300", "neutral": "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"}.get(digest.stance, "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300") %}<span class="ml-1 inline-flex items-center rounded-full px-1.5 py-0.5 text-[0.7rem] font-medium {{ cls }}" data-stance="{{ digest.stance }}" title="This outlet's stance toward the story's central claim{% if digest.kind %} · {{ digest.kind }}{% endif %}">{{ digest.stance }}</span>{% endif %}{%- endmacro -%}
 <a href="{{ back }}" class="mb-4 inline-flex items-center gap-1 text-sm font-medium text-sky-700 hover:underline dark:text-sky-400"><span aria-hidden="true">←</span> Back to feed</a>
 <h1 class="mb-1 max-w-3xl text-2xl font-bold leading-tight tracking-tight">{{ story.title }}</h1>
 <p class="mb-4 text-sm text-slate-500 dark:text-slate-400">
@@ -73,7 +74,7 @@
       <ul class="space-y-1">
         {% for m in kind_members %}
         <li class="flex flex-wrap items-baseline gap-x-1.5">
-          <span class="font-medium text-slate-700 dark:text-slate-300" data-outlet>{{ m.outlet or m.publisher or m.source }}</span>{% if m.country %}<span class="rounded bg-slate-100 px-1 py-0.5 text-[0.65rem] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400" data-country>{{ m.country }}</span>{% endif %}{% if m.found_by_search %}{{ web_badge() }}{% endif %}{% if m.headline_only %}<span class="inline-flex items-center rounded-full bg-slate-100 px-1.5 py-0.5 text-[0.7rem] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300" data-headline-only title="Stored without its text (the page could not be fetched): counted in coverage, never summarized or cited">headline only</span>{% endif %}{% if m.flag %}{{ flag_badge(m.flag) }}{% endif %}
+          <span class="font-medium text-slate-700 dark:text-slate-300" data-outlet>{{ m.outlet or m.publisher or m.source }}</span>{% if m.country %}<span class="rounded bg-slate-100 px-1 py-0.5 text-[0.65rem] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400" data-country>{{ m.country }}</span>{% endif %}{% if m.found_by_search %}{{ web_badge() }}{% endif %}{% if m.headline_only %}<span class="inline-flex items-center rounded-full bg-slate-100 px-1.5 py-0.5 text-[0.7rem] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300" data-headline-only title="Stored without its text (the page could not be fetched): counted in coverage, never summarized or cited">headline only</span>{% endif %}{% if m.flag %}{{ flag_badge(m.flag) }}{% endif %}{{ stance_badge(stances.get(m.id)) }}
           <a href="{{ m.url }}" target="_blank" rel="noopener noreferrer" class="hover:underline">{{ m.title or m.url }} <span aria-hidden="true" class="text-xs text-sky-700 dark:text-sky-400">↗</span></a>
           <time datetime="{{ m.published_at.isoformat() }}" class="text-xs text-slate-400" title="{{ m.published_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ m.published_at | reltime }}</time>
         </li>
@@ -112,6 +113,47 @@
   (link only: the page could not be fetched, so it is not counted or summarized)
 </p>
 {% endif %}
+{% if perspectives %}
+<section class="mt-6 max-w-3xl" aria-labelledby="perspectives-heading" data-perspectives>
+  <details class="rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900" open>
+    <summary class="cursor-pointer p-4 text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">How outlets differ</summary>
+    <div class="border-t border-slate-100 px-4 pb-4 pt-2 text-sm dark:border-slate-800">
+      {% if perspectives.agreement %}
+      <h3 class="mb-1 mt-2 text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Where they agree</h3>
+      <ul class="mb-3 list-disc space-y-1 pl-5">
+        {% for a in perspectives.agreement %}
+        <li>{{ a.text }}{% for c in a.citations %}{% if perspectives_chips.get(c) %} <a href="{{ perspectives_chips[c].url }}" target="_blank" rel="noopener noreferrer" class="rounded bg-slate-100 px-1 py-0.5 text-[0.7rem] font-medium text-slate-600 hover:underline dark:bg-slate-800 dark:text-slate-300">{{ perspectives_chips[c].name }}</a>{% endif %}{% endfor %}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+      {% if perspectives.disagreements %}
+      <h3 class="mb-1 mt-2 text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Where they disagree</h3>
+      {% for d in perspectives.disagreements %}
+      <div class="mb-3 rounded-lg border border-slate-100 p-3 dark:border-slate-800" data-disagreement>
+        <p class="mb-2 font-medium">{{ d.topic }}</p>
+        {% for p in d.positions %}
+        <div class="mb-2 border-l-2 border-slate-200 pl-3 last:mb-0 dark:border-slate-700" data-position>
+          <p class="font-medium">{{ p.label }}</p>
+          <p class="text-slate-600 dark:text-slate-400">{{ p.summary }}</p>
+          <blockquote class="mt-1 text-xs italic text-slate-500 dark:text-slate-400">&ldquo;{{ p.quote }}&rdquo;</blockquote>
+          <p class="mt-1">{% for c in p.citations %}{% if perspectives_chips.get(c) %}<a href="{{ perspectives_chips[c].url }}" target="_blank" rel="noopener noreferrer" class="rounded bg-slate-100 px-1.5 py-0.5 text-[0.7rem] font-medium text-slate-600 hover:underline dark:bg-slate-800 dark:text-slate-300" data-source-chip>{{ perspectives_chips[c].name }}</a> {% endif %}{% endfor %}</p>
+        </div>
+        {% endfor %}
+      </div>
+      {% endfor %}
+      {% endif %}
+      {% if perspectives.different_angles %}
+      <h3 class="mb-1 mt-2 text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Different angles</h3>
+      <ul class="list-disc space-y-1 pl-5">
+        {% for a in perspectives.different_angles %}
+        <li>{{ a.text }}{% for c in a.citations %}{% if perspectives_chips.get(c) %} <a href="{{ perspectives_chips[c].url }}" target="_blank" rel="noopener noreferrer" class="rounded bg-slate-100 px-1 py-0.5 text-[0.7rem] font-medium text-slate-600 hover:underline dark:bg-slate-800 dark:text-slate-300">{{ perspectives_chips[c].name }}</a>{% endif %}{% endfor %}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </div>
+  </details>
+</section>
+{% endif %}
 {% if context_items %}
 <section class="mt-6 max-w-3xl" aria-labelledby="context-heading" data-context-links>
   <h2 id="context-heading" class="mb-1 text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Background and context</h2>
@@ -122,6 +164,7 @@
       <div class="mb-1 flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
         <span class="font-medium text-slate-700 dark:text-slate-300" data-publisher>{{ c.source_id | replace("web:", "") }}</span>
         {% if c.context_kind == "opinion" %}<span class="inline-flex items-center rounded-full border border-violet-300 px-1.5 py-0.5 text-[0.7rem] font-medium text-violet-700 dark:border-violet-700 dark:text-violet-300" data-context-opinion title="An opinion/column piece, not reported news — background takes precedence">opinion</span>{% endif %}
+        {% if c.context_kind == "fact_check" %}<span class="inline-flex items-center rounded-full border border-emerald-300 px-1.5 py-0.5 text-[0.7rem] font-medium text-emerald-700 dark:border-emerald-700 dark:text-emerald-300" data-context-fact-check title="A fact-check page found via the counter-narrative search">fact-check</span>{% endif %}
         {% if c.context_angle %}<span aria-hidden="true">·</span><span class="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500 dark:bg-slate-800 dark:text-slate-400">{{ c.context_angle }}</span>{% endif %}
         <span aria-hidden="true">·</span>
         <time datetime="{{ c.published_at.isoformat() }}" title="{{ c.published_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ c.published_at | reltime }}</time>

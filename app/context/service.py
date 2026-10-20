@@ -22,6 +22,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import ContextConfig, EnrichmentConfig, LLMRole
+from app.context.angles import FACT_CHECK_LABEL
 from app.enrich.domains import canonical_domain
 from app.enrich.filters import StoryContext
 from app.enrich.query import story_terms
@@ -481,6 +482,15 @@ class ContextFinder:
             llm_role=self.llm_role,
             llm_transport=self.llm_transport,
         )
+        with self.session_factory() as session:
+            depth = (
+                session.get(Story, result.story_id) is not None
+                and session.get(Story, result.story_id).enrich_depth == "deep"
+            )
+        if depth:
+            from app.context.angles import stance_angles
+
+            result.angles += stance_angles(terms)
         if not result.angles:
             result.status, result.reason = "done", "no_angles"
             return
@@ -899,7 +909,13 @@ class ContextFinder:
             anchor_article_id=anchor_id,
             context_note=c.note or None,
             context_angle=c.angle or None,
-            context_kind="opinion" if c.is_opinion else "article",
+            context_kind=(
+                "opinion"
+                if c.is_opinion
+                else "fact_check"
+                if c.angle == FACT_CHECK_LABEL
+                else "article"
+            ),
         )
         session.add(article)
         session.flush()

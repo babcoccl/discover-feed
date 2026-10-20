@@ -304,6 +304,21 @@ block.
 | `entities_min` | `3` | Title shares this many story entities AND an event word → `same_event` |
 | `event_terms` | verbs/nouns list | Event words (`announce`, `launch`, `acquire`, `breach`, `verdict`, …; full list `DEFAULT_EVENT_TERMS` in `app/context/rules.py`) |
 
+## Perspectives
+
+Per profile (`perspectives:`) — the "how outlets differ" digests and synthesis
+([feature page](../features/perspectives.md)). A story can also opt out per
+profile from the pipeline settings page.
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `enabled` | `false` |  |
+| `min_sources` | `4` | Synthesize only with at least this many member digests |
+| `max_per_hour` | `6` | Perspectives syntheses per hour (rate limit like late regenerations) |
+| `max_articles` | `12` | At most this many members are digested per story |
+| `digest_max_words` | `1400` | Article words sent to the digest prompt |
+| `max_age_hours` | `168` | Stories eligible while published within this |
+
 ## Images
 
 Top-level `images:` block:

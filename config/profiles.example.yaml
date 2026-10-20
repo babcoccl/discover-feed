@@ -178,6 +178,19 @@ profiles:
       #   event_terms: [announce, unveil, launch, acquire, ...]  # full default list in
       #                            # app/context/rules.py DEFAULT_EVENT_TERMS
       # language: en               # hit language must match when the provider reports it
+    # Perspectives ("how outlets differ"): per-source digests (claims with verbatim
+    # quotes, stance, kind, framing) then one agreement/disagreements/angles
+    # synthesis per story version — grounded strictly in the sources' own text, no
+    # truth ratings and no outlet political labels. Runs after the brief publishes,
+    # never blocks briefs, rate limited. Uses llm.perspectives (unset: summarizer).
+    # (docs/features/perspectives.md)
+    perspectives:
+      enabled: false             # Settings > Pipeline toggles it per profile too
+      # min_sources: 4           # synthesize only with at least this many digests
+      # max_per_hour: 6          # syntheses per hour
+      # max_articles: 12         # at most this many members digested per story
+      # digest_max_words: 1400   # article words sent to the digest prompt
+      # max_age_hours: 168       # stories eligible while published within this
     # Topics become feed tabs. Keywords are whole-word and case-insensitive; an empty
     # include list means "every article from the topic's sources".
     topics:

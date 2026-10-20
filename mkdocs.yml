@@ -68,6 +68,7 @@ nav:
       - Text extraction: features/text-extraction.md
       - Clustering and tuning: features/clustering.md
       - Briefs and reports: features/summaries.md
+      - How outlets differ: features/perspectives.md
       - Story Q&A: features/qa.md
       - Alerts and notifications: features/alerts.md
       - Card images: features/images.md

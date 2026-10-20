@@ -77,6 +77,11 @@ class LLMConfig(_Model):
     chat: LLMRole | None = Field(
         default=None, description="Story Q&A (POST /api/v1/stories/{id}/ask); unset: no chat."
     )
+    perspectives: LLMRole | None = Field(
+        default=None,
+        description="Role for the per-source digests and the 'how outlets differ' "
+        "synthesis; unset: the summarizer role.",
+    )
 
 
 class CardStyle(StrEnum):
@@ -897,6 +902,36 @@ class ContextConfig(_Model):
         return self
 
 
+class PerspectivesConfig(_Model):
+    """'How outlets differ' (``app.perspectives``): a per-source digest (claims with
+    verbatim quotes, stance, kind, framing) per member article, then one synthesis of
+    where the sources agree, disagree and differ in framing. Runs after the brief is
+    published, never blocks briefs, once per story version."""
+
+    enabled: bool = False
+    min_sources: int = Field(
+        default=4,
+        ge=1,
+        description="Synthesis only runs when at least this many member digests exist.",
+    )
+    max_per_hour: int = Field(
+        default=6,
+        ge=1,
+        description="Perspectives syntheses per hour (rate limit like late regenerations).",
+    )
+    max_articles: int = Field(
+        default=12, ge=1, description="At most this many members are digested per story."
+    )
+    digest_max_words: int = Field(
+        default=1400,
+        ge=200,
+        description="Words of the article's text sent to the digest prompt.",
+    )
+    max_age_hours: float = Field(
+        default=168, gt=0, description="Published stories are eligible for this long."
+    )
+
+
 class TopicConfig(_Model):
     """A feed tab: articles matching any `include` keyword and no `exclude` keyword."""
 
@@ -924,6 +959,7 @@ class Profile(_Model):
     summaries: SummariesConfig = Field(default_factory=SummariesConfig)
     enrichment: EnrichmentConfig = Field(default_factory=EnrichmentConfig)
     context: ContextConfig = Field(default_factory=ContextConfig)
+    perspectives: PerspectivesConfig = Field(default_factory=PerspectivesConfig)
 
     @model_validator(mode="after")
     def _check_references(self) -> "Profile":

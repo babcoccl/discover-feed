@@ -9,6 +9,7 @@ import logging
 import threading
 from collections.abc import Callable, Iterable
 from datetime import datetime, timedelta
+from typing import TYPE_CHECKING
 
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.orm import sessionmaker
@@ -28,10 +29,15 @@ from app.models import (
 )
 from app.publish import Policy, assess, sync_story
 from app.summarize.service import FOLLOWUPS, KINDS, Kind, Summarizer, SummaryOutcome
+
+if TYPE_CHECKING:
+    from app.perspectives.service import PerspectiveService
 from app.worker_status import SummarizeRunResult, WorkerState, WorkerStatus
 
 logger = logging.getLogger(__name__)
 
+PERSPECTIVES = "perspectives"
+"""``summary_jobs``/``story_summaries`` kind for the perspectives pass (``app.perspectives``)."""
 MAX_RETRY_MINUTES = 6 * 60
 REPORT_RETRY_LIMIT = 3
 """Endpoint failures (timeouts, HTTP errors) a report retries before it is final ``failed``."""
@@ -60,6 +66,7 @@ class SummaryWorker:
         backfill_hours: float = 24,
         backfill_max: int = 40,
         followups: bool = False,
+        perspectives: "PerspectiveService | None" = None,
         clock: Callable[[], datetime] = utcnow,
     ) -> None:
         self.session_factory = session_factory
@@ -74,6 +81,9 @@ class SummaryWorker:
         self.backfill_max = backfill_max
         self.followups = followups
         """Generate suggested questions for published stories when nothing else waits."""
+        self.perspectives = perspectives
+        """Digests + "how outlets differ" synthesis after publish, when nothing waits
+        (``app.perspectives``); never delays a brief or report."""
         self.clock = clock
         self.state = WorkerState()
         self._lock = threading.Lock()
@@ -275,6 +285,8 @@ class SummaryWorker:
                         budget -= 1
             if self.followups and story_id is None:
                 result.outcomes.extend(await self._followups_pass(manual))
+            if self.perspectives is not None and story_id is None:
+                result.outcomes.extend(await self._perspectives_pass(manual))
             for outcome in result.outcomes:
                 result.processed += 1
                 key = outcome.status
@@ -459,6 +471,56 @@ class SummaryWorker:
                 await self._summarize(sid, FOLLOWUPS, False, job.attempts if job else 0)
             )
         return outcomes
+
+    async def _perspectives_pass(self, manual: bool, limit: int = 5) -> list["SummaryOutcome"]:
+        """Digests + synthesis for published stories, only while nothing waits — stops the
+        moment a brief or report needs work. Endpoint failures back off via ``summary_jobs``
+        (like reports); validation failures are persisted and count as done for that
+        version."""
+        outcomes: list[SummaryOutcome] = []
+        assert self.perspectives is not None
+        with self.session_factory() as session:
+            ids = self.perspectives.candidates(session, limit)
+        for sid in ids:
+            with self.session_factory() as session:
+                if self.candidates(session, manual=manual):
+                    break
+            if self._paused(self.clock(), manual):
+                break
+            await INFLIGHT.wait_for_chat()
+            outcomes.append(await self._perspective(sid))
+        return outcomes
+
+    async def _perspective(self, story_id: int) -> "SummaryOutcome":
+        kind = PERSPECTIVES
+        try:
+            outcome = await self.perspectives.run_story(story_id=story_id)
+        except Exception as exc:  # endpoint failure: retry with backoff, like a report
+            with self.session_factory() as session:
+                job = session.get(SummaryJob, (story_id, kind))
+                if job is None:
+                    job = SummaryJob(story_id=story_id, kind=kind)
+                    session.add(job)
+                job.attempts += 1
+                job.next_attempt_at = self.clock() + timedelta(minutes=min(2**job.attempts, 60))
+                job.last_error = str(exc)
+                session.commit()
+            return SummaryOutcome(story_id=story_id, kind=kind, status="failed", reason=str(exc))
+        with self.session_factory() as session:
+            job = session.get(SummaryJob, (story_id, kind))
+            if job is not None:
+                session.delete(job)
+                session.commit()
+        return SummaryOutcome(
+            story_id=story_id,
+            kind=kind,
+            status={
+                "generated": "ok",
+                "cached": "cached",
+                "skipped": "skipped",
+            }.get(outcome.status, "failed"),
+            reason=outcome.reason,
+        )
 
     def report_job_kind(self, story_id: int, kind: str) -> SummaryJob | None:
         with self.session_factory() as session:

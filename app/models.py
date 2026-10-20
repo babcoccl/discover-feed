@@ -485,6 +485,9 @@ class ProfileRecord(Base):
     """Settings toggle for web-search enrichment (NULL: the YAML ``enrichment.enabled``)."""
     context_enabled: Mapped[bool | None] = mapped_column(Boolean)
     """Settings toggle for background/context links (NULL: the YAML ``context.enabled``)."""
+    perspectives_enabled: Mapped[bool | None] = mapped_column(Boolean)
+    """Settings toggle for the "how outlets differ" digests/synthesis (NULL: the YAML
+    ``perspectives.enabled``)."""
 
 
 class Topic(Base):
@@ -517,6 +520,8 @@ class SummaryKind(StrEnum):
     """Lead sentence + three cited bullets (feed cards)."""
     REPORT = "report"
     """Multi-paragraph cited report (story page)."""
+    PERSPECTIVES = "perspectives"
+    """How outlets differ on the story (``app.perspectives``)."""
 
 
 class StorySummary(Base):
@@ -530,7 +535,7 @@ class StorySummary(Base):
     """Set to NULL when the story is deleted (rebuild); rows stay reusable by ``input_hash``."""
     version: Mapped[int] = mapped_column(Integer, default=1)
     kind: Mapped[str] = mapped_column(
-        String(10), default="brief", server_default="brief", index=True
+        String(16), default="brief", server_default="brief", index=True
     )
     text: Mapped[str] = mapped_column(Text, default="")
     """Plain text: the brief's lead + bullets, the report's paragraphs, or the fallback text."""
@@ -553,13 +558,36 @@ class StorySummary(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
 
 
+class ArticleDigest(Base):
+    """A member article's per-source digest for the perspectives synthesis
+    (``app.perspectives``): claims with verbatim quotes, stance toward the story's
+    central claim, article kind and framing. Cached by ``input_hash`` — the article's
+    content + the claim + prompt/model — so digests are reused across re-runs."""
+
+    __tablename__ = "article_digests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    article_id: Mapped[int] = mapped_column(Integer, index=True)
+    story_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    input_hash: Mapped[str] = mapped_column(String(64), index=True)
+    digest_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(10), index=True, default="ok")
+    """``ok`` | ``invalid`` (dropped after retries)."""
+    reason: Mapped[str | None] = mapped_column(Text)
+    basis: Mapped[str] = mapped_column(String(20), default="full_text")
+    """``full_text`` | ``feed_summary`` | ``title`` (headline-only members)."""
+    model: Mapped[str] = mapped_column(String(200), default="")
+    prompt_version: Mapped[str] = mapped_column(String(40), default="")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
+
+
 class SummaryJob(Base):
     """A story's brief or report waiting to be (re-)generated."""
 
     __tablename__ = "summary_jobs"
 
     story_id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    kind: Mapped[str] = mapped_column(String(10), primary_key=True, default="brief")
+    kind: Mapped[str] = mapped_column(String(16), primary_key=True, default="brief")
     queued_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     force: Mapped[bool] = mapped_column(Boolean, default=False)
     attempts: Mapped[int] = mapped_column(Integer, default=0)

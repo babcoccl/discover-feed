@@ -145,6 +145,12 @@
         <input type="hidden" name="enabled" value="0">
         <label class="flex items-center gap-2"><input type="checkbox" name="enabled" value="1" data-context-toggle {% if context_on %}checked{% endif %} class="rounded border-slate-300"> Find background/context pages for this profile's published stories</label>
       </form>
+      {% if perspectives_available %}
+      <form hx-post="/p/{{ profile.slug }}/settings/perspectives" hx-target="#pipeline" hx-trigger="change" class="flex items-center gap-2 text-sm">
+        <input type="hidden" name="enabled" value="0">
+        <label class="flex items-center gap-2"><input type="checkbox" name="enabled" value="1" data-perspectives-toggle {% if perspectives_on %}checked{% endif %} class="rounded border-slate-300"> Show "how outlets differ" on this profile's stories</label>
+      </form>
+      {% endif %}
       <button type="button" hx-post="/p/{{ profile.slug }}/settings/pipeline/context" hx-target="#pipeline" data-context-now class="rounded-md border border-slate-300 px-3 py-1 text-xs font-medium hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">Find context now</button>
     </div>
     {% endif %}

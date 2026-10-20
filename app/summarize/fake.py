@@ -34,6 +34,15 @@ after a few tokens, ``stall`` stops sending (the idle timeout fires), ``invalid_
 cites a source that does not exist, ``injection_echo`` obeys an instruction hidden in a source
 (a deliberately bad model, to test the UI and verification). ``empty``, ``invented_number``,
 ``http_500``, ``timeout`` and ``http_401`` apply to chat too."""
+PERSPECTIVES_MODES = (
+    "bad_quote",
+    "political_label",
+    "one_sided_dispute",
+)
+"""Perspectives-only modes: ``bad_quote`` emits a quote absent from the article text
+(rejected by the verbatim check), ``political_label`` makes the synthesis label a position
+with an outlet-leaning label (rejected), ``one_sided_dispute`` makes a disagreement whose
+positions all cite the same source (omitted, never invented balance)."""
 MODES = (
     "ok",
     "prose",
@@ -52,6 +61,7 @@ MODES = (
     "http_401",
     "demo",
     *CHAT_MODES,
+    *PERSPECTIVES_MODES,
 )
 FAKE_MODEL = "fake-llm"
 INVENTED = "Officials said 987654 people were affected."
@@ -297,6 +307,110 @@ def fake_chat_answer(system: str, question: str, mode: str = "ok") -> str:
     return answer
 
 
+def fake_digest(user_message: str, *, mode: str = "ok") -> dict:
+    """A per-source perspectives digest: claims carry verbatim quotes from the source's
+    text; stance is read from cue words in it (``confirms``/``supports`` -> ``supports``,
+    ``disputes``/``denies``/``rejects``/``contradicts`` -> ``disputes``, else ``neutral``)."""
+    sources = parse_sources(user_message)
+    text = sources[0][3] if sources else ""
+    headline = sources[0][2] if sources else ""
+    sentences = _body_sentences(text, max_words=15)[:3]
+    claims = []
+    for sentence in sentences:
+        quote = " ".join(sentence.rstrip('.,;:!?"\u201d').split()[:15])
+        if mode == "bad_quote":
+            quote = "this passage never appeared in the article text"
+        claims.append({"text": sentence[:200], "quote": quote})
+    if not claims:
+        claims = [
+            {
+                "text": headline or "The story reports the event.",
+                "quote": " ".join((headline or "").split()[:15]),
+            }
+        ]
+    lowered = text.lower()
+    stance = "neutral"
+    if any(w in lowered for w in ("disputes", "denies", "rejects", "contradicts", "disputed")):
+        stance = "disputes"
+    elif any(w in lowered for w in ("confirms", "confirmed", "supports", "corroborates")):
+        stance = "supports"
+    return {
+        "claims": claims,
+        "stance": stance,
+        "kind": "reporting",
+        "key_parties": [],
+        "framing": " ".join(headline.split()[:12]),
+    }
+
+
+_DIGEST_BLOCK = re.compile(
+    r"\[(\d+)\] Source: (?P<label>.+?)\nStance: (?P<stance>\w+)\nKind: (?P<kind>[\w-]+)\n"
+    r"Framing: (?P<framing>.*?)\nClaims:\n(?P<claims>.*?)(?=\n\n\[\d+\] Source: |\n\nWrite |\Z)",
+    re.S,
+)
+
+_STANCE_LABELS = {
+    "supports": "reports the claim as established",
+    "disputes": "challenges the central claim",
+    "adds": "adds details without disputing",
+    "neutral": "reports the claim without judgement",
+    "unclear": "does not take a position",
+}
+
+
+def fake_perspectives(user_message: str, *, mode: str = "ok") -> dict:
+    """A 'how outlets differ' synthesis over the numbered digests in the prompt: agreement
+    across all digests plus one disagreement when the digests' stances differ."""
+    blocks = []
+    for m in _DIGEST_BLOCK.finditer(user_message):
+        quote = ""
+        claim_line = next((ln for ln in m["claims"].splitlines() if ln.strip().startswith("-")), "")
+        if '"' in claim_line:
+            quote = claim_line.rsplit('"', 1)[0].split('"', 1)[-1] if '"' in claim_line else ""
+        blocks.append(
+            {"index": int(m[1]), "label": m["label"].strip(), "stance": m["stance"], "quote": quote}
+        )
+    agreement = []
+    if blocks:
+        agreement = [
+            {
+                "text": "The sources describe the same event and its main facts.",
+                "citations": [b["index"] for b in blocks],
+            }
+        ]
+    disagreements = []
+    stances = {b["stance"] for b in blocks}
+    # a real disagreement needs an opposing stance — "disputes" — not just variety
+    if "disputes" in stances and len(stances) >= 2:
+        picked = []
+        for stance in ("disputes", "supports", "adds", "neutral", "unclear"):
+            for b in blocks:
+                if b["stance"] == stance and b["index"] not in [p["citations"][0] for p in picked]:
+                    label = _STANCE_LABELS.get(stance, f"describes it as {stance}")
+                    if mode == "political_label" and len(picked) == 0:
+                        label = "right-leaning outlets"
+                    picked.append(
+                        {
+                            "label": label,
+                            "summary": f"This source's coverage {stance} the central claim.",
+                            "citations": [b["index"]],
+                            "quote": b["quote"] or "no quote",
+                        }
+                    )
+                    break
+            if len(picked) >= 2:
+                break
+        if mode == "one_sided_dispute" and len(picked) >= 2:
+            picked[1]["citations"] = picked[0]["citations"]
+        if len(picked) >= 2:
+            disagreements = [{"topic": "stance on the story", "positions": picked}]
+    return {
+        "agreement": agreement,
+        "disagreements": disagreements,
+        "different_angles": [],
+    }
+
+
 def fake_followups(user_message: str) -> dict:
     sources = parse_sources(user_message)
     headline = sources[0][2] if sources else "this story"
@@ -394,6 +508,12 @@ class FakeLLM:
         )
         if system.startswith(CHAT_SYSTEM_PROMPT):
             return "chat"
+        from app.perspectives.prompt import DIGEST_SYSTEM, SYNTH_SYSTEM
+
+        if system == DIGEST_SYSTEM:
+            return "perspectives_digest"
+        if system == SYNTH_SYSTEM:
+            return "perspectives"
         if system == PROMPTS["followups"][0]:
             return "followups"
         for kind in ("report", "brief"):
@@ -435,7 +555,13 @@ class FakeLLM:
             return httpx.Response(401, json={"error": {"message": "invalid api key"}})
         if mode == "timeout":
             raise httpx.ReadTimeout("fake timeout", request=request)
-        if kind == "followups":
+        if kind == "perspectives_digest":
+            answer = fake_digest(user, mode=mode)
+            points = None
+        elif kind == "perspectives":
+            answer = fake_perspectives(user, mode=mode)
+            points = None
+        elif kind == "followups":
             answer = fake_followups(user)
             points = None
             if mode == "duplicate_bullets":
@@ -453,7 +579,7 @@ class FakeLLM:
         else:
             answer = fake_summary(user)
             points = None
-        if kind == "followups":
+        if kind in ("followups", "perspectives_digest", "perspectives"):
             pass
         elif mode == "out_of_range":
             if points is None:
@@ -464,7 +590,7 @@ class FakeLLM:
             if points is None and "summary" in answer:
                 answer["summary"] += " " + INVENTED
                 answer["citations"].append([1])
-            else:
+            elif points is not None:
                 points[-1]["text"] = points[-1]["text"].rstrip(".") + ". " + INVENTED
                 if kind == "brief":
                     points[-1]["text"] = INVENTED
