@@ -44,6 +44,13 @@ ANGLE_SCHEMA: dict[str, Any] = {
 
 CONTEXT_WORDS = ("history", "explained", "background")
 
+STANCE_WORDS = ("criticism of", "defense of", "fact-check", "reaction", "analysis")
+"""Counter-narrative angles for deep stories (``perspectives``): criticism of, defense
+of, fact-check of, affected parties' reaction and expert analysis."""
+
+FACT_CHECK_LABEL = "fact-check"
+"""The angle label whose hits are stored as ``context_kind = 'fact_check'``."""
+
 
 @dataclass
 class Angle:
@@ -84,6 +91,19 @@ def heuristic_angles(terms: list[Term], *, max_angles: int) -> list[Angle]:
     words = CONTEXT_WORDS[: max(1, max_angles)]
     return [
         Angle(label=word, query=f'"{entity}" {word}', heuristic=True) for word in words[:max_angles]
+    ]
+
+
+def stance_angles(terms: list[Term], *, max_angles: int = 5) -> list[Angle]:
+    """Stance angles for deep-tier stories: the top entity + each stance word
+    (``"X" criticism of`` -> label ``criticism of`` ...). Always ``heuristic=True`` —
+    they are deliberately blunt and capped by the caller."""
+    entity = next((t.text for t in terms if t.text), "")
+    if not entity:
+        return []
+    return [
+        Angle(label=word, query=f'"{entity}" {word}', heuristic=True)
+        for word in STANCE_WORDS[:max_angles]
     ]
 
 

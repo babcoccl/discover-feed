@@ -130,6 +130,15 @@ update it when fixtures or defaults change. docs/features/clustering.md has the 
   `tests/fixtures/docker/profiles.yaml` widen it, otherwise nothing gets generated.
 - SSE: `GET /api/profiles/{slug}/stream` (`story.published`/`story.updated`, `heartbeat`);
   polling fallback `GET /api/profiles/{slug}/published?since=`.
+- Perspectives ("how outlets differ", `app.perspectives`): per-source digests
+  (verbatim quotes, stance, kind, framing; `article_digests`, cached by content
+  hash) then one synthesis per story version (`story_summaries` kind
+  `perspectives`). Disagreements need >=2 positions on different sources with
+  verified quotes and differing stances; political/outlet labels are rejected.
+  `python -m app.perspectives.diagnose --story-id N [--dry-run]`,
+  `python -m app.perspectives.evaluate --stories 20 --markdown [--store]`
+  (dry run by default). Enabled per profile (`perspectives.enabled`) or the
+  pipeline settings toggle; role `llm.perspectives` (defaults to summarizer).
 - Diagnose one story against the configured endpoint (read-only):
   `python -m app.summarize.diagnose --auto|--story-id N [--kind brief|report|both] [--dry-run] [--markdown] [--full]`
   (Windows: `.venv\Scripts\python -m app.summarize.diagnose ...`). `generation_attempts` keeps the

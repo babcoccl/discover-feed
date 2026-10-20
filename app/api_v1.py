@@ -27,7 +27,7 @@ from app.api import BriefOut, ReportOut, _brief_out, _report_out
 from app.auth import require_api_key
 from app.db import ping
 from app.events import StoryEvent, Subscription, bus, events_after, latest_event_id
-from app.models import CONTEXT, Article, ProfileRecord
+from app.models import CONTEXT, Article, ArticleDigest, ProfileRecord, StorySummary
 from app.topics import TopicRule, matches
 from app.web import snippet
 
@@ -168,6 +168,12 @@ class StorySourceV1(BaseModel):
         description="Stored without text: counted in coverage, never summarized or cited "
         "as evidence.",
     )
+    stance: str | None = Field(
+        default=None,
+        description="This article's stance toward the story's central claim — "
+        "supports | disputes | adds | neutral | unclear — from the per-source digest "
+        "(null until perspectives has run).",
+    )
 
 
 class ContextLinkV1(BaseModel):
@@ -184,10 +190,11 @@ class ContextLinkV1(BaseModel):
         default=None,
         description="The search angle that surfaced it (`history`, `opposing view`...).",
     )
-    kind: Literal["article", "opinion"] = Field(
+    kind: Literal["article", "opinion", "fact_check"] = Field(
         default="article",
         description="`opinion` when the page is an opinion/column piece (at most "
-        "`context.max_opinion` per story); `article` otherwise.",
+        "`context.max_opinion` per story); `fact_check` when the counter-narrative "
+        "angle found a fact-check page; `article` otherwise.",
     )
 
 
@@ -314,6 +321,16 @@ class StoryV1(BaseModel):
                     "model": "qwen3.5-9b",
                     "versions": {"story": 3, "schema_version": 1},
                     "sources": [_SOURCE_EXAMPLE],
+                    "perspectives": {
+                        "agreement": [
+                            {
+                                "text": "Both outlets report the accelerator ships in March.",
+                                "citations": [1],
+                            }
+                        ],
+                        "disagreements": [],
+                        "different_angles": [],
+                    },
                     "context": [
                         {
                             "url": "https://en.wikipedia.org/wiki/Chiplet",
@@ -348,6 +365,12 @@ class StoryV1(BaseModel):
     model: str
     versions: VersionsV1
     sources: list[StorySourceV1] = Field(description="Every member article, oldest first.")
+    perspectives: dict | None = Field(
+        default=None,
+        description="The 'how outlets differ' synthesis ({agreement, disagreements, "
+        "different_angles}) after the perspectives pass ran with enough sources; "
+        "null otherwise. Citations are indexes into `sources`.",
+    )
     context: list[ContextLinkV1] = Field(
         default_factory=list,
         description="Background/context links (related, not the same event). Empty until "
@@ -407,7 +430,10 @@ def _base(request: Request) -> str:
     return str(request.base_url).rstrip("/")
 
 
-def _sources(members: Sequence[views.Member]) -> list[StorySourceV1]:
+def _sources(
+    members: Sequence[views.Member], stances: dict[int, dict] | None = None
+) -> list[StorySourceV1]:
+    stances = stances or {}
     return [
         StorySourceV1(
             name=m.source,
@@ -422,6 +448,7 @@ def _sources(members: Sequence[views.Member]) -> list[StorySourceV1]:
             kind=m.kind,
             groups=m.groups,
             headline_only=m.headline_only,
+            stance=(stances.get(m.id) or {}).get("stance"),
         )
         for m in members
     ]
@@ -555,6 +582,29 @@ def get_story(
                     .order_by(Article.id)
                 )
             )
+            row = session.scalar(
+                select(StorySummary)
+                .where(
+                    StorySummary.story_id == story.story_id,
+                    StorySummary.kind == "perspectives",
+                    StorySummary.status == "ok",
+                )
+                .order_by(StorySummary.id.desc())
+                .limit(1)
+            )
+            content = row.content_json if row is not None else None
+            perspectives = content if content and any(content.get(k) for k in content) else None
+            stances = {
+                d.article_id: (d.digest_json or {}).get("stance")
+                for d in session.scalars(
+                    select(ArticleDigest)
+                    .where(
+                        ArticleDigest.story_id == story.story_id,
+                        ArticleDigest.status == "ok",
+                    )
+                    .order_by(ArticleDigest.id)
+                )
+            }
     if story is None:
         raise HTTPException(status_code=404, detail=f"story {story_id} is not published")
     report = story.report
@@ -576,7 +626,8 @@ def get_story(
         report_reason=report.reason if report else None,
         model=story.model,
         versions=VersionsV1(story=story.version, schema_version=views.SCHEMA_VERSION),
-        sources=_sources(story.members),
+        sources=_sources(story.members, stances),
+        perspectives=perspectives,
         context=[
             ContextLinkV1(
                 url=a.url,
@@ -584,7 +635,13 @@ def get_story(
                 domain=(a.source_id or "").removeprefix("web:"),
                 note=a.context_note,
                 angle=a.context_angle,
-                kind="opinion" if a.context_kind == "opinion" else "article",
+                kind=(
+                    "opinion"
+                    if a.context_kind == "opinion"
+                    else "fact_check"
+                    if a.context_kind == "fact_check"
+                    else "article"
+                ),
             )
             for a in context_articles
         ],

@@ -38,6 +38,7 @@ def init_db(engine: Engine) -> None:
     _add_image_columns(engine)
     _add_enrichment_columns(engine)
     _add_context_columns(engine)
+    _add_perspectives_columns(engine)
 
 
 def _add_article_url(engine: Engine) -> None:
@@ -321,3 +322,19 @@ def _add_context_columns(engine: Engine) -> None:
         conn.execute(
             text("CREATE INDEX IF NOT EXISTS ix_stories_context_status ON stories (context_status)")
         )
+
+
+_PERSPECTIVES_COLUMNS = {
+    "profiles": {"perspectives_enabled": "BOOLEAN"},
+}
+
+
+def _add_perspectives_columns(engine: Engine) -> None:
+    """Pre-perspectives DBs: the profile toggle (``article_digests`` itself is created
+    by ``Base.metadata.create_all``)."""
+    with engine.begin() as conn:
+        for table, columns in _PERSPECTIVES_COLUMNS.items():
+            existing = {c["name"] for c in inspect(conn).get_columns(table)}
+            for name, ddl in columns.items():
+                if name not in existing:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))

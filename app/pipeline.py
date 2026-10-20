@@ -26,6 +26,7 @@ from app.summarize.worker import SummaryWorker
 if TYPE_CHECKING:
     from app.context.service import ContextFinder
     from app.enrich.service import Enricher
+    from app.perspectives.service import PerspectiveService
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +107,29 @@ def summary_worker_from_settings(
         backfill_hours=options.summarize_backfill_hours,
         backfill_max=options.summarize_backfill_max,
         followups=bool(profile and profile.llm.chat and options.followups),
+        perspectives=perspectives_from_profile(session_factory, config, profile, transport),
+    )
+
+
+def perspectives_from_profile(
+    session_factory: sessionmaker,
+    config: AppConfig,
+    profile: Profile | None,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> "PerspectiveService | None":
+    """The perspectives service for the summarize profile's ``perspectives`` settings;
+    ``llm.perspectives`` when set, else the summarizer role."""
+    if profile is None:
+        return None
+    from app.perspectives.service import PerspectiveService, perspectives_defaults
+
+    role = profile.llm.perspectives or profile.llm.summarizer
+    return PerspectiveService(
+        session_factory,
+        LLMClient(role, transport=transport),
+        profile.perspectives,
+        profile_defaults=perspectives_defaults(config),
+        max_age_hours=profile.perspectives.max_age_hours,
     )
 
 
