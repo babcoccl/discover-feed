@@ -52,7 +52,7 @@ def test_every_chat_call_names_a_purpose():
     for path in APP.rglob("*.py"):
         if "telemetry" in path.parts:
             continue
-        tree = ast.parse(path.read_text())
+        tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if (
                 isinstance(node, ast.Call)
@@ -66,7 +66,7 @@ def test_every_chat_call_names_a_purpose():
 
 def test_all_purposes_in_the_map():
     for path in APP.rglob("*.py"):
-        tree = ast.parse(path.read_text())
+        tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if not (
                 isinstance(node, ast.Call)
