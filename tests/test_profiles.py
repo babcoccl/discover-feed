@@ -508,3 +508,22 @@ def test_articles_api_returns_url_and_canonical_url(demo_client: TestClient) -> 
     assert feed["items"] and all(i["url"].startswith("http") for i in feed["items"])
     schema = demo_client.get("/openapi.json").json()["components"]["schemas"]["ArticleOut"]
     assert "link to show users" in schema["properties"]["url"]["description"].lower()
+
+
+def test_new_stories_pill_markup(client: TestClient) -> None:
+    """The 'N new stories' pill renders full-height (items-start defeats the h-0 flex
+    stretch) and its click reloads #feed and scrolls to the top of the new content,
+    never the page bottom."""
+    page = client.get("/p/personal-reader").text
+    assert 'id="new-stories"' in page
+    assert "items-start" in page
+    assert 'hx-get="/p/personal-reader/feed"' in page
+    assert 'hx-target="#feed"' in page
+    assert 'hx-swap="innerHTML show:top"' in page
+
+    # topic and articles view survive in the pill's refresh URL
+    topics = client.get("/api/profiles/personal-reader").json()["topics"]
+    topic_page = client.get("/p/personal-reader", params={"topic": topics[0]["id"]}).text
+    assert f'hx-get="/p/personal-reader/feed?topic={topics[0]["id"]}"' in topic_page
+    articles = client.get("/p/personal-reader", params={"view": "articles"}).text
+    assert 'hx-get="/p/personal-reader/feed?view=articles"' in articles
