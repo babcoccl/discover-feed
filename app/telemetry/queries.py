@@ -87,6 +87,10 @@ def _reason_counts(rows) -> list[tuple[str, int]]:
         limiter = detail.get("limiter")
         if limiter:
             counts[f"limiter:{str(limiter)[:100]}"] += 1
+        cache_hits = detail.get("cache_hits")
+        if cache_hits:
+            # e.g. images reused an existing ImageAsset row — a hit, not a failure
+            counts["cache_hit"] += int(cache_hits)
         for key in ("rejects", "reasons"):
             nested = detail.get(key)
             if isinstance(nested, dict):
