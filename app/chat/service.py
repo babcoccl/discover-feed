@@ -118,6 +118,7 @@ async def stream_answer(
     *,
     shared_slot: bool = True,
     started: float | None = None,
+    story_id: int | None = None,
 ) -> AsyncIterator[tuple[str, dict]]:
     """``(event, data)``: ``waiting``, ``token``..., then ``citations`` + ``done``, or
     ``error`` (the partial text stays in ``answer``)."""
@@ -127,7 +128,9 @@ async def stream_answer(
         return round((time.perf_counter() - started) * 1000)
 
     try:
-        async with aclosing(client.stream_chat(messages, shared_slot=shared_slot)) as stream:
+        async with aclosing(
+            client.stream_chat(messages, purpose="chat", story_id=story_id, shared_slot=shared_slot)
+        ) as stream:
             async for ev in stream:
                 if ev.type == "waiting":
                     answer.waited = True
@@ -315,6 +318,7 @@ class ChatService:
                     answer,
                     shared_slot=self.shared_slot,
                     started=started,
+                    story_id=story_id,
                 )
             ) as events:
                 async for item in events:

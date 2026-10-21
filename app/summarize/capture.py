@@ -34,7 +34,15 @@ async def run(env, out: Path, kind: str = "brief") -> int:
     messages = build_messages(sources, kind=kind)
     schema, name = PROMPTS[kind][1], f"story_{kind}"
     client = env.client(role)
-    result = await client.chat(messages, json_schema=schema, schema_name=name)
+    from app import telemetry
+
+    result = await client.chat(
+        messages,
+        purpose=telemetry.kind_purpose(kind),
+        story_id=getattr(story.item, "id", None),
+        json_schema=schema,
+        schema_name=name,
+    )
     request = build_payload(role, messages, json_schema=schema, schema_name=name)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(

@@ -497,7 +497,20 @@ class ContextFinder:
     async def find_story(self, story_id: int, *, dry_run: bool = False) -> ContextResult:
         result = ContextResult(story_id=story_id)
         try:
-            await self._find(result, dry_run)
+            from app import telemetry
+
+            with (
+                telemetry.story_context(story_id),
+                telemetry.stage("context", story_id=story_id) as ev,
+            ):
+                await self._find(result, dry_run)
+                ev.detail.update(
+                    status=result.status,
+                    reason=result.reason,
+                    candidates=len(result.candidates),
+                    accepted=len(result.accepted),
+                    dry_run=dry_run,
+                )
         except Exception as exc:
             logger.exception("context search of story %s failed", story_id)
             result.status, result.reason = "failed", f"{type(exc).__name__}: {exc}"[:500]
@@ -1310,7 +1323,10 @@ class ContextFinder:
         try:
             client = LLMClient(role, transport=self.llm_transport)
             result = await client.chat(
-                messages, json_schema=JUDGE_SCHEMA, schema_name="context_judge"
+                messages,
+                purpose="judge",
+                json_schema=JUDGE_SCHEMA,
+                schema_name="context_judge",
             )
             data = json.loads(result.content)
             score = int(data["adds_context"])

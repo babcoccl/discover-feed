@@ -216,10 +216,13 @@ async def extract(
         f"Page text:\n{page_text[:EXTRACT_CHARS]}"
     )
     last = Extraction()
-    for _ in range(1 + retries):
+    purpose = "history_extract" if task_type == "history" else "context_extract"
+    for _try in range(1 + retries):
         try:
             chat = await client.chat(
                 [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}],
+                purpose=purpose,
+                attempt=_try + 1,
                 json_schema=EXTRACT_SCHEMA,
                 schema_name="context_extract",
             )

@@ -45,6 +45,7 @@ from app.scheduler import (
     schedule_image_backfill,
     schedule_pipeline,
     schedule_summaries,
+    schedule_telemetry,
     sync_ingestion_jobs,
 )
 from app.secret_warnings import log_missing_secrets
@@ -206,6 +207,10 @@ def create_app(
         app.state.ingestor.on_new_articles = app.state.alerts.on_ingested
         app.state.pipeline.alerts = app.state.alerts
         app.state.alert_sender.kick()  # anything still queued from before a restart
+        from app import telemetry
+
+        telemetry.configure(app.state.session_factory, app.state.config, app_version=__version__)
+        telemetry.load_flags()
         migrate(
             app.state.session_factory,
             summarizer=None,
@@ -251,6 +256,7 @@ def create_app(
                 )
             schedule_chat(scheduler, app.state.chat)
             schedule_alerts(scheduler, app.state.alerts, app.state.alert_sender)
+            schedule_telemetry(scheduler)
             scheduler.start()
         app.state.scheduler = scheduler
         try:
@@ -278,6 +284,9 @@ def create_app(
     app.include_router(web_router, dependencies=[Depends(web_guard)])
     app.include_router(alerts_web_router, dependencies=[Depends(web_guard)])
     app.include_router(sources_web_router, dependencies=[Depends(web_guard)])
+    from app.telemetry.web import router as telemetry_web_router
+
+    app.include_router(telemetry_web_router, dependencies=[Depends(web_guard)])
     for route in api_router.routes:
         if "GET" in getattr(route, "methods", ()) and "/admin/" not in route.path:
             route.deprecated = True

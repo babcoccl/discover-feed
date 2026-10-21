@@ -148,6 +148,7 @@ async def make_angles(
             client = LLMClient(role, transport=llm_transport)
             result = await client.chat(
                 _messages(title, brief, entities, max_angles),
+                purpose="context_angles",
                 json_schema=ANGLE_SCHEMA,
                 schema_name="context_angles",
             )

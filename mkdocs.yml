@@ -86,6 +86,7 @@ nav:
           - Operating: features/context/operating.md
   - Operations:
       - Pipeline panel and admin API: operations/pipeline.md
+      - Workflow diagnostics: operations/workflow.md
       - Command-line tools: operations/cli.md
       - Backups and upgrades: operations/backups.md
       - Troubleshooting: operations/troubleshooting.md

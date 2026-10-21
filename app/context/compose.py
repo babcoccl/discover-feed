@@ -169,6 +169,7 @@ async def compose(
     try:
         chat = await client.chat(
             [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}],
+            purpose="context_compose",
             json_schema=COMPOSE_SCHEMA,
             schema_name="context_compose",
         )

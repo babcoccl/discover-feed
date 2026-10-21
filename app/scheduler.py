@@ -156,6 +156,22 @@ def schedule_chat(scheduler: BackgroundScheduler, hub) -> None:
     )
 
 
+def schedule_telemetry(scheduler: BackgroundScheduler) -> None:
+    """Daily: drop llm_calls/stage_events older than ``telemetry.retention_days``."""
+    from app.telemetry import prune_blocking
+
+    scheduler.add_job(
+        prune_blocking,
+        trigger=IntervalTrigger(hours=24),
+        id="telemetry-prune",
+        name="Prune telemetry tables",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+        next_run_time=datetime.now(UTC) + timedelta(minutes=30),
+    )
+
+
 def schedule_alerts(scheduler: BackgroundScheduler, engine, sender) -> None:
     """Retry due notifications every 15 s; digests and retention every minute (new alerts
     are sent right away, not on this timer)."""

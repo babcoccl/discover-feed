@@ -985,3 +985,8 @@ async def stream(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+from app.telemetry.api import mount as _mount_telemetry  # noqa: E402
+
+_mount_telemetry(router)

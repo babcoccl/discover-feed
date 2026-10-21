@@ -1,0 +1,200 @@
+{# Polled panel: flow overview, LLM usage, backlogs, funnel, insights, versions. #}
+{%- macro ms(v) -%}
+{%- if v is none -%}—{%- elif v >= 60000 -%}{{ (v / 60000) | round(1) }}m{%- elif v >= 1000 -%}{{ (v / 1000) | round(1) }}s{%- else -%}{{ v | int }}ms{%- endif -%}
+{%- endmacro -%}
+{%- macro pct(v) -%}{% if v is none %}—{% else %}{{ (v * 100) | round(0) }}%{% endif %}{%- endmacro -%}
+
+<section class="mb-6">
+  <div class="mb-2 flex items-baseline justify-between">
+    <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Pipeline flow · last {{ (hours / 24) | round(0) if hours >= 24 else hours }}{{ "d" if hours >= 24 else "h" }}</h2>
+    <span class="text-xs text-slate-400">version {{ telemetry.app_version }} · config {{ telemetry.config_hash }}</span>
+  </div>
+  <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+    <table class="min-w-full text-left text-sm">
+      <thead class="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500 dark:border-slate-800 dark:text-slate-400">
+        <tr>
+          <th class="px-4 py-2 font-medium">Stage</th>
+          <th class="px-4 py-2 font-medium text-right">Waiting</th>
+          <th class="px-4 py-2 font-medium text-right">Running</th>
+          <th class="px-4 py-2 font-medium text-right">Done</th>
+          <th class="px-4 py-2 font-medium text-right">Failed</th>
+          <th class="px-4 py-2 font-medium text-right">Median</th>
+          <th class="px-4 py-2 font-medium text-right">p95</th>
+          <th class="px-4 py-2 font-medium">Oldest waiting</th>
+          <th class="px-4 py-2 font-medium">Top failure</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+        {% for s in flow %}
+        <tr>
+          <td class="px-4 py-2 font-medium">
+            {% if s.waiting %}
+            <a href="/p/{{ profile.slug }}/settings/workflow/story?stage={{ s.stage }}" class="hover:underline">{{ s.stage }}</a>
+            {% else %}{{ s.stage }}{% endif %}
+          </td>
+          <td class="px-4 py-2 text-right">{{ s.waiting }}</td>
+          <td class="px-4 py-2 text-right">{{ s.in_progress }}</td>
+          <td class="px-4 py-2 text-right">{{ s.done }}</td>
+          <td class="px-4 py-2 text-right {% if s.failed %}text-rose-600 dark:text-rose-400{% endif %}">{{ s.failed }}</td>
+          <td class="px-4 py-2 text-right">{{ ms(s.median_ms) }}</td>
+          <td class="px-4 py-2 text-right">{{ ms(s.p95_ms) }}</td>
+          <td class="px-4 py-2 text-slate-500">{% if s.oldest_wait_at %}<time datetime="{{ s.oldest_wait_at.isoformat() }}">{{ s.oldest_wait_at | reltime }}</time>{% else %}—{% endif %}</td>
+          <td class="px-4 py-2 max-w-64 truncate text-slate-500" title="{{ s.top_reason }}">{{ s.top_reason or "—" }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="9" class="px-4 py-6 text-center text-slate-400">No stage events yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="mb-6">
+  <h2 class="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">LLM usage</h2>
+  <dl class="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-5">
+    {% for label, value in (("Calls", llm.calls), ("Failed", llm.failed), ("Validation rejects", llm.invalid), ("LLM busy", ms(llm.busy_ms)), ("Queue wait", ms(llm.queue_wait_ms))) %}
+    <div class="rounded-xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-800 dark:bg-slate-900">
+      <dt class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">{{ label }}</dt>
+      <dd class="text-xl font-semibold">{{ value }}</dd>
+    </div>
+    {% endfor %}
+  </dl>
+  <div class="mb-3 flex items-center gap-3 text-sm text-slate-600 dark:text-slate-400">
+    <span>Utilization: <b>{{ pct(llm.utilization) }}</b> of the window busy (one model slot)</span>
+    <span>{{ llm.prompt_tokens }} in / {{ llm.completion_tokens }} out tokens</span>
+  </div>
+  {% if llm.categories %}
+  {% set total = llm.categories.values() | sum %}
+  {% set colors = {"interpretation": "#0ea5e9", "summarization": "#6366f1", "reports": "#a855f7", "perspectives": "#22c55e", "chat": "#f59e0b", "system": "#94a3b8"} %}
+  <svg role="img" aria-label="Calls by category" class="mb-3 h-5 w-full rounded-md" viewBox="0 0 100 5" preserveAspectRatio="none">
+    {% set x = namespace(v=0) %}
+    {% for cat, n in llm.categories.items() %}
+    {% set w = 100 * n / total %}
+    <rect x="{{ x.v }}" y="0" width="{{ w }}" height="5" fill="{{ colors.get(cat, '#64748b') }}"><title>{{ cat }}: {{ n }}</title></rect>
+    {% set x.v = x.v + w %}
+    {% endfor %}
+  </svg>
+  <div class="mb-3 flex flex-wrap gap-3 text-xs text-slate-500 dark:text-slate-400">
+    {% for cat, n in llm.categories.items() %}
+    <span><span class="inline-block h-2 w-2 rounded-sm" style="background: {{ colors.get(cat, '#64748b') }}"></span> {{ cat }} ({{ n }})</span>
+    {% endfor %}
+  </div>
+  {% endif %}
+  <div class="mb-3 overflow-x-auto rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+    <table class="min-w-full text-left text-sm">
+      <thead class="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500 dark:border-slate-800 dark:text-slate-400">
+        <tr>
+          <th class="px-4 py-2 font-medium">Purpose</th><th class="px-4 py-2 font-medium">Category</th>
+          <th class="px-4 py-2 font-medium text-right">Calls</th><th class="px-4 py-2 font-medium text-right">Err</th>
+          <th class="px-4 py-2 font-medium text-right">Invalid</th><th class="px-4 py-2 font-medium text-right">Median</th>
+          <th class="px-4 py-2 font-medium text-right">p95</th><th class="px-4 py-2 font-medium text-right">Queue wait</th>
+          <th class="px-4 py-2 font-medium text-right">tok/s</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+        {% for p in llm.purposes %}
+        <tr>
+          <td class="px-4 py-2 font-medium">{{ p.purpose }}</td>
+          <td class="px-4 py-2 text-slate-500">{{ p.category }}</td>
+          <td class="px-4 py-2 text-right">{{ p.calls }}</td>
+          <td class="px-4 py-2 text-right {% if p.errors %}text-rose-600 dark:text-rose-400{% endif %}">{{ p.errors }}</td>
+          <td class="px-4 py-2 text-right {% if p.invalid %}text-amber-600 dark:text-amber-400{% endif %}">{{ p.invalid }}</td>
+          <td class="px-4 py-2 text-right">{{ ms(p.median_ms) }}</td>
+          <td class="px-4 py-2 text-right">{{ ms(p.p95_ms) }}</td>
+          <td class="px-4 py-2 text-right">{{ ms(p.queue_wait_ms) }}</td>
+          <td class="px-4 py-2 text-right">{{ p.tps or "—" }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="9" class="px-4 py-6 text-center text-slate-400">No LLM calls in this window.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if llm.slowest %}
+  <details class="rounded-xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-800 dark:bg-slate-900">
+    <summary class="cursor-pointer text-sm font-medium">10 slowest calls</summary>
+    <table class="mt-2 min-w-full text-left text-sm">
+      <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+        {% for c in llm.slowest %}
+        <tr>
+          <td class="px-2 py-1">{% if c.story_id %}<a class="text-sky-700 hover:underline dark:text-sky-400" href="/p/{{ profile.slug }}/settings/workflow/story/{{ c.story_id }}">story {{ c.story_id }}</a>{% else %}—{% endif %}</td>
+          <td class="px-2 py-1 text-slate-500">{{ c.purpose }}</td>
+          <td class="px-2 py-1 text-right">{{ ms(c.latency_ms) }}</td>
+          <td class="px-2 py-1 text-right text-slate-500">+{{ ms(c.queue_wait_ms) }} queued</td>
+          <td class="px-2 py-1 text-slate-500">{{ c.status }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </details>
+  {% endif %}
+</section>
+
+{% set backlog = flow | selectattr("waiting", "gt", 0) | list %}
+<section class="mb-6">
+  <h2 class="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Backlogs</h2>
+  {% if backlog %}
+  <ul class="space-y-1 text-sm">
+    {% for s in backlog %}
+    <li class="rounded-lg border border-slate-200 bg-white px-4 py-2 dark:border-slate-800 dark:bg-slate-900">
+      <a class="font-medium text-sky-700 hover:underline dark:text-sky-400" href="/p/{{ profile.slug }}/settings/workflow/story?stage={{ s.stage }}">{{ s.stage }}</a>:
+      {{ s.waiting }} waiting{% if s.oldest_wait_at %}, oldest <time datetime="{{ s.oldest_wait_at.isoformat() }}">{{ s.oldest_wait_at | reltime }}</time>{% endif %}
+      {% if s.top_reason %}<span class="text-slate-500">— {{ s.top_reason }}</span>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900">Nothing is waiting for work.</p>
+  {% endif %}
+</section>
+
+<section class="mb-6">
+  <h2 class="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Funnel · last {{ (funnel.hours / 24) | round(0) }}d</h2>
+  {% set peak = funnel.steps | map(attribute="count") | max | default(1) %}
+  <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-800 dark:bg-slate-900">
+    {% for step in funnel.steps %}
+    <div class="mb-1 flex items-center gap-3 text-sm">
+      <span class="w-56 shrink-0 text-slate-600 dark:text-slate-300">{{ step.name }}</span>
+      <svg class="h-4 w-1/2" viewBox="0 0 100 4" preserveAspectRatio="none" aria-hidden="true">
+        <rect x="0" y="0" width="{{ 100 * step.count / (peak or 1) }}" height="4" rx="1" fill="#0ea5e9"></rect>
+      </svg>
+      <span class="w-16 text-right font-medium">{{ step.count }}</span>
+      <span class="w-14 text-right text-xs text-slate-400">{{ pct(step.rate) }}</span>
+    </div>
+    {% endfor %}
+    {% if funnel.retries_per_story %}
+    <p class="mt-2 text-xs text-slate-500">Runs per story (brief+report):
+      {% for n, c in funnel.retries_per_story.items() %}{{ n }}×{{ "+" if n == "4" }}: {{ c }}{% if not loop.last %}, {% endif %}{% endfor %}
+    </p>
+    {% endif %}
+    {% if funnel.failure_reasons %}
+    <details class="mt-2">
+      <summary class="cursor-pointer text-sm font-medium">Failure reasons</summary>
+      <ul class="mt-1 text-sm text-slate-600 dark:text-slate-400">
+        {% for stage, reasons in funnel.failure_reasons.items() %}
+        <li><b>{{ stage }}</b>: {% for r, n in reasons %}{{ r }} ({{ n }}){% if not loop.last %}, {% endif %}{% endfor %}</li>
+        {% endfor %}
+      </ul>
+    </details>
+    {% endif %}
+  </div>
+</section>
+
+{% if insights %}
+<section class="mb-6">
+  <h2 class="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Insights</h2>
+  <ul class="list-disc space-y-1 pl-6 text-sm text-slate-700 dark:text-slate-300">
+    {% for i in insights %}<li>{{ i }}</li>{% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+{% if not enabled %}
+<div class="text-sm">
+  <form hx-post="/p/{{ profile.slug }}/settings/telemetry?hours={{ hours }}" hx-swap="none">
+    <button class="rounded-md border border-slate-300 px-3 py-1.5 text-sm dark:border-slate-700">Enable telemetry recording</button>
+  </form>
+</div>
+{% else %}
+<p class="text-xs text-slate-400">Telemetry on. Version {{ telemetry.app_version }} · config hash {{ telemetry.config_hash }}.</p>
+{% endif %}

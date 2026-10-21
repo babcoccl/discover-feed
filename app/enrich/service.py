@@ -654,7 +654,20 @@ class Enricher:
         would not be admitted on its own."""
         result = StoryEnrichment(story_id=story_id)
         try:
-            await self._enrich(result, dry_run, anchor_only=anchor_only, force_deep=force_deep)
+            from app import telemetry
+
+            with (
+                telemetry.story_context(story_id),
+                telemetry.stage("enrich", story_id=story_id) as ev,
+            ):
+                await self._enrich(result, dry_run, anchor_only=anchor_only, force_deep=force_deep)
+                ev.detail.update(
+                    status=result.status,
+                    reason=result.reason,
+                    tier=result.tier,
+                    added=result.added,
+                    dry_run=dry_run,
+                )
         except Exception as exc:
             logger.exception("enrichment of story %s failed", story_id)
             result.status, result.reason = "failed", f"{type(exc).__name__}: {exc}"[:500]

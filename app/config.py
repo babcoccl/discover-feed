@@ -1096,9 +1096,38 @@ class ImagesConfig(_Model):
     )
 
 
+class PayloadMode(StrEnum):
+    NONE = "none"
+    FAILURES = "failures"
+    ALL = "all"
+
+
+class TelemetryConfig(_Model):
+    """Top-level ``telemetry:`` block: workflow observability (``app.telemetry``).
+    Payloads hold article text: they stay local and are only reachable by admins."""
+
+    enabled: bool = Field(
+        default=True, description="Record llm_calls and stage_events (Settings can toggle it)."
+    )
+    retention_days: float = Field(
+        default=14, gt=0, description="Days llm_calls and stage_events are kept (pruned daily)."
+    )
+    store_payloads: PayloadMode = Field(
+        default=PayloadMode.FAILURES,
+        description="Store prompt/response previews: none | failures | all.",
+    )
+    payload_max_chars: int = Field(
+        default=4000, ge=200, le=20000, description="Max chars kept per prompt/response preview."
+    )
+    redact: bool = Field(
+        default=True, description="Scrub secrets and API-key patterns from stored payloads."
+    )
+
+
 class AppConfig(_Model):
     profiles: list[Profile] = Field(default_factory=list)
     images: ImagesConfig = Field(default_factory=ImagesConfig)
+    telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
 
     @model_validator(mode="after")
     def _unique_ids(self) -> "AppConfig":

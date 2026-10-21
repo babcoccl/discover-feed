@@ -390,9 +390,15 @@ class SummaryWorker:
                 session.add(SummaryJob(story_id=story_id, kind=kind, queued_at=self.clock()))
                 session.commit()
         try:
-            outcome = await self.summarizer.summarize_story(
-                self.session_factory, story_id, force=force, kind=kind
-            )
+            from app import telemetry
+
+            with telemetry.story_context(story_id), telemetry.stage(kind, story_id=story_id) as ev:
+                if force:
+                    telemetry.emit_stage("regenerate", story_id=story_id, detail={"kind": kind})
+                outcome = await self.summarizer.summarize_story(
+                    self.session_factory, story_id, force=force, kind=kind
+                )
+                ev.detail.update(status=outcome.status, reason=outcome.reason)
         except Exception as exc:  # isolate: one broken story never stops the others
             logger.exception("summarizing story %s (%s) failed", story_id, kind)
             outcome = SummaryOutcome(
@@ -494,7 +500,11 @@ class SummaryWorker:
     async def _perspective(self, story_id: int) -> "SummaryOutcome":
         kind = PERSPECTIVES
         try:
-            outcome = await self.perspectives.run_story(story_id=story_id)
+            from app import telemetry
+
+            with telemetry.stage("perspectives", story_id=story_id) as ev:
+                outcome = await self.perspectives.run_story(story_id=story_id)
+                ev.detail.update(status=outcome.status, reason=outcome.reason)
         except Exception as exc:  # endpoint failure: retry with backoff, like a report
             with self.session_factory() as session:
                 job = session.get(SummaryJob, (story_id, kind))
