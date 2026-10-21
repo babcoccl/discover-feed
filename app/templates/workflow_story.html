@@ -54,19 +54,41 @@
     {% set dur = (e.detail or {}).get("duration_ms") or 0 %}
     {% set left = 100 * ((e.started_at - gantt[0]).total_seconds() * 1000) / span %}
     {% set width = [100 * dur / span, 0.8] | max %}
-    <div class="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm dark:border-slate-800 dark:bg-slate-900">
-      <span class="w-24 shrink-0 text-xs text-slate-400">{{ e.started_at.strftime("%H:%M:%S") }}</span>
-      <span class="w-28 shrink-0 font-medium">{{ e.stage }}</span>
-      <span class="relative h-3 grow rounded bg-slate-100 dark:bg-slate-800">
-        <span class="absolute inset-y-0 rounded {% if e.status == 'failed' %}bg-rose-400{% elif e.status == 'running' %}bg-sky-300 animate-pulse{% else %}bg-sky-500{% endif %}"
-              style="left: {{ [left, 0] | max }}%; width: {{ [width, 99.5 - left] | min }}%"></span>
-      </span>
-      <span class="w-16 shrink-0 text-right text-xs text-slate-500">{{ ms(dur) }}</span>
-      <span class="w-16 shrink-0 text-xs text-slate-400">{{ e.status }}</span>
-    </div>
+    {% set reason = (e.detail or {}).get("reason") or (e.detail or {}).get("error") %}
+    <details class="rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+      <summary class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-sm">
+        <span class="w-24 shrink-0 text-xs text-slate-400">{{ e.started_at.strftime("%H:%M:%S") }}</span>
+        <span class="w-28 shrink-0 font-medium">{{ e.stage }}</span>
+        <span class="relative h-3 grow rounded bg-slate-100 dark:bg-slate-800">
+          <span class="absolute inset-y-0 rounded {% if e.canonical == 'failed' %}bg-rose-400{% elif e.canonical == 'running' %}bg-sky-300 animate-pulse{% else %}bg-sky-500{% endif %}"
+                style="left: {{ [left, 0] | max }}%; width: {{ [width, 99.5 - left] | min }}%"></span>
+        </span>
+        <span class="w-16 shrink-0 text-right text-xs text-slate-500">{{ ms(dur) }}</span>
+        <span class="w-16 shrink-0 text-xs {% if e.canonical == 'failed' %}text-rose-600 dark:text-rose-400{% else %}text-slate-400{% endif %}">{{ e.status }}</span>
+        <span class="w-40 shrink-0 truncate text-xs text-slate-500" title="{{ reason }}">{{ reason or "" }}</span>
+      </summary>
+      {% if e.detail %}
+      <dl class="flex flex-wrap gap-x-4 gap-y-1 px-3 pb-2 text-xs text-slate-600 dark:text-slate-400">
+        {% for k, v in e.detail.items() %}
+        <div><dt class="inline text-slate-400">{{ k }}:</dt> <dd class="inline">{{ v | tojson }}</dd></div>
+        {% endfor %}
+      </dl>
+      {% endif %}
+    </details>
     {% endfor %}
   </div>
 </section>
+
+{% if trace.context_rejects %}
+<section class="mb-6">
+  <h2 class="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Context rejections</h2>
+  <div class="flex flex-wrap gap-2 text-xs">
+    {% for r, n in trace.context_rejects.items() | sort(attribute=1, reverse=true) %}
+    <span class="rounded-md border border-slate-200 bg-white px-2 py-1 dark:border-slate-800 dark:bg-slate-900">{{ r }} × {{ n }}</span>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
 
 <section class="mb-6">
   <h2 class="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">LLM calls ({{ trace.calls | length }})</h2>
