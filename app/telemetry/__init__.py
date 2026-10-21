@@ -166,7 +166,29 @@ def configure(session_factory, config: AppConfig | None, *, app_version: str = "
         _config_hash = "none"
     from app.telemetry import writer
 
-    writer.configure(session_factory)
+    writer.configure(_writer_factory(session_factory))
+
+
+def _writer_factory(session_factory):
+    """The writer gets its own engine (pool of 1) so a telemetry flush can never
+    compete with the app's connections — on a saturated pool it would otherwise
+    starve real work; on :memory: databases there is no separate DB, so reuse."""
+    try:
+        engine = session_factory.kw.get("bind")
+        url = engine.url if engine is not None else None
+        if url is None or url.database in (None, ":memory:"):
+            return session_factory
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+
+        separate = create_engine(str(url), connect_args={"check_same_thread": False}, pool_size=1)
+        with separate.connect() as conn:
+            # WAL persists on the file: readers then proceed during writer commits,
+            # so batched telemetry flushes never stall app queries on the SQLite lock.
+            conn.exec_driver_sql("PRAGMA journal_mode=WAL")
+        return sessionmaker(bind=separate, autoflush=False, expire_on_commit=False)
+    except Exception:
+        return session_factory
 
 
 def app_version() -> str:

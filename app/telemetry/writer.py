@@ -10,7 +10,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-BATCH = 50
+BATCH = 200
 FLUSH_SECONDS = 1.0
 
 _queue: "queue.Queue[tuple[str, dict[str, Any]]]" = queue.Queue()
