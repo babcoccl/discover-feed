@@ -64,7 +64,11 @@ def test_defaults() -> None:
 def test_url_headers_and_llama_payload() -> None:
     role = LLMRole(**LLAMA)
     transport, seen = recording(lambda r: ok_response())
-    result = run(LLMClient(role, transport=transport).chat(MESSAGES, json_schema=RESPONSE_SCHEMA))
+    result = run(
+        LLMClient(role, transport=transport).chat(
+            MESSAGES, purpose="brief", json_schema=RESPONSE_SCHEMA
+        )
+    )
     request = seen[0]
     assert str(request.url) == "http://llm.lan:8080/v1/chat/completions"
     assert request.headers["authorization"] == "Bearer sk-local-secret"
@@ -109,7 +113,7 @@ profiles:
     for profile in config.profiles:
         transport, seen = recording(lambda r: ok_response())
         client = LLMClient(profile.llm.summarizer, transport=transport)
-        result = run(client.chat(MESSAGES, json_schema=RESPONSE_SCHEMA))
+        result = run(client.chat(MESSAGES, purpose="brief", json_schema=RESPONSE_SCHEMA))
         assert result.content
         bodies[profile.id] = (str(seen[0].url), json.loads(seen[0].content))
     (local_url, local), (cloud_url, cloud) = bodies["local"], bodies["cloud"]
@@ -134,12 +138,16 @@ def role(**kwargs) -> LLMRole:
 
 @pytest.mark.parametrize("mode", ["ok", "prose", "malformed", "out_of_range", "invented_number"])
 def test_fake_content_modes_return_content(mode: str) -> None:
-    result = run(LLMClient(role(), transport=FakeLLM(mode).transport()).chat(MESSAGES))
+    result = run(
+        LLMClient(role(), transport=FakeLLM(mode).transport()).chat(MESSAGES, purpose="brief")
+    )
     assert result.content and result.completion_tokens
 
 
 def test_fake_empty_content() -> None:
-    result = run(LLMClient(role(), transport=FakeLLM("empty").transport()).chat(MESSAGES))
+    result = run(
+        LLMClient(role(), transport=FakeLLM("empty").transport()).chat(MESSAGES, purpose="brief")
+    )
     assert result.content == "" and result.finish_reason == "stop"
 
 
@@ -148,18 +156,26 @@ def test_http_500_is_typed_and_redacted() -> None:
         return httpx.Response(500, text=f"bad key {request.headers['authorization']}")
 
     with pytest.raises(LLMHTTPError) as err:
-        run(LLMClient(role(), transport=httpx.MockTransport(echo_key)).chat(MESSAGES))
+        run(
+            LLMClient(role(), transport=httpx.MockTransport(echo_key)).chat(
+                MESSAGES, purpose="brief"
+            )
+        )
     assert err.value.status_code == 500 and err.value.kind == "http"
     assert "sk-local-secret" not in str(err.value) and "***" in str(err.value)
     with pytest.raises(LLMHTTPError):
-        run(LLMClient(role(), transport=FakeLLM("http_500").transport()).chat(MESSAGES))
+        run(
+            LLMClient(role(), transport=FakeLLM("http_500").transport()).chat(
+                MESSAGES, purpose="brief"
+            )
+        )
 
 
 def test_timeout() -> None:
     with pytest.raises(LLMTimeout, match="timed out after 5s"):
         run(
             LLMClient(role(timeout_seconds=5), transport=FakeLLM("timeout").transport()).chat(
-                MESSAGES
+                MESSAGES, purpose="brief"
             )
         )
 
@@ -169,7 +185,9 @@ def test_connection_error_and_non_json_body() -> None:
         raise httpx.ConnectError("connection refused", request=request)
 
     with pytest.raises(LLMConnectionError):
-        run(LLMClient(role(), transport=httpx.MockTransport(refuse)).chat(MESSAGES))
+        run(
+            LLMClient(role(), transport=httpx.MockTransport(refuse)).chat(MESSAGES, purpose="brief")
+        )
     html = httpx.MockTransport(lambda r: httpx.Response(200, text="<html>proxy</html>"))
     with pytest.raises(LLMBadResponse):
-        run(LLMClient(role(), transport=html).chat(MESSAGES))
+        run(LLMClient(role(), transport=html).chat(MESSAGES, purpose="brief"))

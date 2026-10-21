@@ -845,3 +845,71 @@ class SearchProviderState(Base):
     consecutive_errors: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     last_error: Mapped[str | None] = mapped_column(Text)
     updated_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+
+
+class AppSetting(Base):
+    """Small key/value store for runtime toggles (Settings page) that outlive the YAML."""
+
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(60), primary_key=True)
+    value: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
+class LlmCall(Base):
+    """One LLM request of any purpose (``app.telemetry``): timings, tokens and outcome.
+    Written by the batched telemetry writer; a failure never reaches the pipeline."""
+
+    __tablename__ = "llm_calls"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    call_ref: Mapped[str] = mapped_column(String(36), index=True)
+    """Client-generated id linking the row to validation updates."""
+    started_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    purpose: Mapped[str] = mapped_column(String(40), index=True)
+    category: Mapped[str] = mapped_column(String(20), index=True)
+    role: Mapped[str] = mapped_column(String(20), default="")
+    model: Mapped[str] = mapped_column(String(200), default="")
+    story_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    article_id: Mapped[int | None] = mapped_column(Integer)
+    attempt: Mapped[int] = mapped_column(Integer, default=1)
+    queue_wait_ms: Mapped[int | None] = mapped_column(Integer)
+    """Request created -> HTTP request started (priority gate / semaphore wait)."""
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer)
+    tokens_per_second: Mapped[float | None] = mapped_column(Float)
+    status: Mapped[str] = mapped_column(String(10), default="ok", index=True)
+    """``ok`` | ``invalid`` | ``error`` | ``timeout``."""
+    error_kind: Mapped[str | None] = mapped_column(String(30))
+    validation_error: Mapped[str | None] = mapped_column(Text)
+    """Truncated validator message when the answer was rejected."""
+    prompt_chars: Mapped[int] = mapped_column(Integer, default=0)
+    response_chars: Mapped[int] = mapped_column(Integer, default=0)
+    payload: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    """Prompt/response previews per ``telemetry.store_payloads`` (admin only)."""
+    app_version: Mapped[str] = mapped_column(String(60), default="")
+    config_hash: Mapped[str] = mapped_column(String(20), default="")
+
+
+class StageEvent(Base):
+    """One pipeline stage execution (``app.telemetry``): duration, scope and outcome."""
+
+    __tablename__ = "stage_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ref: Mapped[str] = mapped_column(String(36), index=True)
+    """Links the ``running`` row to its finish update."""
+    started_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    stage: Mapped[str] = mapped_column(String(20), index=True)
+    story_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    article_id: Mapped[int | None] = mapped_column(Integer)
+    profile: Mapped[str | None] = mapped_column(String(60))
+    status: Mapped[str] = mapped_column(String(10), default="ok", index=True)
+    """``ok`` | ``failed`` | ``skipped``."""
+    detail: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    app_version: Mapped[str] = mapped_column(String(60), default="")
+    config_hash: Mapped[str] = mapped_column(String(20), default="")

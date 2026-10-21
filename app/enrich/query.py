@@ -493,7 +493,10 @@ async def llm_queries(role: LLMRole, headlines: list[str], transport=None) -> li
     role = role.model_copy(update={"disable_thinking": True, "max_tokens": 200})
     client = LLMClient(role, transport=transport)
     result = await client.chat(
-        _llm_messages(headlines), json_schema=QUERY_SCHEMA, schema_name="search_queries"
+        _llm_messages(headlines),
+        purpose="query_llm",
+        json_schema=QUERY_SCHEMA,
+        schema_name="search_queries",
     )
     return parse_llm_queries(result.content)
 

@@ -12,6 +12,7 @@ from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app import profiles as repo
+from app import telemetry
 from app.config import StructuredOutput, SummariesConfig
 from app.llm import ChatResult, LLMBadResponse, LLMClient, LLMError, LLMHTTPError
 from app.models import (
@@ -301,6 +302,8 @@ class Summarizer:
             try:
                 result = await (client if attempt == 1 else retry_client).chat(
                     messages,
+                    purpose=telemetry.kind_purpose(kind),
+                    attempt=attempt,
                     json_schema=schema,
                     schema_name=f"story_{kind}",
                     structured_output=StructuredOutput.JSON_OBJECT if final else None,
@@ -332,6 +335,7 @@ class Summarizer:
                     reason=content_reason(result, str(exc)),
                     validation_errors=[error],
                 )
+                telemetry.update_llm_call(result.call_ref, status="invalid", validation_error=error)
                 previous, phrases = result.content, exc.phrases
                 continue
             entry.update(

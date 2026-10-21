@@ -1139,6 +1139,74 @@
         "title": "FollowupsV1",
         "type": "object"
       },
+      "FunnelV1": {
+        "examples": [
+          {
+            "failure_reasons": {
+              "enrich": [
+                [
+                  "timeout",
+                  2
+                ]
+              ]
+            },
+            "hours": 168.0,
+            "retries_per_story": {
+              "1": 6,
+              "2": 2
+            },
+            "since": "2026-10-12T08:30:00Z",
+            "steps": [
+              {
+                "count": 60,
+                "name": "articles ingested"
+              },
+              {
+                "count": 9,
+                "name": "stories formed",
+                "rate": 0.15
+              }
+            ]
+          }
+        ],
+        "properties": {
+          "failure_reasons": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Failure Reasons",
+            "type": "object"
+          },
+          "hours": {
+            "title": "Hours",
+            "type": "number"
+          },
+          "retries_per_story": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Retries Per Story",
+            "type": "object"
+          },
+          "since": {
+            "title": "Since",
+            "type": "string"
+          },
+          "steps": {
+            "default": [],
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Steps",
+            "type": "array"
+          }
+        },
+        "required": [
+          "since",
+          "hours"
+        ],
+        "title": "FunnelV1",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1257,6 +1325,144 @@
           "source"
         ],
         "title": "ImageOut",
+        "type": "object"
+      },
+      "LlmStatsV1": {
+        "examples": [
+          {
+            "busy_ms": 40000,
+            "calls": 12,
+            "categories": {
+              "summarization": 10
+            },
+            "completion_tokens": 1200,
+            "config_hashes": [
+              "0a1b2c3d4e5f"
+            ],
+            "failed": 0,
+            "hours": 24.0,
+            "invalid": 1,
+            "prompt_tokens": 9000,
+            "purposes": [
+              {
+                "calls": 10,
+                "category": "summarization",
+                "completion_tokens": 1200,
+                "errors": 0,
+                "invalid": 1,
+                "latency_ms": 40000,
+                "median_ms": 4000,
+                "p95_ms": 8100,
+                "prompt_tokens": 9000,
+                "purpose": "brief",
+                "queue_wait_ms": 300,
+                "tps": 30.0
+              }
+            ],
+            "queue_wait_ms": 300,
+            "since": "2026-10-12T08:30:00Z",
+            "slowest": [],
+            "utilization": 0.0004,
+            "versions": [
+              "abc1234"
+            ]
+          }
+        ],
+        "properties": {
+          "busy_ms": {
+            "default": 0,
+            "title": "Busy Ms",
+            "type": "integer"
+          },
+          "calls": {
+            "default": 0,
+            "title": "Calls",
+            "type": "integer"
+          },
+          "categories": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Categories",
+            "type": "object"
+          },
+          "completion_tokens": {
+            "default": 0,
+            "title": "Completion Tokens",
+            "type": "integer"
+          },
+          "config_hashes": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Config Hashes",
+            "type": "array"
+          },
+          "failed": {
+            "default": 0,
+            "title": "Failed",
+            "type": "integer"
+          },
+          "hours": {
+            "title": "Hours",
+            "type": "number"
+          },
+          "invalid": {
+            "default": 0,
+            "title": "Invalid",
+            "type": "integer"
+          },
+          "prompt_tokens": {
+            "default": 0,
+            "title": "Prompt Tokens",
+            "type": "integer"
+          },
+          "purposes": {
+            "default": [],
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Purposes",
+            "type": "array"
+          },
+          "queue_wait_ms": {
+            "default": 0,
+            "title": "Queue Wait Ms",
+            "type": "integer"
+          },
+          "since": {
+            "title": "Since",
+            "type": "string"
+          },
+          "slowest": {
+            "default": [],
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Slowest",
+            "type": "array"
+          },
+          "utilization": {
+            "default": 0.0,
+            "title": "Utilization",
+            "type": "number"
+          },
+          "versions": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Versions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "since",
+          "hours"
+        ],
+        "title": "LlmStatsV1",
         "type": "object"
       },
       "MessageV1": {
@@ -2765,6 +2971,104 @@
         "title": "StorySourceV1",
         "type": "object"
       },
+      "StoryTraceV1": {
+        "examples": [
+          {
+            "active_llm_ms": 12300,
+            "calls": [
+              {
+                "attempt": 1,
+                "latency_ms": 4000,
+                "model": "qwen3.5-9b",
+                "purpose": "brief",
+                "queue_wait_ms": 50,
+                "started_at": "2026-10-12T08:30:00Z",
+                "status": "ok"
+              }
+            ],
+            "events": [
+              {
+                "detail": {
+                  "added": 2
+                },
+                "finished_at": "2026-10-12T08:30:00Z",
+                "stage": "enrich",
+                "started_at": "2026-10-12T08:30:00Z",
+                "status": "ok"
+              }
+            ],
+            "jobs": [],
+            "llm_wait_ms": 400,
+            "stage_ms": 30000,
+            "story_id": 3,
+            "wall_ms": 420000
+          }
+        ],
+        "properties": {
+          "active_llm_ms": {
+            "default": 0,
+            "title": "Active Llm Ms",
+            "type": "integer"
+          },
+          "calls": {
+            "default": [],
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Calls",
+            "type": "array"
+          },
+          "events": {
+            "default": [],
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "jobs": {
+            "default": [],
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Jobs",
+            "type": "array"
+          },
+          "llm_wait_ms": {
+            "default": 0,
+            "title": "Llm Wait Ms",
+            "type": "integer"
+          },
+          "stage_ms": {
+            "default": 0,
+            "title": "Stage Ms",
+            "type": "integer"
+          },
+          "story_id": {
+            "title": "Story Id",
+            "type": "integer"
+          },
+          "wall_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wall Ms"
+          }
+        },
+        "required": [
+          "story_id"
+        ],
+        "title": "StoryTraceV1",
+        "type": "object"
+      },
       "StoryV1": {
         "examples": [
           {
@@ -3081,6 +3385,105 @@
         "title": "SyncResult",
         "type": "object"
       },
+      "TelemetrySummaryV1": {
+        "examples": [
+          {
+            "app_version": "abc1234",
+            "config_hash": "0a1b2c3d4e5f",
+            "funnel": [
+              {
+                "count": 4,
+                "name": "stories formed",
+                "rate": 0.5
+              }
+            ],
+            "hours": 24.0,
+            "insights": [
+              "Most LLM time goes to brief."
+            ],
+            "llm": {
+              "busy_ms": 40000,
+              "calls": 12,
+              "categories": {
+                "interpretation": 2,
+                "summarization": 10
+              },
+              "completion_tokens": 1200,
+              "config_hashes": [
+                "0a1b2c3d4e5f"
+              ],
+              "failed": 0,
+              "invalid": 1,
+              "prompt_tokens": 9000,
+              "queue_wait_ms": 300,
+              "utilization": 0.0004,
+              "versions": [
+                "abc1234"
+              ]
+            },
+            "since": "2026-10-12T08:30:00Z",
+            "stages": []
+          }
+        ],
+        "properties": {
+          "app_version": {
+            "default": "",
+            "title": "App Version",
+            "type": "string"
+          },
+          "config_hash": {
+            "default": "",
+            "title": "Config Hash",
+            "type": "string"
+          },
+          "funnel": {
+            "default": [],
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Funnel",
+            "type": "array"
+          },
+          "hours": {
+            "title": "Hours",
+            "type": "number"
+          },
+          "insights": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Insights",
+            "type": "array"
+          },
+          "llm": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Llm",
+            "type": "object"
+          },
+          "since": {
+            "title": "Since",
+            "type": "string"
+          },
+          "stages": {
+            "default": [],
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Stages",
+            "type": "array"
+          }
+        },
+        "required": [
+          "since",
+          "hours"
+        ],
+        "title": "TelemetrySummaryV1",
+        "type": "object"
+      },
       "TestFetchResult": {
         "properties": {
           "detected_type": {
@@ -3378,6 +3781,223 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/admin/telemetry/funnel": {
+      "get": {
+        "description": "The ingest -> publish funnel with failure reasons and retries (admin key).",
+        "operationId": "telemetry_funnel_api_v1_admin_telemetry_funnel_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "hours",
+            "required": false,
+            "schema": {
+              "default": 168,
+              "maximum": 2160,
+              "minimum": 0.1,
+              "title": "Hours",
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FunnelV1"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Telemetry Funnel",
+        "tags": [
+          "v1",
+          "v1-admin"
+        ]
+      }
+    },
+    "/api/v1/admin/telemetry/llm": {
+      "get": {
+        "description": "LLM usage: calls, tokens, queue wait, per-purpose table, slowest (admin key).",
+        "operationId": "telemetry_llm_api_v1_admin_telemetry_llm_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "hours",
+            "required": false,
+            "schema": {
+              "default": 24,
+              "maximum": 720,
+              "minimum": 0.1,
+              "title": "Hours",
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LlmStatsV1"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Telemetry Llm",
+        "tags": [
+          "v1",
+          "v1-admin"
+        ]
+      }
+    },
+    "/api/v1/admin/telemetry/stories/{story_id}/trace": {
+      "get": {
+        "description": "One story's full trace: stage events and LLM calls (admin key).",
+        "operationId": "telemetry_trace_api_v1_admin_telemetry_stories__story_id__trace_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "story_id",
+            "required": true,
+            "schema": {
+              "title": "Story Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoryTraceV1"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Telemetry Trace",
+        "tags": [
+          "v1",
+          "v1-admin"
+        ]
+      }
+    },
+    "/api/v1/admin/telemetry/summary": {
+      "get": {
+        "description": "System summary: stages, LLM totals and funnel for the window (admin key).",
+        "operationId": "telemetry_summary_api_v1_admin_telemetry_summary_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "hours",
+            "required": false,
+            "schema": {
+              "default": 24,
+              "maximum": 720,
+              "minimum": 0.1,
+              "title": "Hours",
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelemetrySummaryV1"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Telemetry Summary",
+        "tags": [
+          "v1",
+          "v1-admin"
+        ]
+      }
+    },
     "/api/v1/alert-rules/{rule_id}/preview": {
       "post": {
         "operationId": "preview_alert_rule_api_v1_alert_rules__rule_id__preview_post",

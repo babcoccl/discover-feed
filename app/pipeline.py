@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import httpx
 from sqlalchemy.orm import sessionmaker
 
-from app import images
+from app import images, telemetry
 from app.cluster import Clusterer, TfidfClusterer
 from app.cluster.service import ClusterRunResult, run_clustering
 from app.config import AppConfig, ContextConfig, EnrichmentConfig, LLMRole, Profile, SummariesConfig
@@ -314,7 +314,9 @@ class Pipeline:
     async def check_images(self) -> ImageRunResult | None:
         if self.images is None:
             return None
-        result = await self.images.run()
+        with telemetry.stage("images") as ev:
+            result = await self.images.run()
+            ev.detail.update(result.model_dump())
         if result.status == "ok" and result.checked:
             self._record("images", result.model_dump())
         return result
@@ -323,12 +325,15 @@ class Pipeline:
         if self.alerts is None or not ids:
             return
         try:
-            getattr(self.alerts, hook)(ids)
+            with telemetry.stage("alerts", detail={"hook": hook, "stories": len(ids)}):
+                getattr(self.alerts, hook)(ids)
         except Exception:
             logger.exception("alert evaluation (%s) failed", hook)
 
     async def extract(self, limit: int | None = None) -> ExtractRunResult:
-        result = await self.extractor.run(limit)
+        with telemetry.stage("extract") as ev:
+            result = await self.extractor.run(limit)
+            ev.detail.update(result.model_dump(exclude={"results"}))
         if result.status == "ok":
             self._record("extract", result.model_dump(exclude={"results"}))
             ok = [r.article_id for r in result.results if r.status == "ok"]
@@ -344,12 +349,14 @@ class Pipeline:
         """Stories whose text is final (extracted, failed, or ``extraction_wait_seconds``
         passed) join an existing story or start their own."""
         try:
-            result = run_clustering(
-                self.session_factory,
-                self.clusterer,
-                rebuild=rebuild,
-                extraction_wait=self.extraction_wait,
-            )
+            with telemetry.stage("cluster") as ev:
+                result = run_clustering(
+                    self.session_factory,
+                    self.clusterer,
+                    rebuild=rebuild,
+                    extraction_wait=self.extraction_wait,
+                )
+                ev.detail.update(result.model_dump(exclude={"joins", "story_ids"}))
         except Exception:
             logger.exception("clustering failed")
             return ClusterRunResult(status="error", rebuild=rebuild)

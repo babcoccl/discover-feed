@@ -128,6 +128,7 @@ def main() -> int:
         cfg.QuietHours,
         cfg.ImagesConfig,
         cfg.PerspectivesConfig,
+        cfg.TelemetryConfig,
     ]
     model_fields: set[str] = set()
     for m in models:

@@ -369,3 +369,17 @@ Top-level `images:` block:
 | `cache_width` | `640` | Cached WebP width |
 | `generic_threshold` | `3` | Same URL on this many articles of one domain = `generic` |
 | `max_pixels` | `40000000` | Decompression-bomb guard (Pillow) |
+
+## Telemetry
+
+Top-level `telemetry:` block — the [Workflow diagnostics](../operations/workflow.md)
+data collection. Off by default? No: `enabled` defaults to `true`; the Settings >
+Workflow toggle overrides it at runtime and persists.
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `enabled` | `true` | Collect `llm_calls`/`stage_events` rows |
+| `retention_days` | `14` | Both tables pruned daily to this age |
+| `store_payloads` | `failures` | `none` / `failures` / `all` — prompt+response previews kept for the inspector |
+| `payload_max_chars` | `4000` | Each payload preview clipped to this |
+| `redact` | `true` | Strip API keys and common secret patterns from stored payloads |

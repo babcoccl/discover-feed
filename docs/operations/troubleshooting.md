@@ -24,3 +24,7 @@ More per feature: [sources](../features/sources.md#troubleshooting) ·
 [enrichment](../features/enrichment/providers.md#troubleshooting) ·
 [alerts](../features/alerts.md#troubleshooting) ·
 [images](../features/images.md#troubleshooting).
+
+Workflow questions ("what is the app doing?", "why is this story slow?") have their own
+page: [Settings > Workflow](workflow.md) shows per-stage queues and durations, the story
+inspector shows one story's LLM calls and stage timeline.

@@ -24,6 +24,7 @@ app). Read-only tools are marked; the rest write state.
 | `python -m app.chat.smoke` | One Q&A question against the real chat role; `--story-id`, `--question`, `--history`, `--db` |
 | `python -m app.alerts.sink` | Standalone fake webhook + ntfy + SMTP receiver; `--port`, `--smtp-port` |
 | `python -m app.fixture_server` | Fixture feed/page/search server used by the e2e |
+| `python -m app.telemetry.report` | [Workflow](../operations/workflow.md) summary or one story's trace; `--since 24h`, `--markdown`, `--story-id`, `--db` — read-only |
 
 ## Scripts
 

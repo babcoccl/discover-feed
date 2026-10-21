@@ -371,6 +371,23 @@ def sync_story(
     else:
         story.state = StoryState.CLUSTERED.value
     story.state_reason = _reason(a, view_state, publishable, story, policy)
+    try:
+        from app import telemetry
+
+        telemetry.emit_stage(
+            "publish_gate",
+            story_id=story_id,
+            detail={
+                "state": view_state,
+                "publishable": publishable,
+                "version": latest.version,
+                "brief": a.brief,
+                "report": a.report,
+                "reason": story.state_reason,
+            },
+        )
+    except Exception:  # telemetry never affects the publish decision
+        pass
     return latest
 
 

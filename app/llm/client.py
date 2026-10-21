@@ -12,6 +12,7 @@ import threading
 import time
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -152,6 +153,8 @@ class ChatResult:
     reasoning_length: int = 0
     """Characters of ``reasoning_content`` (thinking) the model returned."""
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
+    call_ref: str = ""
+    """Telemetry id of the ``llm_calls`` row (``app.telemetry.update_llm_call``)."""
 
     @property
     def tokens_per_second(self) -> float | None:
@@ -270,10 +273,19 @@ class LLMClient:
         self,
         messages: Sequence[Message],
         *,
+        purpose: str,
+        story_id: int | None = None,
+        article_id: int | None = None,
+        attempt: int = 1,
         json_schema: dict[str, Any] | None = None,
         schema_name: str = "response",
         structured_output: StructuredOutput | None = None,
     ) -> ChatResult:
+        """``purpose`` (required) labels the call for telemetry (``app.telemetry.PURPOSES``);
+        ``story_id``/``article_id`` default to the worker's telemetry context."""
+        from app import telemetry
+
+        purpose = telemetry.check_purpose(purpose)
         payload = build_payload(
             self.role,
             messages,
@@ -283,8 +295,16 @@ class LLMClient:
         )
         key = _api_key(self.role)
         logger.debug("POST %s model=%s", self.url, self.role.model)
+        call_ref = telemetry.new_call_ref()
+        queued = time.perf_counter()
         await INFLIGHT.acquire()
+        queue_wait_ms = round((time.perf_counter() - queued) * 1000)
+        started_at = datetime.now(UTC)
         started = time.perf_counter()
+        try:
+            prompt_text = telemetry.scrub(telemetry.prompt_text_of(messages), key)
+        except Exception:
+            prompt_text = None
         try:
             async with httpx.AsyncClient(
                 transport=self.transport, timeout=httpx.Timeout(self.role.timeout_seconds)
@@ -293,24 +313,95 @@ class LLMClient:
                     self.url, json=payload, headers=build_headers(self.role)
                 )
         except httpx.TimeoutException as exc:
-            raise self._fail(
-                LLMTimeout(f"timed out after {self.role.timeout_seconds:g}s"), key
-            ) from exc
+            error = LLMTimeout(f"timed out after {self.role.timeout_seconds:g}s")
+            self._emit(
+                call_ref,
+                purpose,
+                story_id,
+                article_id,
+                attempt,
+                started_at,
+                queue_wait_ms,
+                started,
+                "timeout",
+                error.kind,
+                None,
+                prompt_text,
+            )
+            raise self._fail(error, key) from exc
         except httpx.HTTPError as exc:
-            raise self._fail(LLMConnectionError(f"{type(exc).__name__}: {exc}"), key) from exc
+            error = LLMConnectionError(f"{type(exc).__name__}: {exc}")
+            self._emit(
+                call_ref,
+                purpose,
+                story_id,
+                article_id,
+                attempt,
+                started_at,
+                queue_wait_ms,
+                started,
+                "error",
+                error.kind,
+                None,
+                prompt_text,
+            )
+            raise self._fail(error, key) from exc
         finally:
             INFLIGHT.release()
         latency_ms = round((time.perf_counter() - started) * 1000)
         if response.status_code >= 400:
             body = " ".join(response.text.split())[:300]
-            raise self._fail(
-                LLMHTTPError(response.status_code, f"HTTP {response.status_code}: {body}"), key
+            error = LLMHTTPError(response.status_code, f"HTTP {response.status_code}: {body}")
+            self._emit(
+                call_ref,
+                purpose,
+                story_id,
+                article_id,
+                attempt,
+                started_at,
+                queue_wait_ms,
+                started,
+                "error",
+                error.kind,
+                None,
+                prompt_text,
             )
+            raise self._fail(error, key)
         try:
             data = response.json()
         except ValueError:
-            raise self._fail(LLMBadResponse("response is not JSON"), key) from None
+            error = LLMBadResponse("response is not JSON")
+            self._emit(
+                call_ref,
+                purpose,
+                story_id,
+                article_id,
+                attempt,
+                started_at,
+                queue_wait_ms,
+                started,
+                "error",
+                error.kind,
+                None,
+                prompt_text,
+            )
+            raise self._fail(error, key) from None
         result = parse_response(data, latency_ms=latency_ms, default_model=self.role.model)
+        result.call_ref = call_ref
+        self._emit(
+            call_ref,
+            purpose,
+            story_id,
+            article_id,
+            attempt,
+            started_at,
+            queue_wait_ms,
+            started,
+            "ok",
+            None,
+            result,
+            prompt_text,
+        )
         if self.role.disable_thinking and result.reasoning_length:
             logger.warning(
                 "%s returned %d characters of reasoning although disable_thinking is set; "
@@ -320,10 +411,57 @@ class LLMClient:
             )
         return result
 
+    def _emit(
+        self,
+        call_ref: str,
+        purpose: str,
+        story_id: int | None,
+        article_id: int | None,
+        attempt: int,
+        started_at,
+        queue_wait_ms: int,
+        started: float,
+        status: str,
+        error_kind: str | None,
+        result: ChatResult | None,
+        prompt_text: str | None,
+    ) -> None:
+        from app import telemetry
+
+        response_text = None
+        if result is not None:
+            try:
+                response_text = telemetry.scrub(result.content, _api_key(self.role))
+            except Exception:
+                response_text = None
+        telemetry.emit_llm_call(
+            call_ref=call_ref,
+            purpose=purpose,
+            role=self.endpoint_host,
+            model=(result.model if result else self.role.model) or self.role.model,
+            story_id=story_id,
+            article_id=article_id,
+            attempt=attempt,
+            started_at=started_at,
+            finished_at=datetime.now(UTC),
+            queue_wait_ms=queue_wait_ms,
+            latency_ms=round((time.perf_counter() - started) * 1000),
+            prompt_tokens=result.prompt_tokens if result else None,
+            completion_tokens=result.completion_tokens if result else None,
+            status=status,
+            error_kind=error_kind,
+            prompt_text=prompt_text,
+            response_text=response_text,
+        )
+
     async def stream_chat(
         self,
         messages: Sequence[Message],
         *,
+        purpose: str,
+        story_id: int | None = None,
+        article_id: int | None = None,
+        attempt: int = 1,
         shared_slot: bool = True,
         wait_timeout: float | None = None,
         first_token_timeout: float | None = None,
@@ -336,12 +474,17 @@ class LLMClient:
         ``shared_slot``: the endpoint is the summarizer's, so take a priority slot of the
         process-wide cap. Timeouts default to the role's ``timeout_seconds``; the idle timeout
         applies between chunks (a stalled stream fails instead of hanging)."""
+        from app import telemetry
+
+        purpose = telemetry.check_purpose(purpose)
         payload = build_payload(self.role, messages)
         payload["stream"] = True
         payload["stream_options"] = {"include_usage": True}
         key = _api_key(self.role)
         limit = self.role.timeout_seconds
         headers = {**build_headers(self.role), "Accept": "text/event-stream"}
+        call_ref = telemetry.new_call_ref()
+        queued = time.perf_counter()
         acquired = False
         if shared_slot:
             if not INFLIGHT._try(priority=True):
@@ -349,12 +492,34 @@ class LLMClient:
                 try:
                     await asyncio.wait_for(INFLIGHT.acquire(priority=True), wait_timeout or limit)
                 except TimeoutError:
-                    raise self._fail(
-                        LLMBusy(f"the model stayed busy for {wait_timeout or limit:g}s"), key
-                    ) from None
+                    error = LLMBusy(f"the model stayed busy for {wait_timeout or limit:g}s")
+                    self._emit_stream(
+                        call_ref,
+                        purpose,
+                        story_id,
+                        article_id,
+                        attempt,
+                        queued,
+                        "error",
+                        error.kind,
+                        None,
+                        messages,
+                        key,
+                    )
+                    raise self._fail(error, key) from None
             acquired = True
+        queue_wait_ms = round((time.perf_counter() - queued) * 1000)
+        started_at = datetime.now(UTC)
         started = False
         done = StreamEvent("done", model=self.role.model)
+        stream_failed: tuple[str, str] | None = None
+
+        def _raise(error: LLMError) -> None:
+            nonlocal stream_failed
+            status = "timeout" if isinstance(error, LLMTimeout) else "error"
+            stream_failed = (status, error.kind)
+            raise self._fail(error, key)
+
         try:
             async with (
                 httpx.AsyncClient(transport=self.transport, timeout=httpx.Timeout(limit)) as client,
@@ -362,12 +527,11 @@ class LLMClient:
             ):
                 if response.status_code >= 400:
                     body = " ".join((await response.aread()).decode(errors="replace").split())
-                    raise self._fail(
+                    _raise(
                         LLMHTTPError(
                             response.status_code,
                             f"HTTP {response.status_code}: {body[:300]}",
-                        ),
-                        key,
+                        )
                     )
                 lines = response.aiter_lines().__aiter__()
                 while True:
@@ -378,7 +542,7 @@ class LLMClient:
                         break
                     except TimeoutError:
                         what = "between chunks" if started else "before the first token"
-                        raise self._fail(LLMTimeout(f"no data for {wait:g}s {what}"), key) from None
+                        _raise(LLMTimeout(f"no data for {wait:g}s {what}"))
                     chunk = _sse_data(line)
                     if chunk is None:
                         continue
@@ -391,7 +555,7 @@ class LLMClient:
                     if data.get("error"):
                         error = data["error"]
                         message = error.get("message") if isinstance(error, dict) else error
-                        raise self._fail(LLMStreamError(f"upstream error: {message}"), key)
+                        _raise(LLMStreamError(f"upstream error: {message}"))
                     usage = data.get("usage") or {}
                     done.prompt_tokens = usage.get("prompt_tokens", done.prompt_tokens)
                     done.completion_tokens = usage.get("completion_tokens", done.completion_tokens)
@@ -405,14 +569,78 @@ class LLMClient:
                             started = True
                             yield StreamEvent("delta", text=text)
         except httpx.TimeoutException as exc:
-            raise self._fail(LLMTimeout(f"timed out after {limit:g}s"), key) from exc
+            error = LLMTimeout(f"timed out after {limit:g}s")
+            stream_failed = ("timeout", error.kind)
+            raise self._fail(error, key) from exc
         except httpx.HTTPError as exc:
             error_type = LLMStreamError if started else LLMConnectionError
-            raise self._fail(error_type(f"{type(exc).__name__}: {exc}"), key) from exc
+            error = error_type(f"{type(exc).__name__}: {exc}")
+            stream_failed = ("error", error.kind)
+            raise self._fail(error, key) from exc
         finally:
             if acquired:
                 INFLIGHT.release()
+            status, error_kind = stream_failed or ("ok", None)
+            self._emit_stream(
+                call_ref,
+                purpose,
+                story_id,
+                article_id,
+                attempt,
+                queued,
+                status,
+                error_kind,
+                done,
+                messages,
+                key,
+                queue_wait_ms=queue_wait_ms,
+                started_at=started_at,
+            )
         yield done
+
+    def _emit_stream(
+        self,
+        call_ref: str,
+        purpose: str,
+        story_id: int | None,
+        article_id: int | None,
+        attempt: int,
+        queued: float,
+        status: str,
+        error_kind: str | None,
+        done: StreamEvent | None,
+        messages: Sequence[Message],
+        key: str | None,
+        *,
+        queue_wait_ms: int | None = None,
+        started_at: datetime | None = None,
+    ) -> None:
+        from app import telemetry
+
+        try:
+            prompt_text = telemetry.scrub(telemetry.prompt_text_of(messages), key)
+        except Exception:
+            prompt_text = None
+        elapsed_ms = round((time.perf_counter() - queued) * 1000)
+        telemetry.emit_llm_call(
+            call_ref=call_ref,
+            purpose=purpose,
+            role=self.endpoint_host,
+            model=(done.model if done else self.role.model) or self.role.model,
+            story_id=story_id,
+            article_id=article_id,
+            attempt=attempt,
+            started_at=started_at or datetime.now(UTC),
+            finished_at=datetime.now(UTC),
+            queue_wait_ms=queue_wait_ms,
+            latency_ms=elapsed_ms,
+            prompt_tokens=done.prompt_tokens if done else None,
+            completion_tokens=done.completion_tokens if done else None,
+            status=status,
+            error_kind=error_kind,
+            prompt_text=prompt_text,
+            response_text=None,
+        )
 
     def _fail(self, error: LLMError, key: str | None) -> LLMError:
         error.args = (redact(str(error), key),)

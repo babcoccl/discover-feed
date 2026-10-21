@@ -173,6 +173,7 @@ async def plan_tasks(
                 {"role": "system", "content": SYSTEM},
                 {"role": "user", "content": _prompt(title, brief, digests, subjects)},
             ],
+            purpose="context_planner",
             json_schema=PLANNER_SCHEMA,
             schema_name="context_planner",
         )

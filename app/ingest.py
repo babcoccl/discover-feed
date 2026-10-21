@@ -115,10 +115,22 @@ class Ingestor:
 
         ``force`` ignores the failure backoff (used for manual refreshes).
         """
+        from app import telemetry
+
         async with self._client() as client:
             results = list(
                 await asyncio.gather(*(self._run_one(client, s, force) for s in sources))
             )
+        telemetry.emit_stage(
+            "ingest",
+            detail={
+                "sources": len(results),
+                "ok": sum(r.status == "ok" for r in results),
+                "errors": sum(r.status == "error" for r in results),
+                "new_articles": sum(r.new_articles or 0 for r in results),
+            },
+            status="ok" if all(r.status != "error" for r in results) else "failed",
+        )
         try:
             record_run(
                 self.session_factory,

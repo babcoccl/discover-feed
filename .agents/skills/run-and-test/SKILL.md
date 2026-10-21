@@ -144,6 +144,13 @@ update it when fixtures or defaults change. docs/features/clustering.md has the 
   (Windows: `.venv\Scripts\python -m app.summarize.diagnose ...`). `generation_attempts` keeps the
   last 500 calls with reasons (`empty_content truncated reasoning_consumed_budget timeout
   http_<status> invalid_json validation:<rule> insufficient_text`).
+- Workflow observability (Phase 16): every LLM call carries a required `purpose=`
+  (map in `app/telemetry/__init__.py` `PURPOSES`) and lands in `llm_calls`; non-LLM
+  work lands in `stage_events`. Writes go through a batched daemon writer that never
+  blocks or fails the pipeline. Admin pages: Settings > Workflow (system view) +
+  `/p/{slug}/settings/workflow/story/{id}` (per-story Gantt); admin API
+  `/api/v1/admin/telemetry/*`; CLI `python -m app.telemetry.report --since 24h --markdown [--story-id N]`.
+  `telemetry:` config block + `AppSetting` toggle; retention via daily `telemetry-prune` job.
 - Docker E2E (fresh volume, fixture feed server, fake LLM; stdlib only, works on Windows):
   `python scripts/docker_e2e.py [--timeout 900] [--keep] [--out timeline.txt]` uses
   `docker-compose.yml` + `docker-compose.fake-llm.yml`, waits for published stories, asserts no

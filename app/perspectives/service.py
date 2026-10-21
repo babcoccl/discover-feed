@@ -22,6 +22,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from app import telemetry
 from app.labels import publisher_of, via_of
 from app.llm.client import LLMClient
 from app.models import (
@@ -330,11 +331,19 @@ class PerspectiveService:
         for _try in range(1, TRIES + 1):
             messages = digest_messages(source, claim, previous=previous, error=error)
             result = await self.client.chat(
-                messages, json_schema=DIGEST_SCHEMA, schema_name="digest"
+                messages,
+                purpose="perspective_digest",
+                article_id=article.id,
+                attempt=_try,
+                json_schema=DIGEST_SCHEMA,
+                schema_name="digest",
             )
             try:
                 digest = validate_digest(result.content, text)
             except SummaryInvalid as exc:
+                telemetry.update_llm_call(
+                    result.call_ref, status="invalid", validation_error=str(exc)
+                )
                 previous, error = result.content, str(exc)
                 continue
             if not dry_run:
@@ -380,7 +389,7 @@ class PerspectiveService:
     ) -> PerspectiveOutcome:
         """Digests for every member, then the synthesis; writes nothing on ``dry_run``."""
         factory = session_factory or self.session_factory
-        with factory() as session:
+        with factory() as session, telemetry.story_context(story_id):
             story = session.get(Story, story_id)
             if story is None or story.state != StoryState.PUBLISHED.value:
                 return PerspectiveOutcome(story_id, "skipped", "not published")
@@ -471,13 +480,20 @@ class PerspectiveService:
         for _try in range(1, TRIES + 1):
             messages = synthesis_messages(title, claim, digests, previous=previous, error=error)
             result = await self.client.chat(
-                messages, json_schema=SYNTH_SCHEMA, schema_name="perspectives"
+                messages,
+                purpose="perspective_synthesis",
+                attempt=_try,
+                json_schema=SYNTH_SCHEMA,
+                schema_name="perspectives",
             )
             try:
                 synthesis = validate_synthesis(
                     result.content, digests, texts, title=title, guard=guard
                 )
             except SummaryInvalid as exc:
+                telemetry.update_llm_call(
+                    result.call_ref, status="invalid", validation_error=str(exc)
+                )
                 previous, error = result.content, str(exc)
                 continue
             return synthesis, None

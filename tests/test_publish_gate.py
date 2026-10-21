@@ -218,7 +218,9 @@ def test_inflight_cap_is_global() -> None:
     clients = [LLMClient(ROLE, transport=FakeLLM(delay=0.05).transport()) for _ in range(3)]
 
     async def go():
-        await asyncio.gather(*(c.chat([{"role": "user", "content": "hi"}]) for c in clients))
+        await asyncio.gather(
+            *(c.chat([{"role": "user", "content": "hi"}], purpose="brief") for c in clients)
+        )
 
     asyncio.run(go())
     assert INFLIGHT.peak == 1

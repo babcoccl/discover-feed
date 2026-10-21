@@ -21,6 +21,7 @@ stories only and never the extracted article text.
 | `GET /api/v1/profiles/{slug}/sources.opml` | OPML export (POST imports) |
 | `GET /api/v1/sources`, `/sources/discover`, `/sources/test`, `/sources/health` | source management (writes need the admin key) |
 | `GET /api/v1/stories/{id}/ask`, `/stories/{id}/followups`, `/conversations/{id}`, `/chat` | [Story Q&A](../features/qa.md) |
+| `GET /api/v1/admin/telemetry/summary`, `.../llm`, `.../funnel`, `.../stories/{id}/trace` | [workflow](../operations/workflow.md) telemetry (admin key) |
 | `GET /api/v1/health`, `/api/v1/version` | |
 
 ```bash
