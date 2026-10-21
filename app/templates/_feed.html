@@ -19,9 +19,11 @@
   {% for b in blockers %}<p>{{ b }}</p>{% endfor %}
 </div>
 {% endif %}
-<div class="pointer-events-none sticky top-2 z-10 flex h-0 justify-center" aria-live="polite">
+{%- set pill_params = (["topic=" ~ topic.id] if topic else []) + (["view=articles"] if view == "articles" else []) -%}
+{%- set pill_query = ("?" ~ pill_params | join("&")) if pill_params else "" -%}
+<div class="pointer-events-none sticky top-2 z-10 flex h-0 items-start justify-center" aria-live="polite">
   <button type="button" id="new-stories" hidden data-new-stories
-          hx-get="/p/{{ profile.slug }}/feed{% if topic %}?topic={{ topic.id }}{% endif %}" hx-target="#feed"
+          hx-get="/p/{{ profile.slug }}/feed{{ pill_query }}" hx-target="#feed" hx-swap="innerHTML show:top"
           class="pointer-events-auto rounded-full bg-sky-700 px-4 py-1.5 text-sm font-semibold text-white shadow-lg hover:bg-sky-800 dark:bg-sky-600"></button>
 </div>
 {% if page.items %}
