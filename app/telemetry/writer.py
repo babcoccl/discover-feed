@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 BATCH = 200
 FLUSH_SECONDS = 1.0
 
-_queue: "queue.Queue[tuple[str, dict[str, Any]]]" = queue.Queue()
+_queue: "queue.Queue[tuple[str, dict[str, Any], Any]]" = queue.Queue()
 _session_factory = None
 _warned = threading.local()
 
@@ -27,7 +27,9 @@ def configure(session_factory) -> None:
 def submit(kind: str, values: dict[str, Any]) -> None:
     """Enqueue one write; never blocks the caller beyond a queue put."""
     try:
-        _queue.put_nowait((kind, values))
+        # bind the destination now: if configure() is called again before the
+        # daemon drains this item it still lands in the DB it was queued for
+        _queue.put_nowait((kind, values, _session_factory))
     except Exception as exc:
         _warn("submit", exc)
 
@@ -39,7 +41,7 @@ def _warn(what: str, exc: Exception) -> None:
     logger.warning("telemetry writer dropped %s: %s", what, exc)
 
 
-def _drain(max_items: int) -> list[tuple[str, dict[str, Any]]]:
+def _drain(max_items: int) -> list[tuple[str, dict[str, Any], Any]]:
     items = []
     while len(items) < max_items:
         try:
@@ -94,16 +96,23 @@ def _apply(session, items: list[tuple[str, dict[str, Any]]]) -> None:
 
 def _flush_once() -> int:
     items = _drain(BATCH)
-    if not items or _session_factory is None:
+    if not items:
         return 0
-    try:
-        with _session_factory() as session:
-            _apply(session, items)
-            session.commit()
-        return len(items)
-    except Exception as exc:
-        _warn("flush", exc)
-        return 0
+    by_factory: dict[Any, list[tuple[str, dict[str, Any]]]] = {}
+    for kind, values, factory in items:
+        by_factory.setdefault(factory, []).append((kind, values))
+    written = 0
+    for factory, group in by_factory.items():
+        if factory is None:
+            continue
+        try:
+            with factory() as session:
+                _apply(session, group)
+                session.commit()
+            written += len(group)
+        except Exception as exc:
+            _warn("flush", exc)
+    return written
 
 
 def _loop() -> None:

@@ -264,6 +264,142 @@ def test_summary_shape(telemetry_on):
     assert data["llm"]["calls"] >= 1 and data["funnel"]
 
 
+def test_status_vocabulary_normalized(telemetry_on):
+    """Subsystem outcomes map onto the canonical status column (done -> ok,
+    error -> failed); the raw outcome stays in detail."""
+    telemetry.emit_stage("context", story_id=1, status="done")
+    with telemetry.stage("context", story_id=1, detail={"status": "done"}):
+        pass
+    telemetry.emit_stage("images", status="ok")
+    rows = _stages(telemetry_on)
+    by_stage = [r for r in rows if r.stage == "context"]
+    assert all(r.status == "ok" for r in by_stage)
+    assert by_stage[1].detail["status"] == "done"  # domain outcome preserved
+
+    with telemetry.stage("images") as ev:
+        ev.detail.update({"status": "error", "checked": 2, "fetched": 0})
+    rows = [r for r in _stages(telemetry_on) if r.stage == "images" and r.status == "failed"]
+    assert rows and rows[0].detail["status"] == "error"
+
+    from app.telemetry import queries
+
+    queries._cache.clear()
+    with telemetry_on() as session:
+        flow = {s["stage"]: s for s in queries.flow_overview(session, hours=1)}
+    assert flow["context"]["done"] == 2 and flow["context"]["failed"] == 0
+    assert flow["images"]["done"] == 1 and flow["images"]["failed"] == 1
+
+
+def test_image_sweep_without_fetches_is_not_a_failure(telemetry_on, tmp_path):
+    """A sweep that checks articles whose URLs are all already validated is "ok",
+    not "error" — and its reason lands on the Workflow table."""
+    import httpx
+
+    from app.config import ImagesConfig
+    from app.images.cache import image_key
+    from app.images.service import ImageWorker
+    from app.models import ImageAsset
+    from tests.pipeline_helpers import T0, add_article
+
+    aid = add_article(telemetry_on, url="https://pub.example/a", text="t")
+    now = T0 + timedelta(hours=1)
+    with telemetry_on() as session:
+        from app.models import Article
+
+        article = session.get(Article, aid)
+        article.image_url = "https://cdn.example/pic.jpg"
+        article.page_scanned_at = now
+        for url in (
+            "https://cdn.example/pic.jpg",
+            "https://pub.example/apple-touch-icon.png",
+            "https://pub.example/favicon.ico",
+        ):
+            session.add(
+                ImageAsset(
+                    url=url,
+                    key=image_key(url),
+                    kind="photo",
+                    status="ok",
+                    checked_at=now,
+                    cached_bytes=1,
+                )
+            )
+        session.commit()
+
+    def transport(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"unexpected fetch: {request.url}")
+
+    worker = ImageWorker(
+        telemetry_on,
+        ImagesConfig(),
+        tmp_path / "images",
+        transport=httpx.MockTransport(transport),
+        resolver=lambda host: ["93.184.216.34"],
+        sleep=lambda s: asyncio.sleep(0),
+        now=lambda: now,
+    )
+    with telemetry.stage("images") as ev:
+        result = asyncio.run(worker.run())
+        ev.detail.update(result.model_dump())
+    assert (result.status, result.checked, result.fetched, result.rejected) == (
+        "ok",
+        1,
+        0,
+        0,
+    )
+    assert result.reason == "all_urls_seen"
+
+    from app.telemetry import queries
+
+    _stages(telemetry_on)
+    queries._cache.clear()
+    with telemetry_on() as session:
+        flow = {s["stage"]: s for s in queries.flow_overview(session, hours=1)}
+    assert flow["images"]["done"] == 1 and flow["images"]["failed"] == 0
+    assert ("all_urls_seen", 1) in flow["images"]["reasons"]
+
+
+def test_image_sweep_error_keeps_counts(telemetry_on, tmp_path):
+    """A real failure keeps the counts it produced and records the exception."""
+    import httpx
+
+    from app.config import ImagesConfig
+    from app.images.service import ImageWorker
+    from tests.pipeline_helpers import T0, add_article
+
+    aid = add_article(telemetry_on, url="https://pub.example/a", text="t")
+    with telemetry_on() as session:
+        from app.models import Article
+
+        session.get(Article, aid).page_scanned_at = T0
+        session.commit()
+    worker = ImageWorker(
+        telemetry_on,
+        ImagesConfig(),
+        tmp_path / "images",
+        transport=httpx.MockTransport(lambda r: httpx.Response(404)),
+        resolver=lambda host: ["93.184.216.34"],
+        sleep=lambda s: asyncio.sleep(0),
+        now=lambda: T0,
+    )
+    worker._mark_generic = lambda *a: (_ for _ in ()).throw(RuntimeError("db locked"))
+    result = asyncio.run(worker.run())
+    assert result.status == "error" and result.checked == 1
+    assert "db locked" in (result.error or "")
+
+
+def test_data_span_label(telemetry_on):
+    from app.telemetry import queries
+
+    telemetry.emit_stage("images", status="ok")
+    _stages(telemetry_on)
+    queries._cache.clear()
+    with telemetry_on() as session:
+        span = queries.data_span(session, hours=24)
+    assert span["oldest_at"] is not None
+    assert "24h" in span["label"]
+
+
 # --- pages + API + CLI ------------------------------------------------------------
 
 

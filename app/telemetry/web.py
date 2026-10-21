@@ -27,6 +27,7 @@ def _context(request: Request, session, profile, hours: float) -> dict:
         hours=hours,
         enabled=telemetry.enabled(),
         flow=queries.flow_overview(session, hours=hours),
+        span=queries.data_span(session, hours=hours),
         llm=queries.llm_stats(session, hours=hours),
         funnel=queries.funnel(session, hours=hours),
         insights=queries.insights(session, hours=hours),

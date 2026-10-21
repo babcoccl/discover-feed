@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -37,13 +37,20 @@ class ImageRunResult(BaseModel):
     checked: int = 0
     """Articles marked checked."""
     fetched: int = 0
-    """Image URLs fetched (each URL at most once)."""
+    """Image URLs fetched (each URL at most once; already-validated URLs do not count)."""
     ok: int = 0
     rejected: int = 0
     stories: int = 0
     """Stories re-published."""
     remaining: int = 0
     """Backfill: articles still to do."""
+    reason: str | None = None
+    """Why the sweep fetched nothing (``nothing_to_check`` | ``all_urls_seen``)."""
+    reasons: dict[str, int] = Field(default_factory=dict)
+    """Per-URL rejection/failure reason counts (``http_404``, ``timeout``, SSRF
+    guards like ``private_ip``/``dns_error``, ``too_large``, ``svg``, ``undecodable``...)."""
+    error: str | None = None
+    """The exception that ended the sweep early — set only for real failures."""
 
 
 class ImageWorker:
@@ -125,11 +132,13 @@ class ImageWorker:
             row.reason = exc.reason
             row.checked_at = now
             result.rejected += 1
+            result.reasons[exc.reason] = result.reasons.get(exc.reason, 0) + 1
             return row
         except Exception as exc:  # undecodable in a way Pillow did not classify
             logger.info("image %s unusable: %s", url, exc)
             row.status, row.reason, row.checked_at = "rejected", "undecodable", now
             result.rejected += 1
+            result.reasons["undecodable"] = result.reasons.get("undecodable", 0) + 1
             return row
         row.status, row.reason = "ok", None
         row.content_type, row.width, row.height = got.content_type, got.width, got.height
@@ -236,10 +245,17 @@ class ImageWorker:
                     result.remaining = session.scalar(
                         select(func.count()).select_from(self._backfill_query(since).subquery())
                     )
+            if result.fetched == 0:
+                # zero-fetch sweep: either the queue was empty or every candidate URL
+                # already had an ImageAsset verdict (ok/rejected/cooling-down) — never a failure
+                result.reason = "nothing_to_check" if result.checked == 0 else "all_urls_seen"
             return result
-        except Exception:
+        except Exception as exc:
             logger.exception("image run failed")
-            return ImageRunResult(status="error", checked=result.checked)
+            # keep the counts the sweep actually produced; error carries the cause
+            result.status = "error"
+            result.error = f"{type(exc).__name__}: {exc}"[:300]
+            return result
         finally:
             self._lock.release()
 

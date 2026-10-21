@@ -6,7 +6,7 @@
 
 <section class="mb-6">
   <div class="mb-2 flex items-baseline justify-between">
-    <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Pipeline flow · last {{ (hours / 24) | round(0) if hours >= 24 else hours }}{{ "d" if hours >= 24 else "h" }}</h2>
+    <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Pipeline flow · {{ span.label }}</h2>
     <span class="text-xs text-slate-400">version {{ telemetry.app_version }} · config {{ telemetry.config_hash }}</span>
   </div>
   <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
@@ -39,7 +39,12 @@
           <td class="px-4 py-2 text-right">{{ ms(s.median_ms) }}</td>
           <td class="px-4 py-2 text-right">{{ ms(s.p95_ms) }}</td>
           <td class="px-4 py-2 text-slate-500">{% if s.oldest_wait_at %}<time datetime="{{ s.oldest_wait_at.isoformat() }}">{{ s.oldest_wait_at | reltime }}</time>{% else %}—{% endif %}</td>
-          <td class="px-4 py-2 max-w-64 truncate text-slate-500" title="{{ s.top_reason }}">{{ s.top_reason or "—" }}</td>
+          <td class="px-4 py-2 max-w-64 text-slate-500">
+            <span class="block truncate" title="{{ s.top_reason }}">{{ s.top_reason or "—" }}</span>
+            {% if s.reasons %}
+            <span class="block truncate text-xs text-slate-400" title="{% for r, n in s.reasons %}{{ r }} ({{ n }}){% if not loop.last %}, {% endif %}{% endfor %}">{% for r, n in s.reasons %}{{ r }}×{{ n }}{% if not loop.last %}, {% endif %}{% endfor %}</span>
+            {% endif %}
+          </td>
         </tr>
         {% else %}
         <tr><td colspan="9" class="px-4 py-6 text-center text-slate-400">No stage events yet.</td></tr>

@@ -509,6 +509,10 @@ class ContextFinder:
                     reason=result.reason,
                     candidates=len(result.candidates),
                     accepted=len(result.accepted),
+                    added=result.added,
+                    rejects=self._reject_breakdown(result),
+                    limiter=self._limiter(result),
+                    waiting=result.waiting or None,
                     dry_run=dry_run,
                 )
         except Exception as exc:
@@ -1432,6 +1436,7 @@ class ContextFinder:
                 story.context_attempts = (story.context_attempts or 0) + 1
                 delay = retry_delay(story.context_attempts)
                 result.retry_at = now + delay
+                result.status = "retry"
                 story.context_status = "retry"
                 story.context_next_attempt_at = result.retry_at
                 story.context_reason = result.reason or f"{UNAVAILABLE} no provider answered"
@@ -1639,6 +1644,26 @@ class ContextFinder:
             "providers": providers,
             "days": days,
         }
+
+    @staticmethod
+    def _reject_breakdown(result: ContextResult) -> dict[str, int] | None:
+        """Per-reason rejection counts across this run's candidates (same_event,
+        judge_rejected, quote_not_verbatim, domain_cap, ...), for stage_events detail."""
+        counts = Counter(c.reason for c in result.candidates if c.reason)
+        return dict(counts.most_common()) or None
+
+    @staticmethod
+    def _limiter(result: ContextResult) -> str | None:
+        """What throttled this run most: the dominant ``waiting`` reason (llm slot,
+        provider cooldown, budget, priority gate) or, absent waits, the skipped-search
+        reason (``cooldown`` / ``budget`` / ``context_budget``)."""
+        waits = Counter()
+        for w in result.waiting:
+            waits[w.get("reason") or "?"] += w.get("seconds") or 0
+        if waits:
+            return waits.most_common(1)[0][0]
+        skipped = Counter(s.get("skipped") for s in result.searches if s.get("skipped"))
+        return skipped.most_common(1)[0][0] if skipped else None
 
 
 def coverage_reason(result: ContextResult) -> str | None:

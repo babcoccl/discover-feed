@@ -11,8 +11,10 @@ from typing import Any
 
 from sqlalchemy import func, select
 
+from app import telemetry
 from app.models import (
     Article,
+    ContextCandidate,
     LlmCall,
     StageEvent,
     Story,
@@ -63,9 +65,34 @@ def _top_reason(rows) -> str | None:
     counts: dict[str, int] = {}
     for r in rows:
         reason = (r.detail or {}).get("reason") or (r.detail or {}).get("error")
-        if r.status in ("failed", "error", "invalid") and reason:
+        if telemetry.canonical_status(r.status) == "failed" and reason:
             counts[str(reason)[:120]] = counts.get(str(reason)[:120], 0) + 1
     return max(counts, key=counts.get) if counts else None
+
+
+def _reason_counts(rows) -> list[tuple[str, int]]:
+    """Per-reason counts over a stage's finished events: ``detail.reason`` (the
+    run-level outcome — all_rejected, all_urls_seen...) plus the nested
+    breakdowns ``detail.rejects`` (context) and ``detail.reasons`` (images)."""
+    from collections import Counter
+
+    counts: Counter[str] = Counter()
+    for r in rows:
+        if r.status == "running":
+            continue
+        detail = r.detail or {}
+        reason = detail.get("reason")
+        if reason:
+            counts[str(reason)[:120]] += 1
+        limiter = detail.get("limiter")
+        if limiter:
+            counts[f"limiter:{str(limiter)[:100]}"] += 1
+        for key in ("rejects", "reasons"):
+            nested = detail.get(key)
+            if isinstance(nested, dict):
+                for k, n in nested.items():
+                    counts[str(k)[:120]] += n or 0
+    return counts.most_common(6)
 
 
 # --- flow overview --------------------------------------------------------------------------
@@ -131,8 +158,8 @@ def flow_overview(session, *, hours: float = 24) -> list[dict[str, Any]]:
         result = []
         for name in stages:
             evs = by_stage.get(name, [])
-            done = [e for e in evs if e.status in ("ok", "skipped")]
-            failed = [e for e in evs if e.status in ("failed", "error")]
+            done = [e for e in evs if telemetry.canonical_status(e.status) in ("ok", "skipped")]
+            failed = [e for e in evs if telemetry.canonical_status(e.status) == "failed"]
             running = [e for e in evs if e.status == "running"]
             ds = _durations(evs)
             wait = waiting.get(name, {"count": 0, "oldest_at": None})
@@ -147,6 +174,7 @@ def flow_overview(session, *, hours: float = 24) -> list[dict[str, Any]]:
                     "p95_ms": _percentile(ds, 0.95),
                     "oldest_wait_at": wait["oldest_at"],
                     "top_reason": _top_reason(evs),
+                    "reasons": _reason_counts(evs),
                 }
             )
         order = {
@@ -359,10 +387,6 @@ def funnel(session, *, hours: float = 24 * 7) -> dict[str, Any]:
         events = _window(session, StageEvent, hours)
         reasons: dict[str, dict[str, int]] = {}
         for e in events:
-            if e.status not in ("failed", "error") and not (
-                (e.detail or {}).get("reason") and e.status == "ok" and e.stage == "enrich"
-            ):
-                pass
             reason = (e.detail or {}).get("reason") or (e.detail or {}).get("error")
             if reason:
                 bucket = reasons.setdefault(e.stage, {})
@@ -398,6 +422,51 @@ def funnel(session, *, hours: float = 24 * 7) -> dict[str, Any]:
     return _cached(("funnel", hours), build)
 
 
+def data_span(session, *, hours: float = 24) -> dict[str, Any]:
+    """How much of the requested window actually has telemetry rows — the Workflow
+    table's label shows the real data span, not just the ``hours`` parameter."""
+
+    def build():
+        now = datetime.now(UTC)
+        since = now - timedelta(hours=hours)
+        oldest = min(
+            (
+                v
+                for v in (
+                    session.scalar(
+                        select(func.min(StageEvent.started_at)).where(
+                            StageEvent.started_at >= since
+                        )
+                    ),
+                    session.scalar(
+                        select(func.min(LlmCall.started_at)).where(LlmCall.started_at >= since)
+                    ),
+                )
+                if v
+            ),
+            default=None,
+        )
+        if oldest is None:
+            label = f"last {_fmt_span(hours)} (no events)"
+            return {"hours": hours, "oldest_at": None, "label": label}
+        span_h = (now - oldest).total_seconds() / 3600
+        if span_h >= hours * 0.95:
+            label = f"last {_fmt_span(hours)}"
+        else:
+            label = f"data spans {_fmt_span(span_h)} of {_fmt_span(hours)} window"
+        return {"hours": hours, "oldest_at": oldest, "label": label}
+
+    return _cached(("span", hours), build)
+
+
+def _fmt_span(hours: float) -> str:
+    if hours >= 48:
+        return f"{hours / 24:g}d"
+    if hours >= 1:
+        return f"{hours:g}h"
+    return f"{int(hours * 60)}m"
+
+
 # --- story trace ----------------------------------------------------------------------------
 
 
@@ -424,6 +493,9 @@ def story_trace(session, story_id: int) -> dict[str, Any]:
     )
     jobs = list(session.scalars(select(SummaryJob).where(SummaryJob.story_id == story_id)))
     story = session.get(Story, story_id)
+    for e in events:
+        # display value: canonical for rows written before the status normalization
+        e.canonical = telemetry.canonical_status(e.status)
 
     first_at = None
     last_at = None
@@ -439,12 +511,24 @@ def story_trace(session, story_id: int) -> dict[str, Any]:
     wall_ms = None
     if first_at and last_at:
         wall_ms = int((last_at - first_at).total_seconds() * 1000)
+    context_rejects = dict(
+        session.execute(
+            select(ContextCandidate.reason, func.count())
+            .where(
+                ContextCandidate.story_id == story_id,
+                ContextCandidate.decision == "rejected",
+                ContextCandidate.reason != "",
+            )
+            .group_by(ContextCandidate.reason)
+        ).all()
+    )
     return {
         "story": story,
         "events": events,
         "calls": calls,
         "articles": articles,
         "jobs": jobs,
+        "context_rejects": context_rejects,
         "active_llm_ms": active_ms,
         "llm_wait_ms": waiting_ms,
         "stage_ms": stage_ms,

@@ -69,6 +69,41 @@ STAGES = (
     "alerts",
 )
 
+STATUS_ALIASES = {
+    # completed
+    "ok": "ok",
+    "done": "ok",
+    "cached": "ok",
+    "reused": "ok",
+    "generated": "ok",
+    # did not run / ran without producing work
+    "skipped": "skipped",
+    "busy": "skipped",
+    "paused": "skipped",
+    "disabled": "skipped",
+    # unsuccessful attempt ("retry" reschedules, but this attempt still failed)
+    "failed": "failed",
+    "error": "failed",
+    "invalid": "failed",
+    "timeout": "failed",
+    "retry": "failed",
+    "running": "running",
+}
+"""Each subsystem's own outcome vocabulary -> the ``stage_events.status`` set
+(``ok`` | ``failed`` | ``skipped`` | ``running``)."""
+
+
+def canonical_status(status: str | None) -> str:
+    """Normalize a stage outcome onto the canonical ``stage_events.status`` set:
+    ``done`` (enrich/context) -> ``ok``, ``error`` (images/cluster) -> ``failed``,
+    ``busy``/``paused``/``disabled`` -> ``skipped``. Unknown values pass through so
+    nothing is silently relabeled; ``status=""`` (a finished run that recorded no
+    outcome) counts as ``ok``."""
+    if not status:
+        return "ok"
+    return STATUS_ALIASES.get(status, status)
+
+
 _KIND_PURPOSE = {"summary": "brief", "brief": "brief", "report": "report", "followups": "followups"}
 """The ``summary`` prompt inside brief generation counts as brief work."""
 
@@ -436,7 +471,7 @@ def emit_stage(
                 "story_id": story_id if story_id is not None else current_story(),
                 "article_id": article_id if article_id is not None else current_article(),
                 "profile": profile or current_profile(),
-                "status": status,
+                "status": canonical_status(status),
                 "detail": detail,
                 "app_version": _app_version,
                 "config_hash": _config_hash,
@@ -503,10 +538,16 @@ class stage:
 
     def __exit__(self, exc_type, exc, tb) -> bool:
         finished = datetime.now(UTC)
-        status = self.detail.pop("status", "ok")
+        raw = self.detail.pop("status", "ok")
         if exc_type is not None:
             status = "failed"
             self.detail["error"] = f"{exc_type.__name__}: {exc}"[:300]
+        else:
+            status = canonical_status(raw)
+            if raw != status:
+                # keep the subsystem's own outcome ("done", "error", "retry") in
+                # detail while the status column stays canonical
+                self.detail["status"] = raw
         self.detail["duration_ms"] = round((time.perf_counter() - self._t0) * 1000)
         _update_stage(self._ref, finished_at=finished, status=status, detail=dict(self.detail))
         return False
