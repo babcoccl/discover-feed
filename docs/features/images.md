@@ -20,7 +20,9 @@ Cards show the best validated image of a story, never a repeated placeholder
    tracking pixels (tiny, or `pixel`/`spacer`/`beacon` URLs), anything under
    320x180. Failures are recorded per URL (`images.reason`). The same URL
    on 3+ articles of one domain (a site logo/seal) is marked `generic` and only
-   used when nothing else is available.
+   used when nothing else is available. Each URL is validated and stored once
+   (`images.key` = hash of the URL): re-encountering a stored row is a cache
+   hit (`cache_hits` in the run detail), never a failure.
 3. **Cache and proxy** (`images.cache`, default on): each validated image is
    downloaded once, resized to at most 640 px wide as WebP into
    `DISCOVER_IMAGES_DIR` (`/data/images` in Docker) keyed by a hash of its URL,

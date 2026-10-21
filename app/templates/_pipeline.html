@@ -49,7 +49,7 @@
       <tr>
         <td class="px-4 py-2 font-medium">Images</td>
         <td class="whitespace-nowrap px-4 py-2">{{ run_cell("images") }}</td>
-        <td class="px-4 py-2 text-slate-600 dark:text-slate-400">{% if image_run %}{{ image_run.checked }} article(s) checked: {{ image_run.ok }} valid, {{ image_run.rejected }} rejected image(s){% endif %}{% if image_backfill %}; backfill: {{ image_backfill.checked }} checked, {{ image_backfill.remaining }} left{% endif %}</td>
+        <td class="px-4 py-2 text-slate-600 dark:text-slate-400">{% if image_run %}{{ image_run.checked }} article(s) checked: {{ image_run.ok }} valid, {{ image_run.rejected }} rejected image(s){% if image_run.cache_hits %}, {{ image_run.cache_hits }} already cached{% endif %}{% endif %}{% if image_backfill %}; backfill: {{ image_backfill.checked }} checked, {{ image_backfill.remaining }} left{% if image_backfill.cache_hits %}, {{ image_backfill.cache_hits }} already cached{% endif %}{% endif %}</td>
       </tr>
       {%- set sm = summarizer %}
       <tr data-summarizer>

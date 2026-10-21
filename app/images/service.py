@@ -17,6 +17,7 @@ from pathlib import Path
 import httpx
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import ImagesConfig
@@ -40,6 +41,9 @@ class ImageRunResult(BaseModel):
     """Image URLs fetched (each URL at most once; already-validated URLs do not count)."""
     ok: int = 0
     rejected: int = 0
+    cache_hits: int = 0
+    """URLs whose ImageAsset row already existed (validated earlier, or stored by another
+    worker between our check and our insert): reused, not refetched — never a failure."""
     stories: int = 0
     """Stories re-published."""
     remaining: int = 0
@@ -98,16 +102,37 @@ class ImageWorker:
     async def asset(
         self, client: httpx.AsyncClient, session: Session, url: str, kind: str, result
     ) -> ImageAsset:
-        row = session.scalar(select(ImageAsset).where(ImageAsset.url == url))
+        # The key is deterministic (sha256 of the URL), so a stored row for this image
+        # is found by URL or key before we try to insert.
+        key = image_key(url)
+        row = session.scalar(
+            select(ImageAsset).where(or_(ImageAsset.url == url, ImageAsset.key == key))
+        )
         now = self.now()
         if row is not None:
             stale = row.status == "failed" and now - row.checked_at >= RETRY_FAILED_AFTER
             uncached = row.status == "ok" and self.config.cache and not row.cached_bytes
             if not stale and not uncached:
+                result.cache_hits += 1
                 return row
         else:
-            row = ImageAsset(url=url, key=image_key(url), kind=kind, status="failed")
-            session.add(row)
+            # INSERT OR IGNORE, not session.add: autoflush is off, so a pending row is
+            # invisible to the SELECTs above — the same URL requested twice in one run
+            # would insert twice and die on UNIQUE(images.key). An immediate insert
+            # keeps lookups honest, and a row stored by another worker between our
+            # SELECT and our INSERT is a cache hit, not a failure.
+            stored = session.execute(
+                sqlite_insert(ImageAsset)
+                .values(url=url, key=key, kind=kind, status="failed")
+                .on_conflict_do_nothing()
+            )
+            row = session.scalar(
+                select(ImageAsset).where(or_(ImageAsset.url == url, ImageAsset.key == key))
+            )
+            if not stored.rowcount:
+                result.cache_hits += 1
+                logger.debug("image %s already stored (key %s)", url, key)
+                return row or ImageAsset(url=url, key=key, kind=kind, status="failed")
         icon = kind == "icon"
         result.fetched += 1
         try:

@@ -19,7 +19,7 @@ from app.images.fetch import Rejected, fetch_image
 from app.images.meta import page_images
 from app.images.safety import Blocked, Guard, _GuardedBackend, guarded_get_stream, is_public
 from app.images.select import story_image
-from app.images.service import ImageWorker, image_stats
+from app.images.service import ImageRunResult, ImageWorker, image_stats
 from app.main import create_app
 from app.models import Article, ImageAsset, Story
 from tests.pipeline_helpers import T0, add_article
@@ -476,6 +476,107 @@ def test_backfill_is_rate_limited_resumable_and_idempotent(session_factory, tmp_
     with session_factory() as session:
         assert session.get(Article, old).image_checked_at is None  # outside the window
         assert all(session.get(Article, a).image_source == "page" for a in pages)
+
+
+def test_already_stored_image_is_reused_as_cache_hit(session_factory, tmp_path) -> None:
+    """An ImageAsset row that already exists is reused: the worker neither re-inserts
+    it (UNIQUE constraint on images.key) nor counts a failure — it is a cache hit."""
+    server = Server()
+    stored = "https://cdn.example/stored.jpg"
+    now = T0 + timedelta(hours=1)
+    aid = add_article(session_factory, url="https://pub.example/a", text="t")
+    set_images(session_factory, aid, feed=stored)
+    with session_factory() as session:
+        session.add(
+            ImageAsset(
+                url=stored,
+                key=image_key(stored),
+                kind="photo",
+                status="ok",
+                checked_at=now,
+                cached_bytes=1,
+                width=800,
+                height=450,
+            )
+        )
+        session.commit()
+    result = asyncio.run(worker(session_factory, tmp_path, server).run())
+    assert result.status == "ok" and result.error is None
+    assert result.cache_hits >= 1 and stored not in server.hits  # reused, not refetched
+    with session_factory() as session:
+        rows = list(session.scalars(select(ImageAsset).where(ImageAsset.url == stored)))
+        assert len(rows) == 1 and rows[0].key == image_key(stored)
+        assert session.get(Article, aid).image_checked_at is not None
+
+
+def test_icon_url_matching_domain_default_is_not_inserted_twice(session_factory, tmp_path) -> None:
+    """Regression: a declared icon equal to a domain default is requested twice in one
+    article check; autoflush is off, so without an eager flush the second lookup
+    inserted a second row and the commit died on UNIQUE(images.key)."""
+    server = Server()  # every URL 404s
+    aid = add_article(session_factory, url="https://pub.example/a", text="t")
+    set_images(session_factory, aid)
+    with session_factory() as session:
+        session.get(Article, aid).icon_url = "https://pub.example/favicon.ico"
+        session.commit()
+    result = asyncio.run(worker(session_factory, tmp_path, server).run())
+    assert result.status == "ok" and result.error is None
+    assert result.cache_hits >= 1  # the repeated favicon URL reused its row
+    assert server.hits.count("https://pub.example/favicon.ico") == 1  # fetched once
+    with session_factory() as session:
+        rows = list(
+            session.scalars(
+                select(ImageAsset).where(ImageAsset.url == "https://pub.example/favicon.ico")
+            )
+        )
+        assert len(rows) == 1
+        assert session.get(Article, aid).image_checked_at is not None
+
+
+def test_insert_race_with_another_worker_is_a_cache_hit(session_factory, tmp_path) -> None:
+    """Safety net: another worker storing the row between our SELECT and our INSERT
+    means our INSERT OR IGNORE is skipped — the stored row is reused (a cache hit),
+    not a failure."""
+    server = Server()
+    url = "https://cdn.example/raced.jpg"
+    now = T0 + timedelta(hours=1)
+    with session_factory() as other:  # the "other worker" already stored the image
+        other.add(
+            ImageAsset(
+                url=url,
+                key=image_key(url),
+                kind="photo",
+                status="ok",
+                checked_at=now,
+                cached_bytes=1,
+            )
+        )
+        other.commit()
+    w = worker(session_factory, tmp_path, server)
+    with session_factory() as session:
+        real_scalar = session.scalar
+        calls = {"n": 0}
+
+        def flaky(statement, *args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return None  # our SELECT predates the other worker's commit
+            return real_scalar(statement, *args, **kwargs)
+
+        session.scalar = flaky
+        result = ImageRunResult()
+
+        async def go():
+            async with httpx.AsyncClient(transport=server.transport()) as client:
+                return await w.asset(client, session, url, "photo", result)
+
+        result_row = asyncio.run(go())
+        session.commit()
+    assert result.cache_hits == 1 and result.fetched == 0  # cache hit, not a fetch/failure
+    assert result_row is not None and result_row.url == url and result_row.status == "ok"
+    with session_factory() as session:
+        rows = list(session.scalars(select(ImageAsset).where(ImageAsset.url == url)))
+        assert len(rows) == 1
 
 
 def test_render_webp_never_enlarges() -> None:
