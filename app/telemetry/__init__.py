@@ -186,6 +186,7 @@ def _writer_factory(session_factory):
             # WAL persists on the file: readers then proceed during writer commits,
             # so batched telemetry flushes never stall app queries on the SQLite lock.
             conn.exec_driver_sql("PRAGMA journal_mode=WAL")
+            conn.exec_driver_sql("PRAGMA synchronous=OFF")
         return sessionmaker(bind=separate, autoflush=False, expire_on_commit=False)
     except Exception:
         return session_factory
