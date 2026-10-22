@@ -940,6 +940,164 @@
         "title": "DiscoverIn",
         "type": "object"
       },
+      "EnrichStatusV1": {
+        "examples": [
+          {
+            "last_pass_at": "2026-10-22T11:29:40Z",
+            "last_stage_event_at": "2026-10-22T11:30:05Z",
+            "last_sweep_at": "2026-10-22T11:30:00Z",
+            "last_watchdog_at": "2026-10-22T11:29:00Z",
+            "pending": 4,
+            "provider": "tinyfish",
+            "provider_requests_since_start": 37,
+            "retries_due": 0,
+            "sweep_recent": true,
+            "thread_alive": true,
+            "tinyfish_requests_since_start": 37,
+            "watchdog_restarts": 0
+          }
+        ],
+        "properties": {
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The worker's last unexpected error.",
+            "title": "Last Error"
+          },
+          "last_error_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error At"
+          },
+          "last_pass_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the worker last emptied the pending queue (this process).",
+            "title": "Last Pass At"
+          },
+          "last_stage_event_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Start of the newest `enrich` stage event (telemetry).",
+            "title": "Last Stage Event At"
+          },
+          "last_sweep_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Last run of the scheduled job.",
+            "title": "Last Sweep At"
+          },
+          "last_watchdog_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Watchdog At"
+          },
+          "pending": {
+            "description": "Stories admitted and waiting for a search.",
+            "title": "Pending",
+            "type": "integer"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The first configured search provider.",
+            "title": "Provider"
+          },
+          "provider_requests_since_start": {
+            "title": "Provider Requests Since Start",
+            "type": "integer"
+          },
+          "retries_due": {
+            "description": "Stories whose retry time has come.",
+            "title": "Retries Due",
+            "type": "integer"
+          },
+          "sweep_recent": {
+            "description": "The scheduled job ran within three of its intervals (`DISCOVER_ENRICH_INTERVAL_SECONDS`).",
+            "title": "Sweep Recent",
+            "type": "boolean"
+          },
+          "thread_alive": {
+            "description": "The enrichment worker thread is running now.",
+            "title": "Thread Alive",
+            "type": "boolean"
+          },
+          "tinyfish_requests_since_start": {
+            "title": "Tinyfish Requests Since Start",
+            "type": "integer"
+          },
+          "watchdog_restarts": {
+            "description": "Worker restarts by the watchdog.",
+            "title": "Watchdog Restarts",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "thread_alive",
+          "last_error",
+          "last_error_at",
+          "last_stage_event_at",
+          "last_pass_at",
+          "pending",
+          "retries_due",
+          "provider",
+          "provider_requests_since_start",
+          "tinyfish_requests_since_start",
+          "last_sweep_at",
+          "sweep_recent",
+          "last_watchdog_at",
+          "watchdog_restarts"
+        ],
+        "title": "EnrichStatusV1",
+        "type": "object"
+      },
       "FeedCandidate": {
         "properties": {
           "title": {
@@ -3781,6 +3939,37 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/admin/enrich/status": {
+      "get": {
+        "description": "Admin key. Is the worker alive, what is waiting, has the scheduled job run?",
+        "operationId": "admin_enrich_status_api_v1_admin_enrich_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrichStatusV1"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Enrichment worker health: thread, queue, provider requests, scheduled job",
+        "tags": [
+          "v1",
+          "v1-admin"
+        ]
+      }
+    },
     "/api/v1/admin/telemetry/funnel": {
       "get": {
         "description": "The ingest -> publish funnel with failure reasons and retries (admin key).",

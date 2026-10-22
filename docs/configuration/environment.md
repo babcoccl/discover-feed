@@ -36,6 +36,8 @@ the YAML (`${VAR}`) — values live only here or in `.env`.
 | `DISCOVER_SUMMARIZE_ENABLED` | `true` | Turn brief/report generation on/off |
 | `DISCOVER_SUMMARIZE_PROFILE` | first profile | Whose `llm.summarizer` endpoint the worker uses |
 | `DISCOVER_SUMMARIZE_INTERVAL_SECONDS` | `60` | Summary worker tick |
+| `DISCOVER_ENRICH_INTERVAL_SECONDS` | `60` | Scheduled enrichment sweep: admits eligible stories, starts the worker for anything waiting |
+| `DISCOVER_ENRICH_WATCHDOG_SECONDS` | `120` | Restarts the enrichment worker thread if it is not alive while stories wait |
 | `DISCOVER_SUMMARIZE_MAX_PER_RUN` | `25` | Stories processed per worker tick |
 | `DISCOVER_SUMMARIZE_RESUMMARIZE_MIN_MINUTES` | `30` | Min spacing before a story may regenerate |
 | `DISCOVER_SUMMARIZE_MAX_ARTICLES_PER_STORY` | `5` | Members sent to a brief prompt |

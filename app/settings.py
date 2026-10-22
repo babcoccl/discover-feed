@@ -63,6 +63,12 @@ class Settings(BaseSettings):
     cluster_same_source_threshold: float = 0.7
     cluster_min_shared_tokens: int = 2
 
+    # Web-search enrichment (app/enrich); behaviour is the YAML `enrichment:` block
+    enrich_interval_seconds: float = 60
+    """The scheduled enrichment sweep (admits eligible stories, kicks the worker)."""
+    enrich_watchdog_seconds: float = 120
+    """How often the watchdog checks that the enrichment worker thread is alive."""
+
     # Story summaries (app/summarize); the LLM endpoint is the profile's `llm.summarizer`
     summarize_enabled: bool = True
     summarize_profile: str | None = None

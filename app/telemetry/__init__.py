@@ -213,10 +213,11 @@ def _writer_factory(session_factory):
         url = engine.url if engine is not None else None
         if url is None or url.database in (None, ":memory:"):
             return session_factory
-        from sqlalchemy import create_engine
         from sqlalchemy.orm import sessionmaker
 
-        separate = create_engine(str(url), connect_args={"check_same_thread": False}, pool_size=1)
+        from app.db import make_engine
+
+        separate = make_engine(url.render_as_string(hide_password=False), pool_size=1)
         with separate.connect() as conn:
             # WAL persists on the file: readers then proceed during writer commits,
             # so batched telemetry flushes never stall app queries on the SQLite lock.

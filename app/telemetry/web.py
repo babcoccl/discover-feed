@@ -31,11 +31,21 @@ def _context(request: Request, session, profile, hours: float) -> dict:
         llm=queries.llm_stats(session, hours=hours),
         funnel=queries.funnel(session, hours=hours),
         insights=queries.insights(session, hours=hours),
+        enrich_worker=_enrich_status(request),
         telemetry={
             "app_version": telemetry.app_version(),
             "config_hash": telemetry.config_hash(),
         },
     )
+
+
+def _enrich_status(request: Request) -> dict | None:
+    from app.api_v1 import enrich_status
+
+    try:
+        return enrich_status(request.app)
+    except Exception:
+        return None
 
 
 @router.get("/p/{slug}/settings/workflow", response_class=HTMLResponse)

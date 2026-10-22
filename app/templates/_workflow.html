@@ -54,6 +54,23 @@
   </div>
 </section>
 
+{% macro _when(t) %}{% if t %}<time datetime="{{ t.isoformat() }}" title="{{ t.strftime('%Y-%m-%d %H:%M UTC') }}">{{ t | reltime }}</time>{% else %}<span class="text-slate-400">never</span>{% endif %}{% endmacro %}
+{% if enrich_worker %}{% set ew = enrich_worker %}
+<section class="mb-6" id="enrich-worker">
+  <h2 class="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Enrichment worker</h2>
+  <div class="grid grid-cols-2 gap-3 rounded-xl border border-slate-200 bg-white p-4 text-sm sm:grid-cols-4 dark:border-slate-800 dark:bg-slate-900">
+    <div><div class="text-xs text-slate-500">Worker thread</div>
+      {% if ew.thread_alive %}<span class="font-medium text-sky-700 dark:text-sky-400">running</span>{% elif ew.pending or ew.retries_due %}<span class="font-medium text-amber-700 dark:text-amber-400">stopped · work waiting</span>{% else %}<span class="text-slate-500">idle</span>{% endif %}</div>
+    <div><div class="text-xs text-slate-500">Pending</div><span class="font-medium tabular-nums">{{ ew.pending }}</span>{% if ew.retries_due %} <span class="text-xs text-slate-500">· {{ ew.retries_due }} retries due</span>{% endif %}</div>
+    <div><div class="text-xs text-slate-500">{{ ew.provider or "provider" }} requests since start</div><span class="font-medium tabular-nums">{{ ew.provider_requests_since_start }}</span></div>
+    <div><div class="text-xs text-slate-500">Last enrich event</div>{{ _when(ew.last_stage_event_at) }}</div>
+    <div><div class="text-xs text-slate-500">Scheduled job</div>{{ _when(ew.last_sweep_at) }}{% if ew.last_sweep_at and not ew.sweep_recent %} <span class="text-xs font-medium text-amber-700 dark:text-amber-400">overdue</span>{% endif %}</div>
+    <div><div class="text-xs text-slate-500">Watchdog</div>{{ _when(ew.last_watchdog_at) }}{% if ew.watchdog_restarts %} <span class="text-xs text-slate-500">· {{ ew.watchdog_restarts }} restarts</span>{% endif %}</div>
+    <div class="col-span-2"><div class="text-xs text-slate-500">Last error</div>{% if ew.last_error %}<span class="break-words text-rose-700 dark:text-rose-400" title="{{ ew.last_error }}">{{ ew.last_error | truncate(140) }}</span> <span class="text-xs text-slate-500">{{ _when(ew.last_error_at) }}</span>{% else %}<span class="text-slate-400">none</span>{% endif %}</div>
+  </div>
+</section>
+{% endif %}
+
 <section class="mb-6">
   <h2 class="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">LLM usage</h2>
   <dl class="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-5">

@@ -16,6 +16,35 @@ ended with provider errors** (stories that failed, are waiting to retry, or
 were marked done by older versions with nothing found and no candidate
 recorded; they are retried at the providers' pace, briefs do not wait).
 
+## Scheduling and the worker
+
+Enrichment runs on its own scheduler job, `enrich` (every
+`DISCOVER_ENRICH_INTERVAL_SECONDS`, default 60 s), as well as after each
+pipeline run. Each sweep admits newly eligible stories (as many as the
+providers can serve within `wait_seconds`) and starts the background worker
+whenever stories are `pending` or retries are due — including stories left
+pending by a restart, which fill the admission capacity on their own. The
+`enrich-watchdog` job (every `DISCOVER_ENRICH_WATCHDOG_SECONDS`, default
+120 s) logs a warning and restarts the worker thread if it is not alive while
+work waits. An unexpected error in the worker loop is logged and retried after
+5 s; the thread does not exit.
+
+Every SQLite connection (stories, `source_usage`, `search_provider_state`,
+telemetry) waits up to 15 s for a lock (`PRAGMA busy_timeout=15000`).
+
+`GET /api/v1/admin/enrich/status` (admin key) and the **Enrichment worker**
+box on Settings > Workflow show whether the thread is alive, the last error,
+the newest `enrich` stage event, pending / retries due, provider requests
+since start, and when the scheduled job and the watchdog last ran.
+
+```bash
+curl -s -H "x-api-key: $DISCOVER_ADMIN_KEY" localhost:8000/api/v1/admin/enrich/status
+```
+
+```powershell
+Invoke-RestMethod -Headers @{ "x-api-key" = $env:DISCOVER_ADMIN_KEY } http://localhost:8000/api/v1/admin/enrich/status
+```
+
 ## Retry and degraded passes
 
 **Provider failure is not completion.** If no provider answered for a story

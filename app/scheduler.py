@@ -128,6 +128,40 @@ def schedule_summaries(
     )
 
 
+def schedule_enrichment(
+    scheduler: BackgroundScheduler,
+    enricher,
+    *,
+    interval_seconds: float = 60,
+    watchdog_seconds: float = 120,
+    first_run_delay_seconds: int = 20,
+) -> None:
+    """Web-search enrichment on its own timer (not only after a pipeline run): each
+    sweep admits newly eligible stories and starts the worker for anything waiting; the
+    watchdog restarts a worker thread that is not alive while work is waiting."""
+    now = datetime.now(UTC)
+    scheduler.add_job(
+        enricher.sweep,
+        trigger=IntervalTrigger(seconds=interval_seconds),
+        id="enrich",
+        name="Enrich stories (web search)",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+        next_run_time=now + timedelta(seconds=first_run_delay_seconds),
+    )
+    scheduler.add_job(
+        enricher.watchdog,
+        trigger=IntervalTrigger(seconds=watchdog_seconds),
+        id="enrich-watchdog",
+        name="Enrichment worker watchdog",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+        next_run_time=now + timedelta(seconds=watchdog_seconds),
+    )
+
+
 def schedule_chat(scheduler: BackgroundScheduler, hub) -> None:
     """Re-check a chat endpoint that was down (every minute) and delete idle conversations
     (hourly, ``chat_retention_days``)."""

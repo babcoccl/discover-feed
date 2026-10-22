@@ -24,7 +24,7 @@ from app import images
 from app import profiles as repo
 from app import story_views as views
 from app.api import BriefOut, ReportOut, _brief_out, _report_out
-from app.auth import require_api_key
+from app.auth import require_admin, require_api_key
 from app.db import ping
 from app.events import StoryEvent, Subscription, bus, events_after, latest_event_id
 from app.models import CONTEXT, Article, ArticleDigest, ProfileRecord, StorySummary
@@ -985,6 +985,82 @@ async def stream(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+class EnrichStatusV1(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "thread_alive": True,
+                    "last_error": None,
+                    "last_error_at": None,
+                    "last_stage_event_at": "2026-10-22T11:30:05Z",
+                    "last_pass_at": "2026-10-22T11:29:40Z",
+                    "pending": 4,
+                    "retries_due": 0,
+                    "provider": "tinyfish",
+                    "provider_requests_since_start": 37,
+                    "tinyfish_requests_since_start": 37,
+                    "last_sweep_at": "2026-10-22T11:30:00Z",
+                    "sweep_recent": True,
+                    "last_watchdog_at": "2026-10-22T11:29:00Z",
+                    "watchdog_restarts": 0,
+                }
+            ]
+        }
+    )
+
+    thread_alive: bool = Field(description="The enrichment worker thread is running now.")
+    last_error: str | None = Field(description="The worker's last unexpected error.")
+    last_error_at: datetime | None
+    last_stage_event_at: datetime | None = Field(
+        description="Start of the newest `enrich` stage event (telemetry)."
+    )
+    last_pass_at: datetime | None = Field(
+        description="When the worker last emptied the pending queue (this process)."
+    )
+    pending: int = Field(description="Stories admitted and waiting for a search.")
+    retries_due: int = Field(description="Stories whose retry time has come.")
+    provider: str | None = Field(description="The first configured search provider.")
+    provider_requests_since_start: int
+    tinyfish_requests_since_start: int
+    last_sweep_at: datetime | None = Field(description="Last run of the scheduled job.")
+    sweep_recent: bool = Field(
+        description="The scheduled job ran within three of its intervals "
+        "(`DISCOVER_ENRICH_INTERVAL_SECONDS`)."
+    )
+    last_watchdog_at: datetime | None
+    watchdog_restarts: int = Field(description="Worker restarts by the watchdog.")
+
+
+def enrich_status(app) -> dict | None:
+    """The enrichment worker's health (``/admin/enrich/status`` and the Workflow page)."""
+    enricher = getattr(getattr(app.state, "pipeline", None), "enricher", None)
+    if enricher is None:
+        return None
+    status = enricher.status()
+    interval = app.state.settings.enrich_interval_seconds
+    last = status["last_sweep_at"]
+    status["sweep_recent"] = bool(
+        last is not None and (datetime.now(UTC) - last).total_seconds() <= 3 * interval
+    )
+    return status
+
+
+@router.get(
+    "/admin/enrich/status",
+    response_model=EnrichStatusV1,
+    tags=["v1-admin"],
+    dependencies=[Depends(require_admin)],
+    summary="Enrichment worker health: thread, queue, provider requests, scheduled job",
+)
+def admin_enrich_status(request: Request) -> dict:
+    """Admin key. Is the worker alive, what is waiting, has the scheduled job run?"""
+    status = enrich_status(request.app)
+    if status is None:
+        raise HTTPException(status_code=409, detail="enrichment is not configured")
+    return status
 
 
 from app.telemetry.api import mount as _mount_telemetry  # noqa: E402
