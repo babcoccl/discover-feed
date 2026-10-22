@@ -464,6 +464,26 @@ def test_admin_api_endpoints(admin_client):
     )
 
 
+def test_enrich_status_endpoint_and_workflow_panel(admin_client):
+    from tests.test_enrich import FakeSearch, make_enricher
+
+    head = {"x-api-key": "admin-secret"}
+    path = "/api/v1/admin/enrich/status"
+    state = admin_client.app.state
+    if state.pipeline.enricher is None:
+        assert admin_client.get(path, headers=head).status_code == 409
+        state.pipeline.attach_enricher(make_enricher(state.session_factory, FakeSearch()))
+    assert admin_client.get(path).status_code in (401, 403)
+    assert admin_client.get(path, headers={"x-api-key": "key1"}).status_code == 401
+    state.pipeline.enricher.sweep()
+    body = admin_client.get(path, headers=head).json()
+    assert body["thread_alive"] is False and body["pending"] == 0
+    assert body["sweep_recent"] is True and body["last_error"] is None
+    assert "tinyfish_requests_since_start" in body and "last_stage_event_at" in body
+    panel = admin_client.get("/p/personal-reader/settings/workflow/panel", headers=head)
+    assert "Enrichment worker" in panel.text
+
+
 def test_report_cli(tmp_path, session_factory):
     from app.telemetry import report
 

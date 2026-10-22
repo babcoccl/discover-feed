@@ -1707,3 +1707,63 @@ def test_evaluate_lists_flagged_sources(session_factory):
     result = asyncio.run(make_enricher(session_factory, FakeSearch()).enrich_story(story_id))
     out = summary([("Springfield mayor Ortiz wins bus vote", result)], markdown=False)
     assert "flagged sources" in out and "wire.example x1" in out and "name:wire" in out
+
+
+# --- Phase 16.3: enrichment is scheduled on its own; the worker always restarts -------------
+
+
+def test_restart_with_a_full_queue_still_starts_the_worker(session_factory):
+    """The gate: after a restart the still-``pending`` stories fill ``capacity()``, so
+    nothing new is admitted — the worker must start for them anyway."""
+    seed(session_factory)
+    seed_more(session_factory, TOPICS)
+    before, _ = clocked_enricher(session_factory, FakeSearch(), config(wait_seconds=60))
+    before.start = lambda: True  # the process dies before the worker runs
+    assert before.schedule() == 6
+    after, _ = clocked_enricher(session_factory, FakeSearch(), config(wait_seconds=60))
+    started: list[bool] = []
+    after.start = lambda: started.append(True) or True
+    with session_factory() as session:
+        assert after.capacity(session) == 0
+    assert after.schedule() == 0
+    assert started == [True]
+    assert after.sweep() == 0 and after.last_sweep_at is not None
+    assert started == [True, True]
+
+
+def test_worker_loop_survives_an_unexpected_error(session_factory):
+    seed(session_factory)
+    enricher = make_enricher(session_factory, FakeSearch())
+    slept: list[float] = []
+    enricher.sleep = slept.append
+    real, calls = enricher.run_pending, []
+
+    async def flaky():
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("database is locked")
+        return await real()
+
+    enricher.run_pending = flaky
+    enricher.run_blocking()
+    assert len(calls) == 2 and slept == [5.0]
+    assert enricher.last_error == "RuntimeError: database is locked"
+    assert enricher.last_pass_at is not None
+
+
+def test_watchdog_restarts_a_dead_worker_only_when_work_waits(session_factory):
+    story_id = seed(session_factory)
+    enricher = make_enricher(session_factory, FakeSearch())
+    assert enricher.watchdog() is False  # idle and nothing waiting: not a failure
+    with session_factory() as session:
+        session.get(Story, story_id).enrich_status = "pending"
+        session.commit()
+    assert not enricher.running
+    assert enricher.watchdog() is True
+    enricher._thread.join(30)
+    assert enricher.watchdog_restarts == 1
+    with session_factory() as session:
+        assert session.get(Story, story_id).enrich_status != "pending"
+    status = enricher.status()
+    assert status["pending"] == 0 and status["thread_alive"] is False
+    assert status["provider"] == "gdelt" and status["provider_requests_since_start"] > 0

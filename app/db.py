@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from sqlalchemy import Engine, create_engine, inspect, text
+from sqlalchemy import Engine, create_engine, event, inspect, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
@@ -9,14 +9,36 @@ class Base(DeclarativeBase):
     pass
 
 
-def make_engine(database_url: str) -> Engine:
+SQLITE_BUSY_TIMEOUT_MS = 15000
+"""How long a SQLite connection waits for another writer's lock before ``database is
+locked`` (the app, the workers' threads, the telemetry writer and the CLIs share one
+file)."""
+
+
+def make_engine(database_url: str, **kwargs) -> Engine:
     url = make_url(database_url)
     connect_args: dict = {}
     if url.get_backend_name() == "sqlite":
         connect_args["check_same_thread"] = False
         if url.database and url.database != ":memory:":
             Path(url.database).parent.mkdir(parents=True, exist_ok=True)
-    return create_engine(database_url, connect_args=connect_args)
+    engine = create_engine(database_url, connect_args=connect_args, **kwargs)
+    apply_sqlite_pragmas(engine)
+    return engine
+
+
+def apply_sqlite_pragmas(engine: Engine) -> None:
+    """``PRAGMA busy_timeout`` on every new SQLite connection of ``engine``."""
+    if engine.url.get_backend_name() != "sqlite":
+        return
+
+    @event.listens_for(engine, "connect")
+    def _busy_timeout(dbapi_connection, _record) -> None:
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
+        finally:
+            cursor.close()
 
 
 def make_session_factory(engine: Engine) -> sessionmaker:

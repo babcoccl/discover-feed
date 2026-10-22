@@ -42,6 +42,7 @@ from app.scheduler import (
     create_scheduler,
     schedule_alerts,
     schedule_chat,
+    schedule_enrichment,
     schedule_image_backfill,
     schedule_pipeline,
     schedule_summaries,
@@ -253,6 +254,13 @@ def create_app(
                     scheduler,
                     app.state.summaries,
                     interval_seconds=settings.summarize_interval_seconds,
+                )
+            if app.state.pipeline.enricher is not None:
+                schedule_enrichment(
+                    scheduler,
+                    app.state.pipeline.enricher,
+                    interval_seconds=settings.enrich_interval_seconds,
+                    watchdog_seconds=settings.enrich_watchdog_seconds,
                 )
             schedule_chat(scheduler, app.state.chat)
             schedule_alerts(scheduler, app.state.alerts, app.state.alert_sender)

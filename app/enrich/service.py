@@ -12,6 +12,7 @@ import asyncio
 import logging
 import re
 import threading
+import time
 import uuid
 from collections import Counter
 from collections.abc import Callable, Sequence
@@ -80,6 +81,8 @@ def _provider_cls(name: str):
 STALE_PENDING = timedelta(hours=1)
 """A ``pending`` mark older than this (the process died mid-run) is picked up again."""
 BATCH = 20
+LOOP_RETRY_SECONDS = 5.0
+"""The worker loop sleeps this long after an unexpected error, then tries again."""
 RETRY_FIRST = timedelta(minutes=2)
 RETRY_MAX = timedelta(minutes=60)
 UNAVAILABLE = "provider_unavailable"
@@ -222,6 +225,15 @@ class Enricher:
         self.last_run: dict | None = None
         self.backfill: timedelta | None = None
         """The summarizer's backfill window: older never-enriched stories are skipped."""
+        self.sleep: Callable[[float], None] = time.sleep
+        self.last_error: str | None = None
+        self.last_error_at: datetime | None = None
+        self.last_pass_at: datetime | None = None
+        """When the worker last finished a pass over the pending queue."""
+        self.last_sweep_at: datetime | None = None
+        """When the scheduled ``enrich`` job last ran (``sweep``)."""
+        self.last_watchdog_at: datetime | None = None
+        self.watchdog_restarts = 0
 
     # --- eligibility ------------------------------------------------------------------
 
@@ -426,7 +438,17 @@ class Enricher:
         """Mark eligible stories ``pending`` (their briefs wait) and start the background
         run. Only as many as the providers can serve within ``wait_seconds`` are admitted
         (newest first); the rest are admitted on a later sweep. ``force``: the admin
-        "Enrich now" (ignores the re-enrich interval and the admission limit)."""
+        "Enrich now" (ignores the re-enrich interval and the admission limit).
+
+        The worker is started whenever anything is waiting — newly admitted, retries
+        due, or stories still ``pending`` from an earlier sweep (after a restart they
+        fill ``capacity()``, so nothing new is admitted, yet they still need a worker)."""
+        logger.info(
+            "enrichment schedule: story_ids=%s force=%s worker_running=%s",
+            story_ids if story_ids is None or len(story_ids) <= 10 else f"{len(story_ids)} ids",
+            force,
+            self.running,
+        )
         now = self.now()
         with self.session_factory() as session:
             if force and story_ids:
@@ -449,9 +471,93 @@ class Enricher:
                     story.enrich_wait_until = now + wait if first else now
             session.commit()
             due = self.retries_due(session)
-        if ids or due:
+            waiting = self.pending_count(session)
+        logger.info(
+            "enrichment schedule: admitted=%d pending=%d retries_due=%d",
+            len(ids),
+            waiting,
+            due,
+        )
+        if waiting or due:
             self.start()
         return len(ids)
+
+    @staticmethod
+    def pending_count(session: Session) -> int:
+        return (
+            session.scalar(
+                select(func.count()).select_from(Story).where(Story.enrich_status == "pending")
+            )
+            or 0
+        )
+
+    def has_work(self) -> bool:
+        with self.session_factory() as session:
+            return bool(self.pending_count(session) or self.retries_due(session))
+
+    def sweep(self) -> int:
+        """The scheduled ``enrich`` job: admit newly eligible stories and make sure the
+        worker runs for anything waiting — independent of the pipeline run."""
+        self.last_sweep_at = self.now()
+        try:
+            return self.schedule()
+        except Exception as exc:
+            self._record_error(exc)
+            logger.exception("scheduled enrichment sweep failed")
+            return 0
+
+    def watchdog(self) -> bool:
+        """Restart the worker thread when it is not alive while work is waiting (the
+        thread exits on its own once the queue is empty, which is not a failure)."""
+        self.last_watchdog_at = self.now()
+        if self.running:
+            return False
+        try:
+            work = self.has_work()
+        except Exception as exc:
+            self._record_error(exc)
+            logger.exception("enrichment watchdog could not read the queue")
+            work = True
+        if not work:
+            logger.debug("enrichment watchdog: worker idle, nothing waiting")
+            return False
+        logger.warning("enrichment watchdog: worker thread not alive with work waiting; restarting")
+        self.watchdog_restarts += 1
+        return self.start()
+
+    def _record_error(self, exc: BaseException) -> None:
+        self.last_error = f"{type(exc).__name__}: {exc}"[:500]
+        self.last_error_at = self.now()
+
+    def status(self) -> dict:
+        """The admin status endpoint / Workflow panel."""
+        from app.models import StageEvent
+
+        with self.session_factory() as session:
+            pending = self.pending_count(session)
+            due = self.retries_due(session)
+            last_event = session.scalar(
+                select(func.max(StageEvent.started_at)).where(StageEvent.stage == "enrich")
+            )
+        primary = self.config.providers[0].name if self.config.providers else None
+        health = self.search.health.get(primary) if primary else None
+        return {
+            "thread_alive": self.running,
+            "last_error": self.last_error,
+            "last_error_at": self.last_error_at,
+            "last_stage_event_at": last_event,
+            "last_pass_at": self.last_pass_at,
+            "pending": pending,
+            "retries_due": due,
+            "provider": primary,
+            "provider_requests_since_start": health.requests if health else 0,
+            "tinyfish_requests_since_start": (
+                self.search.health["tinyfish"].requests if "tinyfish" in self.search.health else 0
+            ),
+            "last_sweep_at": self.last_sweep_at,
+            "last_watchdog_at": self.last_watchdog_at,
+            "watchdog_restarts": self.watchdog_restarts,
+        }
 
     def capacity(self, session: Session) -> int:
         """Stories the first provider not cooling down can serve within ``wait_seconds``
@@ -526,8 +632,10 @@ class Enricher:
     def start(self) -> bool:
         with self._lock:
             if self._thread is not None and self._thread.is_alive():
+                logger.info("enrichment start: worker already running; another pass queued")
                 self._again = True
                 return False
+            logger.info("enrichment start: starting the worker thread")
             self._thread = threading.Thread(
                 target=self.run_blocking, name="enrichment", daemon=True
             )
@@ -539,9 +647,20 @@ class Enricher:
         return self._thread is not None and self._thread.is_alive()
 
     def run_blocking(self) -> list[StoryEnrichment]:
+        """The worker thread: passes over the pending queue until it is empty. An
+        unexpected error never ends the thread — it is logged, then retried."""
         results: list[StoryEnrichment] = []
         while True:
-            results += asyncio.run(self.run_pending())
+            try:
+                results += asyncio.run(self.run_pending())
+            except Exception as exc:
+                self._record_error(exc)
+                logger.exception(
+                    "enrichment worker loop failed; retrying in %.0f s", LOOP_RETRY_SECONDS
+                )
+                self.sleep(LOOP_RETRY_SECONDS)
+                continue
+            self.last_pass_at = self.now()
             with self._lock:
                 if not self._again:
                     return results
