@@ -79,10 +79,67 @@ def open_write_txns() -> list[dict]:
                 "thread": t["thread"],
                 "age_seconds": round(now - t["started"], 1),
                 "caller": t["caller"],
+                "story_id": t.get("story_id"),
             }
             for ref, t in _write_txns.values()
             if ref() is not None
         ]
+
+
+def _current_story() -> int | None:
+    try:
+        from app import telemetry
+
+        return telemetry.current_story()
+    except Exception:
+        return None
+
+
+def _short_caller() -> str:
+    """A compact ``app/<pkg>/<file>.py:<func>`` label for db_events rows."""
+    frames = traceback.extract_stack(limit=12)
+    for f in reversed(frames[:-3]):
+        name = f.filename.replace("\\", "/")
+        if "/sqlalchemy/" not in name and not name.endswith("/app/db.py"):
+            tail = name[name.rindex("/app/") + 1 :] if "/app/" in name else f.filename
+            return f"{tail}:{f.name}"
+    return "?"
+
+
+def _statement_meta(statement: str | None) -> tuple[str | None, str | None]:
+    """``(table, op)`` of a SQL statement — the verb and name only, never the text."""
+    if not statement:
+        return None, None
+    match = _TABLE_RE.search(statement)
+    verb = re.match(r"^\s*(\w+)", statement)
+    op = verb.group(1).upper() if verb else None
+    if op == "REPLACE":
+        op = "INSERT"
+    return (match.group(1) if match else None), op
+
+
+def _emit_db_event(kind: str, **fields) -> None:
+    """Best-effort db_events emission via telemetry (never raises, never blocks)."""
+    try:
+        from app import telemetry
+
+        telemetry.emit_db_event(kind=kind, **fields)
+    except Exception:
+        pass
+
+
+def _holder_fields() -> dict:
+    """holder_* columns for the write transaction open longest right now."""
+    holders = open_write_txns()
+    if not holders:
+        return {}
+    holder = max(holders, key=lambda h: h["age_seconds"])
+    return {
+        "holder_thread": holder["thread"],
+        "holder_caller": holder["caller"],
+        "holder_story_id": holder.get("story_id"),
+        "holder_age_ms": int(holder["age_seconds"] * 1000),
+    }
 
 
 def _end_write_txn(conn) -> None:
@@ -113,6 +170,14 @@ def _watch_write_txns() -> None:
                         t["thread"],
                         t["caller"],
                     )
+                    _emit_db_event(
+                        "slow_write",
+                        story_id=t.get("story_id"),
+                        thread=t["thread"],
+                        caller=t["caller"],
+                        duration_ms=int(held * 1000),
+                        outcome="held",
+                    )
         except Exception:  # the monitor never dies
             logger.exception("write-txn monitor failed")
 
@@ -130,6 +195,7 @@ def _instrument_locks(engine: Engine) -> None:
             "thread": threading.current_thread().name,
             "caller": _caller(),
             "started": time.monotonic(),
+            "story_id": _current_story(),
         }
         with _write_txns_lock:
             _write_txns[id(conn)] = (weakref.ref(conn), conn.info["write_txn"])
@@ -158,11 +224,22 @@ def _instrument_locks(engine: Engine) -> None:
             "table": table,
             "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
+        holders = open_write_txns()
         logger.warning(
             "database is locked on %s; open write txns: %s; statement: %s",
             table or "?",
-            open_write_txns(),
+            holders,
             (ctx.statement or "")[:200],
+        )
+        _table, op = _statement_meta(ctx.statement)
+        _emit_db_event(
+            "lock_error",
+            story_id=_current_story(),
+            table_name=_table,
+            op=op,
+            thread=threading.current_thread().name,
+            caller=_short_caller(),
+            **_holder_fields(),
         )
 
     global _monitor_started
@@ -180,11 +257,27 @@ def retry_locked[T](fn: Callable[..., T], *args, retries: int = 3, **kwargs) -> 
     or a call that spans a network/LLM call."""
     delays = (0.5, 1.0, 2.0)
     for attempt in range(retries + 1):
+        started = time.monotonic()
         try:
-            return fn(*args, **kwargs)
+            result = fn(*args, **kwargs)
         except OperationalError as exc:
-            if not is_lock_error(exc) or attempt >= retries:
+            if not is_lock_error(exc):
                 raise
+            table, op = _statement_meta(getattr(exc, "statement", None))
+            base = {
+                "story_id": _current_story(),
+                "table_name": table,
+                "op": op,
+                "thread": threading.current_thread().name,
+                "caller": _short_caller(),
+                "attempt": attempt + 1,
+                "waited_ms": int((time.monotonic() - started) * 1000),
+                **_holder_fields(),
+            }
+            if attempt >= retries:
+                _emit_db_event("lock_giveup", outcome="gave_up", **base)
+                raise
+            _emit_db_event("lock_retry", outcome="retried", **base)
             _LOCK_STATS["lock_retries_since_start"] += 1
             delay = delays[min(attempt, len(delays) - 1)] * (0.5 + random.random())
             name = getattr(fn, "__qualname__", repr(fn))
@@ -196,6 +289,18 @@ def retry_locked[T](fn: Callable[..., T], *args, retries: int = 3, **kwargs) -> 
                 retries + 1,
             )
             time.sleep(delay)
+            continue
+        if attempt:
+            _emit_db_event(
+                "lock_retry",
+                outcome="ok_after_retry",
+                story_id=_current_story(),
+                thread=threading.current_thread().name,
+                caller=_short_caller(),
+                attempt=attempt + 1,
+                waited_ms=int((time.monotonic() - started) * 1000),
+            )
+        return result
     raise AssertionError("unreachable")  # pragma: no cover
 
 
@@ -247,6 +352,24 @@ def init_db(engine: Engine) -> None:
     _add_enrichment_columns(engine)
     _add_context_columns(engine)
     _add_perspectives_columns(engine)
+    _add_llm_call_columns(engine)
+
+
+_LLM_CALL_COLUMNS = {
+    "finish_reason": "VARCHAR(20)",
+    "reasoning_chars": "INTEGER",
+    "run_id": "VARCHAR(32)",
+}
+
+
+def _add_llm_call_columns(engine: Engine) -> None:
+    """Pre-step-log DBs: llm_calls gains finish_reason/reasoning_chars/run_id
+    (existing rows stay NULL)."""
+    with engine.begin() as conn:
+        existing = {c["name"] for c in inspect(conn).get_columns("llm_calls")}
+        for name, ddl in _LLM_CALL_COLUMNS.items():
+            if name not in existing:
+                conn.execute(text(f"ALTER TABLE llm_calls ADD COLUMN {name} {ddl}"))
 
 
 def _add_article_url(engine: Engine) -> None:

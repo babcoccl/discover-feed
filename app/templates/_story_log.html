@@ -1,0 +1,122 @@
+{%- macro ms(v) -%}{%- if v is none -%}—{%- elif v >= 60000 -%}{{ (v / 60000) | round(1) }}m{%- elif v >= 1000 -%}{{ (v / 1000) | round(1) }}s{%- else -%}{{ v | int }}ms{%- endif -%}{%- endmacro -%}
+{%- macro toks(t) -%}
+{%- if t.prompt is not none or t.completion is not none -%}
+{{ t.prompt or "?" }}→{{ t.completion or "?" }}{% if t.tok_per_s %} ({{ t.tok_per_s }}/s){% endif %}{% if t.finish_reason %} · {{ t.finish_reason }}{% endif %}{% if t.reasoning_chars %} · {{ t.reasoning_chars }}c thinking{% endif %}
+{%- else -%}—{%- endif -%}
+{%- endmacro -%}
+{% set s = log.summary %}
+<div {% if log.active %}hx-get="/p/{{ slug }}/settings/workflow/story/{{ log.story_id }}/log?show={{ show }}" hx-trigger="every 5s" hx-swap="outerHTML"{% endif %}>
+  <div class="mb-3 flex flex-wrap items-center gap-3">
+    <div class="flex gap-1 text-xs">
+      {% for label, value in (("All", "all"), ("Problems only", "problems"), ("LLM only", "llm")) %}
+      <a href="/p/{{ slug }}/settings/workflow/story/{{ log.story_id }}?show={{ value }}"
+         class="rounded-md px-2 py-1 {% if show == value %}bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900{% else %}border border-slate-300 text-slate-600 dark:border-slate-700 dark:text-slate-300{% endif %}">{{ label }}</a>
+      {% endfor %}
+    </div>
+    <button type="button" id="copy-story-log"
+            class="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600 dark:border-slate-700 dark:text-slate-300">Copy as text</button>
+    {% if log.truncated %}<span class="text-xs text-amber-600">showing first {{ log.entries | length }} of {{ log.total }} entries</span>{% endif %}
+    {% if log.active %}<span class="text-xs text-sky-600 dark:text-sky-400">live · refreshes every 5s</span>{% endif %}
+  </div>
+  <dl class="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6 text-xs">
+    {% for label, value in (
+        ("Wall", ms(s.wall_ms)),
+        ("Queue → start", ms(s.queued_to_first_start_ms)),
+        ("Start → published", ms(s.started_to_published_ms)),
+        ("LLM active", ms(s.llm_active_ms)),
+        ("LLM queue wait", ms(s.llm_queue_wait_ms)),
+        ("LLM calls", s.calls),
+        ("Tokens in→out", s.prompt_tokens ~ "→" ~ s.completion_tokens),
+        ("tok/s", s.tok_per_s or "—"),
+        ("Invalid / failed", s.invalid ~ " / " ~ s.failed),
+        ("Lock wait", ms(s.total_lock_wait_ms)),
+        ("Lock events", s.lock_events | map("join", "×") | join(", ") if s.lock_events else "—"),
+        ("Outcome", s.final_outcome),
+    ) %}
+    <div class="rounded-lg border border-slate-200 bg-white px-3 py-2 dark:border-slate-800 dark:bg-slate-900">
+      <dt class="text-slate-400">{{ label }}</dt><dd class="font-medium">{{ value }}</dd>
+    </div>
+    {% endfor %}
+    {% if s.longest_holder %}
+    <div class="rounded-lg border border-slate-200 bg-white px-3 py-2 dark:border-slate-800 dark:bg-slate-900">
+      <dt class="text-slate-400">Longest holder</dt><dd class="font-medium">{{ s.longest_holder.caller }} ({{ ms(s.longest_holder.age_ms) }})</dd>
+    </div>
+    {% endif %}
+    {% if s.attempts %}
+    <div class="rounded-lg border border-slate-200 bg-white px-3 py-2 dark:border-slate-800 dark:bg-slate-900">
+      <dt class="text-slate-400">Attempts</dt><dd class="font-medium">{% for k, n in s.attempts.items() %}{{ k }}×{{ n }}{{ ", " if not loop.last }}{% endfor %}</dd>
+    </div>
+    {% endif %}
+    {% if s.top_validation_reason %}
+    <div class="col-span-2 rounded-lg border border-slate-200 bg-white px-3 py-2 dark:border-slate-800 dark:bg-slate-900">
+      <dt class="text-slate-400">Top validation reason</dt><dd class="font-medium truncate" title="{{ s.top_validation_reason }}">{{ s.top_validation_reason }}</dd>
+    </div>
+    {% endif %}
+  </dl>
+  <div class="overflow-x-auto">
+    <table class="w-full text-left text-xs">
+      <thead class="text-slate-400">
+        <tr>
+          <th class="pr-2 py-1">#</th><th class="pr-2 py-1">time</th><th class="pr-2 py-1">+offset</th>
+          <th class="pr-2 py-1">gap</th><th class="pr-2 py-1">kind</th><th class="pr-2 py-1">step</th>
+          <th class="pr-2 py-1">duration</th><th class="pr-2 py-1">tokens</th><th class="pr-2 py-1">status</th>
+          <th class="pr-2 py-1">reason</th><th class="py-1">alongside</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for e in log.entries %}
+        <tr class="border-t border-slate-100 dark:border-slate-800 {% if e.status in ('failed', 'invalid', 'timeout') %}bg-rose-50 dark:bg-rose-950/40{% elif e.kind == 'DB' or e.status == 'retry' %}bg-amber-50 dark:bg-amber-950/40{% elif e.status == 'running' %}bg-sky-50 dark:bg-sky-950/40{% endif %}">
+          <td class="pr-2 py-1 text-slate-400">{{ e.n }}</td>
+          <td class="pr-2 py-1 tabular-nums">{{ e.ts.strftime("%H:%M:%S.") }}{{ "%03d" % (e.ts.microsecond // 1000) }}</td>
+          <td class="pr-2 py-1 tabular-nums">+{{ ms(e.offset_ms) }}</td>
+          <td class="pr-2 py-1 tabular-nums {% if e.gap_ms and e.gap_ms > 30000 %}text-amber-600 font-medium{% endif %}">{{ "+" ~ ms(e.gap_ms) if e.gap_ms else "" }}</td>
+          <td class="pr-2 py-1"><span class="rounded px-1.5 py-0.5 font-medium {% if e.kind == 'LLM' %}bg-violet-100 text-violet-700 dark:bg-violet-900 dark:text-violet-300{% elif e.kind == 'DB' %}bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-300{% elif e.kind == 'SAVE' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300{% elif e.kind == 'STATE' %}bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-300{% else %}bg-sky-100 text-sky-700 dark:bg-sky-900 dark:text-sky-300{% endif %}">{{ e.kind }}</span></td>
+          <td class="pr-2 py-1 font-medium">
+            {{ e.name }}{% if e.attempt %} <span class="text-slate-400">try{{ e.attempt }}</span>{% endif %}
+            {% if e.kind == 'DB' and e.role %}<span class="text-slate-400">({{ e.role }})</span>{% endif %}
+          </td>
+          <td class="pr-2 py-1 tabular-nums">{{ ms(e.duration_ms) }}</td>
+          <td class="pr-2 py-1 tabular-nums">{{ toks(e.tokens) }}</td>
+          <td class="pr-2 py-1 {% if e.status in ('failed', 'invalid', 'timeout') %}text-rose-600 font-medium dark:text-rose-400{% elif e.status == 'retry' %}text-amber-600 dark:text-amber-400{% elif e.status == 'running' %}text-sky-600 dark:text-sky-400{% else %}text-slate-400{% endif %}">{{ e.status or "—" }}</td>
+          <td class="pr-2 py-1 max-w-64 truncate text-slate-500" title="{{ e.reason }}">{{ e.reason or "" }}</td>
+          <td class="py-1 text-slate-400">{% for k, n in e.concurrent.items() %}{{ k }}×{{ n }}{{ ", " if not loop.last }}{% endfor %}</td>
+        </tr>
+        {% if e.detail %}
+        <tr class="{% if e.status in ('failed', 'invalid', 'timeout') %}bg-rose-50 dark:bg-rose-950/40{% elif e.kind == 'DB' or e.status == 'retry' %}bg-amber-50 dark:bg-amber-950/40{% elif e.status == 'running' %}bg-sky-50 dark:bg-sky-950/40{% endif %}">
+          <td></td><td colspan="10" class="pb-1">
+            <details><summary class="cursor-pointer text-slate-400">detail</summary>
+              <dl class="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-slate-600 dark:text-slate-400">
+                {% for k, v in e.detail.items() if k not in ("prompt", "response") and v is not none %}
+                <div><dt class="inline text-slate-400">{{ k }}:</dt> <dd class="inline">{{ v | tojson }}</dd></div>
+                {% endfor %}
+              </dl>
+              {% if e.detail.prompt %}<pre class="mt-1 max-h-40 overflow-auto rounded bg-slate-50 p-2 dark:bg-slate-800">{{ e.detail.prompt }}</pre>{% endif %}
+              {% if e.detail.response %}<pre class="mt-1 max-h-40 overflow-auto rounded bg-slate-50 p-2 dark:bg-slate-800">{{ e.detail.response }}</pre>{% endif %}
+            </details>
+          </td>
+        </tr>
+        {% endif %}
+        {% else %}
+        <tr><td colspan="11" class="py-3 text-slate-500">No log entries yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <script>
+    (function () {
+      var btn = document.getElementById("copy-story-log");
+      if (btn && !btn.dataset.bound) {
+        btn.dataset.bound = "1";
+        btn.addEventListener("click", function () {
+          fetch("/p/{{ slug }}/settings/workflow/story/{{ log.story_id }}/log.txt?show={{ show }}")
+            .then(function (r) { return r.text(); })
+            .then(function (t) {
+              navigator.clipboard.writeText(t);
+              btn.textContent = "Copied";
+              setTimeout(function () { btn.textContent = "Copy as text"; }, 1500);
+            });
+        });
+      }
+    })();
+  </script>
+</div>

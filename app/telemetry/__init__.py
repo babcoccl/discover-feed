@@ -118,6 +118,9 @@ _ctx_article: contextvars.ContextVar[int | None] = contextvars.ContextVar(
 _ctx_profile: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "telemetry_profile", default=None
 )
+_ctx_run: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "telemetry_run", default=None
+)
 
 
 def set_story(story_id: int | None) -> contextvars.Token:
@@ -166,6 +169,20 @@ def current_article() -> int | None:
 
 def current_profile() -> str | None:
     return _ctx_profile.get()
+
+
+def current_run() -> str | None:
+    return _ctx_run.get()
+
+
+@contextlib.contextmanager
+def run_context(run_id: str | None) -> Iterator[None]:
+    """Tag every LLM call emitted inside with this generation's ``run_id``."""
+    token = _ctx_run.set(run_id)
+    try:
+        yield
+    finally:
+        _ctx_run.reset(token)
 
 
 # --- runtime configuration ------------------------------------------------------------------
@@ -375,6 +392,9 @@ def emit_llm_call(
     validation_error: str | None = None,
     prompt_text: str | None = None,
     response_text: str | None = None,
+    finish_reason: str | None = None,
+    reasoning_chars: int | None = None,
+    run_id: str | None = None,
 ) -> None:
     """Queue one ``llm_calls`` row. ``story_id``/``article_id`` fall back to the
     correlation context set by the calling worker."""
@@ -417,6 +437,9 @@ def emit_llm_call(
                 "prompt_chars": len(prompt_text or ""),
                 "response_chars": len(response_text or ""),
                 "payload": payload,
+                "finish_reason": finish_reason,
+                "reasoning_chars": reasoning_chars,
+                "run_id": run_id if run_id is not None else current_run(),
                 "app_version": _app_version,
                 "config_hash": _config_hash,
             },
@@ -554,6 +577,91 @@ class stage:
         return False
 
 
+# --- db_events ------------------------------------------------------------------
+
+DB_EVENTS_PER_SECOND = 20
+"""At most this many db_events are emitted per second per process; extras are counted
+in ``db_events_dropped`` (bursts during lock storms should not flood the writer)."""
+
+_db_window_start = 0.0
+_db_window_count = 0
+_db_dropped = 0
+_db_rate_lock = threading.Lock()
+
+
+def db_events_dropped() -> int:
+    """db_events dropped by the per-second rate limit since process start."""
+    return _db_dropped
+
+
+def _db_rate_ok() -> bool:
+    global _db_window_start, _db_window_count, _db_dropped
+    now = time.monotonic()
+    with _db_rate_lock:
+        if now - _db_window_start >= 1.0:
+            _db_window_start, _db_window_count = now, 0
+        if _db_window_count >= DB_EVENTS_PER_SECOND:
+            _db_dropped += 1
+            return False
+        _db_window_count += 1
+        return True
+
+
+def emit_db_event(
+    *,
+    kind: str,
+    story_id: int | None = None,
+    table_name: str | None = None,
+    op: str | None = None,
+    thread: str | None = None,
+    caller: str | None = None,
+    attempt: int | None = None,
+    waited_ms: int | None = None,
+    outcome: str | None = None,
+    holder_thread: str | None = None,
+    holder_caller: str | None = None,
+    holder_story_id: int | None = None,
+    holder_age_ms: int | None = None,
+    duration_ms: int | None = None,
+    started_at: datetime | None = None,
+) -> None:
+    """Queue one ``db_events`` row (SQL verb/table only — never statement text).
+    Silent no-ops: on the telemetry writer's own thread (recursion guard) and past the
+    per-second rate limit (counted in ``db_events_dropped``)."""
+    if not enabled():
+        return
+    try:
+        from app.telemetry import writer
+
+        if writer.on_writer_thread():
+            return
+        if not _db_rate_ok():
+            return
+        writer.submit(
+            "db_event",
+            {
+                "kind": kind,
+                "started_at": started_at or datetime.now(UTC),
+                "story_id": story_id,
+                "table_name": table_name,
+                "op": op,
+                "thread": thread,
+                "caller": caller,
+                "attempt": attempt,
+                "waited_ms": waited_ms,
+                "outcome": outcome,
+                "holder_thread": holder_thread,
+                "holder_caller": holder_caller,
+                "holder_story_id": holder_story_id,
+                "holder_age_ms": holder_age_ms,
+                "duration_ms": duration_ms,
+                "app_version": _app_version,
+            },
+        )
+    except Exception as exc:
+        _warn("emit_db_event", exc)
+
+
 # --- retention ------------------------------------------------------------------------------
 
 
@@ -564,12 +672,12 @@ def prune(now: datetime | None = None) -> int:
     try:
         from sqlalchemy import delete
 
-        from app.models import LlmCall, StageEvent
+        from app.models import DbEvent, LlmCall, StageEvent
 
         cutoff = (now or datetime.now(UTC)) - timedelta(days=_config.retention_days)
         removed = 0
         with _session_factory() as session:
-            for table in (LlmCall, StageEvent):
+            for table in (LlmCall, StageEvent, DbEvent):
                 res = session.execute(delete(table).where(table.started_at < cutoff))
                 removed += res.rowcount or 0
             session.commit()

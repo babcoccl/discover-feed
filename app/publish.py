@@ -349,6 +349,8 @@ def sync_story(
         )
         session.add(latest)
         session.flush()
+    prev_version = story.published_version
+    prev_published = story.state == StoryState.PUBLISHED
     if publishable and story.published_version != latest.version:
         first = story.published_version is None
         story.published_version = latest.version
@@ -371,23 +373,30 @@ def sync_story(
     else:
         story.state = StoryState.CLUSTERED.value
     story.state_reason = _reason(a, view_state, publishable, story, policy)
-    try:
-        from app import telemetry
+    # The gate evaluates constantly (~8.5k runs/day): only record the decision that
+    # changed the story's published state — that one is the interesting log step.
+    changed = (
+        story.published_version != prev_version
+        or (story.state == StoryState.PUBLISHED) != prev_published
+    )
+    if changed:
+        try:
+            from app import telemetry
 
-        telemetry.emit_stage(
-            "publish_gate",
-            story_id=story_id,
-            detail={
-                "state": view_state,
-                "publishable": publishable,
-                "version": latest.version,
-                "brief": a.brief,
-                "report": a.report,
-                "reason": story.state_reason,
-            },
-        )
-    except Exception:  # telemetry never affects the publish decision
-        pass
+            telemetry.emit_stage(
+                "publish_gate",
+                story_id=story_id,
+                detail={
+                    "state": view_state,
+                    "publishable": publishable,
+                    "version": latest.version,
+                    "brief": a.brief,
+                    "report": a.report,
+                    "reason": story.state_reason,
+                },
+            )
+        except Exception:  # telemetry never affects the publish decision
+            pass
     return latest
 
 

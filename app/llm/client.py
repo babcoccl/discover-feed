@@ -452,6 +452,8 @@ class LLMClient:
             error_kind=error_kind,
             prompt_text=prompt_text,
             response_text=response_text,
+            finish_reason=result.finish_reason if result else None,
+            reasoning_chars=result.reasoning_length if result else None,
         )
 
     async def stream_chat(
@@ -640,6 +642,7 @@ class LLMClient:
             error_kind=error_kind,
             prompt_text=prompt_text,
             response_text=None,
+            finish_reason=done.finish_reason if done else None,
         )
 
     def _fail(self, error: LLMError, key: str | None) -> LLMError:

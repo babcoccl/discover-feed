@@ -17,6 +17,10 @@ class SummaryOutcome(BaseModel):
     attempts: int = 0
     latency_ms: int | None = None
     completion_tokens: int | None = None
+    save_attempts_ms: int | None = None
+    """Duration of the attempts write transaction (story step log)."""
+    save_view_ms: int | None = None
+    """Duration of the summary+view write transaction (story step log)."""
 
 
 class SummarizeRunResult(BaseModel):

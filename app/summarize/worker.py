@@ -403,7 +403,12 @@ class SummaryWorker:
                 outcome = await self.summarizer.summarize_story(
                     self.session_factory, story_id, force=force, kind=kind
                 )
-                ev.detail.update(status=outcome.status, reason=outcome.reason)
+                ev.detail.update(
+                    status=outcome.status,
+                    reason=outcome.reason,
+                    save_attempts_ms=outcome.save_attempts_ms,
+                    save_view_ms=outcome.save_view_ms,
+                )
         except Exception as exc:  # isolate: one broken story never stops the others
             logger.exception("summarizing story %s (%s) failed", story_id, kind)
             outcome = SummaryOutcome(
