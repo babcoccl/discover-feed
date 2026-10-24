@@ -210,6 +210,4 @@ def workflow_story_log_text(request: Request, slug: str, story_id: int, show: st
         show = show if show in ("all", "problems", "llm") else "all"
         log = queries.story_log(session, story_id, show=show)
         log["story_id"] = story_id
-    return Response(
-        queries.story_log_text(log), media_type="text/plain; charset=utf-8"
-    )
+    return Response(queries.story_log_text(log), media_type="text/plain; charset=utf-8")

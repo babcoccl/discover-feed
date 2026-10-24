@@ -118,9 +118,7 @@ _ctx_article: contextvars.ContextVar[int | None] = contextvars.ContextVar(
 _ctx_profile: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "telemetry_profile", default=None
 )
-_ctx_run: contextvars.ContextVar[str | None] = contextvars.ContextVar(
-    "telemetry_run", default=None
-)
+_ctx_run: contextvars.ContextVar[str | None] = contextvars.ContextVar("telemetry_run", default=None)
 
 
 def set_story(story_id: int | None) -> contextvars.Token:

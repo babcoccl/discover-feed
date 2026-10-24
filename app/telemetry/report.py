@@ -113,11 +113,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--since", default="24h", help="window: e.g. 1h, 24h, 7d")
     parser.add_argument("--markdown", action="store_true", help="markdown tables (default text)")
     parser.add_argument(
-        "--story", "--story-id", dest="story_id", type=int, default=None,
+        "--story",
+        "--story-id",
+        dest="story_id",
+        type=int,
+        default=None,
         help="trace one story (the step log)",
     )
     parser.add_argument(
-        "--show", default="all", choices=["all", "problems", "llm"],
+        "--show",
+        default="all",
+        choices=["all", "problems", "llm"],
         help="step log filter",
     )
     parser.add_argument("--db", default=None, help="DISCOVER_DATABASE_URL override")

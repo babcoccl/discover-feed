@@ -86,6 +86,7 @@ def test_lock_retry_records_holder_fields(telemetry_on, fast_sleep) -> None:
     holder.add(Story(first_seen_at=T0, last_updated_at=T0))
     holder.flush()  # write txn open on the holder's connection
     try:
+
         def flaky():
             if not hasattr(flaky, "done"):
                 flaky.done = True
@@ -213,35 +214,61 @@ def test_story_log_orders_and_marks(telemetry_on) -> None:
         session.add_all(
             [
                 StageEvent(
-                    ref="e", stage="enrich", story_id=sid, status="done",
-                    started_at=t0, finished_at=t0 + timedelta(seconds=2),
+                    ref="e",
+                    stage="enrich",
+                    story_id=sid,
+                    status="done",
+                    started_at=t0,
+                    finished_at=t0 + timedelta(seconds=2),
                 ),
                 StageEvent(
-                    ref="e", stage="summarize", story_id=sid, status="running",
+                    ref="e",
+                    stage="summarize",
+                    story_id=sid,
+                    status="running",
                     started_at=t0 + timedelta(seconds=40),
                 ),
                 StageEvent(
-                    ref="e", stage="brief", story_id=other, status="ok",
+                    ref="e",
+                    stage="brief",
+                    story_id=other,
+                    status="ok",
                     started_at=t0 + timedelta(seconds=1),
                     finished_at=t0 + timedelta(seconds=3),
                 ),
                 LlmCall(
-                    call_ref="c1", story_id=sid, purpose="brief",
-                    category="interpretation", status="ok",
+                    call_ref="c1",
+                    story_id=sid,
+                    purpose="brief",
+                    category="interpretation",
+                    status="ok",
                     started_at=t0 + timedelta(seconds=1),
                     finished_at=t0 + timedelta(seconds=2),
-                    latency_ms=1000, prompt_tokens=100, completion_tokens=50,
-                    tokens_per_second=50.0, finish_reason="stop",
-                    reasoning_chars=10, run_id="r1",
+                    latency_ms=1000,
+                    prompt_tokens=100,
+                    completion_tokens=50,
+                    tokens_per_second=50.0,
+                    finish_reason="stop",
+                    reasoning_chars=10,
+                    run_id="r1",
                 ),
                 DbEvent(
-                    kind="lock_retry", story_id=sid, started_at=t0 + timedelta(seconds=1),
-                    waited_ms=800, attempt=2, outcome="retried",
-                    holder_caller="app/x.py:f", holder_age_ms=500,
+                    kind="lock_retry",
+                    story_id=sid,
+                    started_at=t0 + timedelta(seconds=1),
+                    waited_ms=800,
+                    attempt=2,
+                    outcome="retried",
+                    holder_caller="app/x.py:f",
+                    holder_age_ms=500,
                 ),
                 DbEvent(
-                    kind="lock_error", story_id=None, started_at=t0 + timedelta(seconds=1),
-                    holder_story_id=sid, holder_caller="app/y.py:g", holder_age_ms=900,
+                    kind="lock_error",
+                    story_id=None,
+                    started_at=t0 + timedelta(seconds=1),
+                    holder_story_id=sid,
+                    holder_caller="app/y.py:g",
+                    holder_age_ms=900,
                     caller="app/z.py:h",
                 ),
             ]
@@ -288,15 +315,21 @@ def test_story_log_filters_and_truncation(telemetry_on, monkeypatch) -> None:
         for i in range(6):
             session.add(
                 StageEvent(
-                    ref="e", stage="enrich", story_id=sid, status="ok",
+                    ref="e",
+                    stage="enrich",
+                    story_id=sid,
+                    status="ok",
                     started_at=T0 + timedelta(seconds=i),
                     finished_at=T0 + timedelta(seconds=i, milliseconds=10),
                 )
             )
         session.add(
             LlmCall(
-                call_ref="only", story_id=sid, purpose="brief",
-                category="interpretation", status="failed",
+                call_ref="only",
+                story_id=sid,
+                purpose="brief",
+                category="interpretation",
+                status="failed",
                 started_at=T0,
             )
         )
@@ -320,7 +353,10 @@ def test_story_log_text_has_no_payloads(telemetry_on) -> None:
 
     sid = _seed_story(telemetry_on)
     telemetry.emit_llm_call(
-        call_ref="p", purpose="brief", story_id=sid, prompt_text="PROMPT-BODY-SECRET",
+        call_ref="p",
+        purpose="brief",
+        story_id=sid,
+        prompt_text="PROMPT-BODY-SECRET",
         status="ok",
     )
     writer.flush(timeout=5)
@@ -345,8 +381,7 @@ def admin_client(tmp_path):
 
     db_url = f"sqlite:///{tmp_path / 'web.db'}"
     settings = Settings(
-        config_path=Path(__file__).resolve().parent.parent
-        / "config" / "profiles.example.yaml",
+        config_path=Path(__file__).resolve().parent.parent / "config" / "profiles.example.yaml",
         database_url=db_url,
         scheduler_enabled=False,
         admin_key="admin-secret",  # type: ignore[arg-type]
@@ -379,9 +414,7 @@ def _seed_web_story(db_url, *extra):
 def test_step_log_page_renders_empty(admin_client) -> None:
     client, db_url = admin_client
     sid = _seed_web_story(db_url)
-    resp = client.get(
-        f"/p/personal-reader/settings/workflow/story/{sid}", headers=HEAD
-    )
+    resp = client.get(f"/p/personal-reader/settings/workflow/story/{sid}", headers=HEAD)
     assert resp.status_code == 200
     assert "Step log" in resp.text and "first_seen" in resp.text
     # nothing active → no polling attribute
@@ -395,30 +428,30 @@ def test_step_log_page_renders_and_polls(admin_client) -> None:
     sid = _seed_web_story(
         db_url,
         StageEvent(
-            ref="e", stage="summarize", status="running", started_at=utcnow(),
+            ref="e",
+            stage="summarize",
+            status="running",
+            started_at=utcnow(),
         ),
         DbEvent(
-            kind="lock_retry", started_at=utcnow(),
-            waited_ms=500, attempt=1, outcome="retried",
+            kind="lock_retry",
+            started_at=utcnow(),
+            waited_ms=500,
+            attempt=1,
+            outcome="retried",
         ),
     )
 
-    resp = client.get(
-        f"/p/personal-reader/settings/workflow/story/{sid}", headers=HEAD
-    )
+    resp = client.get(f"/p/personal-reader/settings/workflow/story/{sid}", headers=HEAD)
     assert resp.status_code == 200
     assert "summarize" in resp.text and "lock_retry" in resp.text
     assert "(victim)" in resp.text
     assert 'hx-trigger="every 5s"' in resp.text  # running → live polling
 
-    partial = client.get(
-        f"/p/personal-reader/settings/workflow/story/{sid}/log", headers=HEAD
-    )
+    partial = client.get(f"/p/personal-reader/settings/workflow/story/{sid}/log", headers=HEAD)
     assert partial.status_code == 200 and "lock_retry" in partial.text
 
-    txt = client.get(
-        f"/p/personal-reader/settings/workflow/story/{sid}/log.txt", headers=HEAD
-    )
+    txt = client.get(f"/p/personal-reader/settings/workflow/story/{sid}/log.txt", headers=HEAD)
     assert txt.status_code == 200
     assert txt.headers["content-type"].startswith("text/plain")
     assert "lock_retry" in txt.text and "summarize" in txt.text

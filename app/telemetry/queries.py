@@ -946,9 +946,7 @@ def story_log(session, story_id: int, *, show: str = "all") -> dict[str, Any]:
             detail={
                 "kind": j.kind,
                 "attempts": j.attempts,
-                "next_attempt_at": j.next_attempt_at.isoformat()
-                if j.next_attempt_at
-                else None,
+                "next_attempt_at": j.next_attempt_at.isoformat() if j.next_attempt_at else None,
                 "force": j.force,
             },
         )
@@ -992,9 +990,7 @@ def story_log(session, story_id: int, *, show: str = "all") -> dict[str, Any]:
             end = e.finished_at or e.started_at
             concurrent_rows.append((f"stage:{e.id}", e.stage, e.started_at, end))
         for c in session.scalars(
-            select(LlmCall).where(
-                LlmCall.started_at <= last_end, LlmCall.started_at >= first_ts
-            )
+            select(LlmCall).where(LlmCall.started_at <= last_end, LlmCall.started_at >= first_ts)
         ):
             start = c.started_at
             end = c.finished_at or (
@@ -1036,9 +1032,7 @@ def story_log(session, story_id: int, *, show: str = "all") -> dict[str, Any]:
 
     # --- summary ----------------------------------------------------------------------------
     llm_entries = [
-        e
-        for e in entries
-        if e["kind"] == "LLM" and e["source"] and e["source"][0] == "llm"
+        e for e in entries if e["kind"] == "LLM" and e["source"] and e["source"][0] == "llm"
     ]
     work_starts = [e["ts"] for e in entries if e["kind"] in ("STAGE", "LLM", "DB", "SAVE")]
     queued_at = min(
@@ -1151,9 +1145,7 @@ def story_log_text(log: dict[str, Any]) -> str:
         ),
     ]
     if s["attempts"]:
-        lines.append(
-            "attempts: " + ", ".join(f"{k}x{n}" for k, n in sorted(s["attempts"].items()))
-        )
+        lines.append("attempts: " + ", ".join(f"{k}x{n}" for k, n in sorted(s["attempts"].items())))
     if s["lock_events"]:
         holder = s["longest_holder"]
         lines.append(
