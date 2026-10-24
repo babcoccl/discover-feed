@@ -1,6 +1,12 @@
 {% extends "base.html" %}
 {% block title %}Workflow · {{ profile.name }}{% endblock %}
 {% block content %}
+{% if viz_only %}
+<div hx-get="/p/{{ profile.slug }}/settings/workflow/panel?hours={{ hours }}&viz=1"
+     hx-trigger="every 6s" hx-swap="innerHTML">
+  {% include "_pipeline_viz.html" %}
+</div>
+{% else %}
 <div class="mb-4 flex flex-wrap items-center gap-3">
   <h1 class="text-xl font-semibold">Workflow</h1>
   <a href="/p/{{ profile.slug }}/settings"
@@ -29,4 +35,5 @@
      hx-trigger="every 6s" hx-swap="innerHTML">
   {% include "_workflow.html" %}
 </div>
+{% endif %}
 {% endblock %}

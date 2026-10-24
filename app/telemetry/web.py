@@ -17,7 +17,7 @@ router = APIRouter(include_in_schema=False)
 RANGE_HOURS = {"1h": 1, "24h": 24, "7d": 24 * 7}
 
 
-def _context(request: Request, session, profile, hours: float) -> dict:
+def _context(request: Request, session, profile, hours: float, viz_only: bool = False) -> dict:
     from app.web import _base_context
 
     return _base_context(
@@ -25,8 +25,10 @@ def _context(request: Request, session, profile, hours: float) -> dict:
         profile,
         on_settings=True,
         hours=hours,
+        viz_only=viz_only,
         enabled=telemetry.enabled(),
         flow=queries.flow_overview(session, hours=hours),
+        viz=queries.pipeline_viz(session, hours=hours),
         span=queries.data_span(session, hours=hours),
         llm=queries.llm_stats(session, hours=hours),
         funnel=queries.funnel(session, hours=hours),
@@ -49,26 +51,27 @@ def _enrich_status(request: Request) -> dict | None:
 
 
 @router.get("/p/{slug}/settings/workflow", response_class=HTMLResponse)
-def workflow_page(request: Request, slug: str, hours: int = 24) -> Response:
-    """Full page: flow overview, LLM usage, backlogs, funnel, insights and versions."""
+def workflow_page(request: Request, slug: str, hours: int = 24, viz: int = 0) -> Response:
+    """Full page: flow overview, LLM usage, backlogs, funnel, insights and versions.
+    ``?viz=1`` renders only the pipeline visualizer strip (for a quick glance)."""
     from app.web import TEMPLATES, _profile_or_404, _session
 
     hours = min(hours or 24, 24 * 30)
     with _session(request) as session:
         profile = _profile_or_404(session, slug)
-        context = _context(request, session, profile, hours)
+        context = _context(request, session, profile, hours, viz_only=bool(viz))
     return TEMPLATES.TemplateResponse(request, "workflow.html", context)
 
 
 @router.get("/p/{slug}/settings/workflow/panel", response_class=HTMLResponse)
-def workflow_panel(request: Request, slug: str, hours: int = 24) -> Response:
+def workflow_panel(request: Request, slug: str, hours: int = 24, viz: int = 0) -> Response:
     """HTMX partial refreshed by polling."""
     from app.web import TEMPLATES, _profile_or_404, _session
 
     hours = min(hours or 24, 24 * 30)
     with _session(request) as session:
         profile = _profile_or_404(session, slug)
-        context = _context(request, session, profile, hours)
+        context = _context(request, session, profile, hours, viz_only=bool(viz))
     return TEMPLATES.TemplateResponse(request, "_workflow.html", context)
 
 

@@ -493,3 +493,56 @@ def test_report_cli(tmp_path, session_factory):
     _llm_calls(session_factory)
     assert report.main(["--since", "24h", "--markdown"]) == 0
     assert report.main(["--since", "24h", "--story-id", "1"]) == 0
+
+
+# --- pipeline visualizer -------------------------------------------------------
+
+
+def test_pipeline_viz_order_and_recent(telemetry_on):
+    from app.telemetry import queries
+
+    t0 = datetime.now(UTC)
+    telemetry.emit_stage("alerts", story_id=1, started_at=t0, finished_at=t0 + timedelta(seconds=1))
+    telemetry.emit_stage("ingest", story_id=1, started_at=t0 + timedelta(seconds=1), finished_at=t0)
+    telemetry.emit_stage(
+        "cluster", story_id=1, started_at=t0 - timedelta(minutes=5), status="running"
+    )
+    for i in range(35):
+        telemetry.emit_stage(
+            "brief",
+            story_id=i + 2,
+            started_at=t0 + timedelta(seconds=10 + i),
+            finished_at=t0 + timedelta(seconds=11 + i),
+            detail={"reason": "too_short"},
+        )
+    _stages(telemetry_on)
+    queries._cache.clear()
+    with telemetry_on() as session:
+        viz = queries.pipeline_viz(session, hours=24)
+    names = [s["stage"] for s in viz["stages"]]
+    assert names == list(queries.PIPELINE_STAGES)
+    states = {s["stage"]: s["state"] for s in viz["stages"]}
+    assert states["cluster"] == "running"
+    assert states["alerts"] == "ok"
+    assert states["extract"] == "idle"
+    assert len(viz["recent"]) == 30
+    assert viz["recent"][0]["status"] == "running"  # running rows sort first
+    finished = [e for e in viz["recent"] if e["status"] != "running"]
+    starts = [e["started_at"] for e in finished]
+    assert starts == sorted(starts, reverse=True)
+    assert viz["recent"][1]["story_id"] == 36  # newest finished event
+    assert viz["recent"][1]["reason"] == "too_short"
+
+
+def test_pipeline_viz_page_and_viz_param(admin_client):
+    head = {"x-api-key": "admin-secret"}
+    page = admin_client.get("/p/personal-reader/settings/workflow", headers=head)
+    assert page.status_code == 200
+    assert 'id="pipeline-viz"' in page.text and "Recent activity" in page.text
+    viz = admin_client.get("/p/personal-reader/settings/workflow?viz=1", headers=head)
+    assert viz.status_code == 200
+    assert 'id="pipeline-viz"' in viz.text
+    assert "Pipeline flow" not in viz.text  # only the visualizer
+    panel = admin_client.get("/p/personal-reader/settings/workflow/panel?viz=1", headers=head)
+    assert panel.status_code == 200
+    assert 'id="pipeline-viz"' in panel.text and "Pipeline flow" not in panel.text
