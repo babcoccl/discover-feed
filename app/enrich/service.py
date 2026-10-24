@@ -556,6 +556,7 @@ class Enricher:
                     if last is not None and last.started_at and last.finished_at
                     else None
                 )
+        from app import telemetry
         from app.telemetry import writer as telemetry_writer
 
         primary = self.config.providers[0].name if self.config.providers else None
@@ -579,6 +580,7 @@ class Enricher:
             **lock_stats(),
             "telemetry_dropped_rows": telemetry_writer.dropped_rows(),
             "telemetry_queued": telemetry_writer.pending(),
+            "db_events_dropped": telemetry.db_events_dropped(),
             **durations,
         }
 

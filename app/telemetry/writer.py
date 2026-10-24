@@ -76,13 +76,15 @@ def _drain(max_items: int) -> list[tuple[str, dict[str, Any], Any]]:
 def _apply(session, items: list[tuple[str, dict[str, Any]]]) -> None:
     from sqlalchemy import select, update
 
-    from app.models import LlmCall, StageEvent
+    from app.models import DbEvent, LlmCall, StageEvent
 
     for kind, values in items:
         if kind == "llm_call":
             session.add(LlmCall(**values))
         elif kind == "stage_event":
             session.add(StageEvent(**values))
+        elif kind == "db_event":
+            session.add(DbEvent(**values))
     # inserts before lookups: sessions run autoflush=False, so *_update items must
     # trigger an explicit flush to see the row they patch
     session.flush()
@@ -158,6 +160,12 @@ def _loop() -> None:
         except Exception as exc:  # the writer thread must never die silently
             _warn("loop", exc)
             time.sleep(FLUSH_SECONDS)
+
+
+def on_writer_thread() -> bool:
+    """True on the telemetry writer thread (db_events are never emitted for its own
+    writes — a lock event inside a telemetry flush would feed itself)."""
+    return _thread is not None and threading.current_thread() is _thread
 
 
 _thread: threading.Thread | None = None

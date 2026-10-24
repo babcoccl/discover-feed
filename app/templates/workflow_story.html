@@ -47,6 +47,12 @@
 </section>
 
 <section class="mb-6">
+  <h2 class="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Step log</h2>
+  {% set slug = profile.slug %}
+  {% include "_story_log.html" %}
+</section>
+
+<section class="mb-6">
   <h2 class="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Timeline</h2>
   {% set span = gantt[2] %}
   <div class="space-y-1">

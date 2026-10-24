@@ -161,8 +161,8 @@ def workflow_story_search(request: Request, slug: str, q: str = "", stage: str =
 
 
 @router.get("/p/{slug}/settings/workflow/story/{story_id}", response_class=HTMLResponse)
-def workflow_story(request: Request, slug: str, story_id: int) -> Response:
-    """One story's inspector: Gantt timeline, LLM rows, summary bar."""
+def workflow_story(request: Request, slug: str, story_id: int, show: str = "all") -> Response:
+    """One story's inspector: step log, Gantt timeline, LLM rows, summary bar."""
     from app.web import TEMPLATES, _base_context, _profile_or_404, _session
 
     with _session(request) as session:
@@ -173,8 +173,41 @@ def workflow_story(request: Request, slug: str, story_id: int) -> Response:
         context = _base_context(session, profile, on_settings=True)
         context["trace"] = trace
         context["is_admin"] = is_admin(request)
+        context["show"] = show if show in ("all", "problems", "llm") else "all"
+        context["log"] = queries.story_log(session, story_id, show=context["show"])
+        context["log"]["story_id"] = story_id
         # Gantt scale: events positioned against the trace's own window
         t0 = trace.get("trace_start") or datetime.now(UTC) - timedelta(hours=1)
         t1 = t0 + timedelta(milliseconds=max(trace["wall_ms"] or 0, 60_000))
         context["gantt"] = (t0, t1, max((t1 - t0).total_seconds() * 1000, 1.0))
     return TEMPLATES.TemplateResponse(request, "workflow_story.html", context)
+
+
+@router.get("/p/{slug}/settings/workflow/story/{story_id}/log", response_class=HTMLResponse)
+def workflow_story_log(request: Request, slug: str, story_id: int, show: str = "all") -> Response:
+    """HTMX partial: just the step-log section (polled while the story is active)."""
+    from app.web import TEMPLATES, _profile_or_404, _session
+
+    with _session(request) as session:
+        _profile_or_404(session, slug)
+        show = show if show in ("all", "problems", "llm") else "all"
+        log = queries.story_log(session, story_id, show=show)
+        log["story_id"] = story_id
+    return TEMPLATES.TemplateResponse(
+        request,
+        "_story_log.html",
+        {"request": request, "log": log, "slug": slug, "show": show},
+    )
+
+
+@router.get("/p/{slug}/settings/workflow/story/{story_id}/log.txt")
+def workflow_story_log_text(request: Request, slug: str, story_id: int, show: str = "all"):
+    """Plain-text export of the step log (paste into a chat for analysis)."""
+    from app.web import _profile_or_404, _session
+
+    with _session(request) as session:
+        _profile_or_404(session, slug)
+        show = show if show in ("all", "problems", "llm") else "all"
+        log = queries.story_log(session, story_id, show=show)
+        log["story_id"] = story_id
+    return Response(queries.story_log_text(log), media_type="text/plain; charset=utf-8")

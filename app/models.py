@@ -9,6 +9,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Table,
@@ -890,8 +891,51 @@ class LlmCall(Base):
     response_chars: Mapped[int] = mapped_column(Integer, default=0)
     payload: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     """Prompt/response previews per ``telemetry.store_payloads`` (admin only)."""
+    finish_reason: Mapped[str | None] = mapped_column(String(20))
+    """The API's ``finish_reason`` (``stop``, ``length``, ...); NULL on old rows/errors."""
+    reasoning_chars: Mapped[int | None] = mapped_column(Integer)
+    """Characters of ``reasoning_content`` (thinking) the model returned."""
+    run_id: Mapped[str | None] = mapped_column(String(32))
+    """``Generation.run_id``: links the calls of one brief/report generation."""
     app_version: Mapped[str] = mapped_column(String(60), default="")
     config_hash: Mapped[str] = mapped_column(String(20), default="")
+
+
+class DbEvent(Base):
+    """One database contention event (``app.db`` instrumentation): a statement that hit
+    ``database is locked``, a ``retry_locked`` retry, or a write transaction held long.
+    Never stores SQL text or parameters — only the verb and table name."""
+
+    __tablename__ = "db_events"
+    __table_args__ = (Index("ix_db_events_story_started", "story_id", "started_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    started_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+    kind: Mapped[str] = mapped_column(String(12), index=True)
+    """``lock_error`` | ``lock_retry`` | ``lock_giveup`` | ``slow_write``."""
+    story_id: Mapped[int | None] = mapped_column(Integer)
+    """The victim story (``telemetry.current_story()`` when it happened), if any."""
+    table_name: Mapped[str | None] = mapped_column(String(60))
+    op: Mapped[str | None] = mapped_column(String(10))
+    """``INSERT`` | ``UPDATE`` | ``DELETE`` — the verb only, never the statement."""
+    thread: Mapped[str | None] = mapped_column(String(60))
+    caller: Mapped[str | None] = mapped_column(String(200))
+    """Short code location, e.g. ``app/summarize/service.py:_save``."""
+    attempt: Mapped[int | None] = mapped_column(Integer)
+    """``retry_locked`` try number (1-based)."""
+    waited_ms: Mapped[int | None] = mapped_column(Integer)
+    """Time spent blocked or retrying."""
+    outcome: Mapped[str | None] = mapped_column(String(20))
+    """``retried`` | ``gave_up`` | ``ok_after_retry`` | ``held``."""
+    holder_thread: Mapped[str | None] = mapped_column(String(60))
+    holder_caller: Mapped[str | None] = mapped_column(String(200))
+    holder_story_id: Mapped[int | None] = mapped_column(Integer)
+    """Story the lock holder was working on (``current_story`` at its first write)."""
+    holder_age_ms: Mapped[int | None] = mapped_column(Integer)
+    """How long the holder's write transaction had been open."""
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    """``slow_write``: how long that write transaction was open."""
+    app_version: Mapped[str] = mapped_column(String(60), default="")
 
 
 class StageEvent(Base):

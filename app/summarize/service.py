@@ -2,6 +2,7 @@
 
 import logging
 import re
+import time
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
@@ -354,9 +355,14 @@ class Summarizer:
         gen = Generation(status="fallback", model=self.client.model)
         grounding = [s.grounding for s in sources]
         try:
-            gen.summary, gen.errors = await self._ask(
-                self.client, "summary", sources, lambda c: validate_summary(c, grounding), gen
-            )
+            with telemetry.run_context(gen.run_id):
+                gen.summary, gen.errors = await self._ask(
+                    self.client,
+                    "summary",
+                    sources,
+                    lambda c: validate_summary(c, grounding),
+                    gen,
+                )
         except LLMError as exc:
             gen.status, gen.reason = "failed", f"{exc.kind}: {exc}"
             return gen
@@ -372,27 +378,32 @@ class Summarizer:
         gen = Generation(status="fallback", kind="brief", model=self.client.model)
         grounding = [s.grounding for s in sources]
         try:
-            gen.brief, errors = await self._ask(
-                self.client,
-                "brief",
-                sources,
-                lambda c: validate_brief(
-                    c,
-                    grounding,
-                    duplicate_threshold=self.duplicate_threshold,
-                    allow=self.verbatim.allow,
-                ),
-                gen,
-            )
-            gen.errors += errors
-            if gen.brief is not None:
-                gen.status = "ok"
-                return gen
-            reason = f"brief {_attempt_reason(errors)}"
-            gen.summary, errors = await self._ask(
-                self.client, "summary", sources, lambda c: validate_summary(c, grounding), gen
-            )
-            gen.errors += errors
+            with telemetry.run_context(gen.run_id):
+                gen.brief, errors = await self._ask(
+                    self.client,
+                    "brief",
+                    sources,
+                    lambda c: validate_brief(
+                        c,
+                        grounding,
+                        duplicate_threshold=self.duplicate_threshold,
+                        allow=self.verbatim.allow,
+                    ),
+                    gen,
+                )
+                gen.errors += errors
+                if gen.brief is not None:
+                    gen.status = "ok"
+                    return gen
+                reason = f"brief {_attempt_reason(errors)}"
+                gen.summary, errors = await self._ask(
+                    self.client,
+                    "summary",
+                    sources,
+                    lambda c: validate_summary(c, grounding),
+                    gen,
+                )
+                gen.errors += errors
         except LLMError as exc:
             gen.status, gen.reason = "failed", f"{exc.kind}: {exc}"
             return gen
@@ -408,19 +419,20 @@ class Summarizer:
         gen = Generation(status="failed", kind="report", model=self.client.model)
         grounding = [s.grounding for s in sources]
         try:
-            gen.report, gen.errors = await self._ask(
-                self.report_client,
-                "report",
-                sources,
-                lambda c: validate_report(
-                    c,
-                    grounding,
-                    duplicate_threshold=self.duplicate_threshold,
-                    guard=self.verbatim,
-                    title=title,
-                ),
-                gen,
-            )
+            with telemetry.run_context(gen.run_id):
+                gen.report, gen.errors = await self._ask(
+                    self.report_client,
+                    "report",
+                    sources,
+                    lambda c: validate_report(
+                        c,
+                        grounding,
+                        duplicate_threshold=self.duplicate_threshold,
+                        guard=self.verbatim,
+                        title=title,
+                    ),
+                    gen,
+                )
         except LLMError as exc:
             gen.reason = f"{exc.kind}: {exc}"
             return gen
@@ -436,15 +448,16 @@ class Summarizer:
         gen = Generation(status="failed", kind=FOLLOWUPS, model=self.client.model)
         grounding = [s.grounding for s in sources]
         try:
-            gen.followups, gen.errors = await self._ask(
-                self.followups_client,
-                FOLLOWUPS,
-                sources,
-                lambda c: validate_followups(
-                    c, grounding, duplicate_threshold=self.duplicate_threshold
-                ),
-                gen,
-            )
+            with telemetry.run_context(gen.run_id):
+                gen.followups, gen.errors = await self._ask(
+                    self.followups_client,
+                    FOLLOWUPS,
+                    sources,
+                    lambda c: validate_followups(
+                        c, grounding, duplicate_threshold=self.duplicate_threshold
+                    ),
+                    gen,
+                )
         except LLMError as exc:
             gen.reason = f"{exc.kind}: {exc}"
             return gen
@@ -529,8 +542,15 @@ class Summarizer:
                     story_id=story_id, kind=kind, status="cached", summary_id=hit.id
                 )
             copy = _copy(hit)
-            self._save(session_factory, story_id, copy)
-            return SummaryOutcome(story_id=story_id, kind=kind, status="reused", summary_id=copy.id)
+            saves = self._save(session_factory, story_id, copy)
+            return SummaryOutcome(
+                story_id=story_id,
+                kind=kind,
+                status="reused",
+                summary_id=copy.id,
+                save_attempts_ms=saves[0],
+                save_view_ms=saves[1],
+            )
 
         row = StorySummary(
             kind=kind,
@@ -559,13 +579,15 @@ class Summarizer:
                 "outcome": "skipped",
                 "reason": INSUFFICIENT_TEXT,
             }
-            self._save(session_factory, story_id, row, [skipped], members)
+            saves = self._save(session_factory, story_id, row, [skipped], members)
             return SummaryOutcome(
                 story_id=story_id,
                 kind=kind,
                 status="skipped",
                 reason=INSUFFICIENT_TEXT,
                 summary_id=row.id,
+                save_attempts_ms=saves[0],
+                save_view_ms=saves[1],
             )
 
         if kind == SummaryKind.REPORT:
@@ -575,7 +597,7 @@ class Summarizer:
         else:
             gen = await self.generate_brief(sources)
         _fill(row, gen, fallback_text)
-        self._save(session_factory, story_id, row, gen.attempt_log, members)
+        saves = self._save(session_factory, story_id, row, gen.attempt_log, members)
         if gen.status != "ok":
             logger.info("story %s %s %s: %s", story_id, kind, gen.status, gen.reason)
         return SummaryOutcome(
@@ -587,6 +609,8 @@ class Summarizer:
             attempts=gen.attempts,
             latency_ms=gen.latency_ms,
             completion_tokens=gen.completion_tokens,
+            save_attempts_ms=saves[0],
+            save_view_ms=saves[1],
         )
 
     def _cache_hit(self, session, key: str) -> StorySummary | None:
@@ -611,7 +635,7 @@ class Summarizer:
         row: StorySummary,
         attempts: Sequence[dict[str, Any]] = (),
         members: Sequence[dict[str, Any]] = (),
-    ) -> None:
+    ) -> tuple[int, int]:
         # Two short write transactions: a single txn spanning the attempts insert, the
         # summary insert and the view rebuild held SQLite's write lock long enough to
         # starve every other writer (``database is locked``).
@@ -636,8 +660,13 @@ class Summarizer:
                     self.on_save(session, story_id)
                 session.commit()
 
+        t0 = time.perf_counter()
         retry_locked(record)
+        attempts_ms = round((time.perf_counter() - t0) * 1000)
+        t0 = time.perf_counter()
         retry_locked(store)
+        view_ms = round((time.perf_counter() - t0) * 1000)
+        return attempts_ms, view_ms
 
 
 _ATTEMPT_COLUMNS = {c.name for c in GenerationAttempt.__table__.columns} - {"id", "story_id"}

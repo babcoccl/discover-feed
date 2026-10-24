@@ -112,7 +112,20 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.telemetry.report")
     parser.add_argument("--since", default="24h", help="window: e.g. 1h, 24h, 7d")
     parser.add_argument("--markdown", action="store_true", help="markdown tables (default text)")
-    parser.add_argument("--story-id", type=int, default=None, help="trace one story")
+    parser.add_argument(
+        "--story",
+        "--story-id",
+        dest="story_id",
+        type=int,
+        default=None,
+        help="trace one story (the step log)",
+    )
+    parser.add_argument(
+        "--show",
+        default="all",
+        choices=["all", "problems", "llm"],
+        help="step log filter",
+    )
     parser.add_argument("--db", default=None, help="DISCOVER_DATABASE_URL override")
     args = parser.parse_args(argv)
 
@@ -139,9 +152,9 @@ def main(argv: list[str] | None = None) -> int:
     telemetry.configure(factory, config)
     with factory() as session:
         if args.story_id is not None:
-            trace = queries.story_trace(session, args.story_id)
-            trace["story_id"] = args.story_id
-            print(story_markdown(trace))
+            log = queries.story_log(session, args.story_id, show=args.show)
+            log["story_id"] = args.story_id
+            print(queries.story_log_text(log))
             return 0
         data = {
             "hours": hours,
