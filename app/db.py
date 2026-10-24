@@ -1,8 +1,21 @@
+import logging
+import os
+import random
+import re
+import threading
+import time
+import traceback
+import weakref
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import Engine, create_engine, event, inspect, text
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
+
+logger = logging.getLogger(__name__)
 
 
 class Base(DeclarativeBase):
@@ -14,6 +27,177 @@ SQLITE_BUSY_TIMEOUT_MS = 15000
 locked`` (the app, the workers' threads, the telemetry writer and the CLIs share one
 file)."""
 
+# --- write-transaction instrumentation ---------------------------------------------------
+
+WRITE_TXN_WARN_SECONDS = float(os.environ.get("DISCOVER_DB_WRITE_TXN_WARN_SECONDS", "2"))
+"""A write transaction held longer than this logs ``write txn held Ns by ...``."""
+INSTRUMENT_LOCKS = os.environ.get("DISCOVER_DB_INSTRUMENT_LOCKS", "1") != "0"
+"""Env switch for the lock instrumentation (default on; negligible overhead)."""
+
+_LOCK_STATS: dict[str, Any] = {
+    "lock_errors_since_start": 0,
+    "lock_retries_since_start": 0,
+    "longest_write_txn_seconds": 0.0,
+    "last_lock_error": None,
+}
+_write_txns: dict[int, dict] = {}
+_write_txns_lock = threading.Lock()
+_monitor_started = False
+
+_WRITE_RE = re.compile(r"^\s*(?:INSERT|UPDATE|DELETE|REPLACE)\b", re.IGNORECASE)
+_TABLE_RE = re.compile(
+    r"(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|UPDATE(?:\s+OR\s+\w+)?|DELETE\s+FROM)\s+[\"'`\[]?(\w+)",
+    re.IGNORECASE,
+)
+
+
+def lock_stats() -> dict[str, Any]:
+    """Process-wide counters: lock errors, retry_locked retries, the longest write
+    transaction seen and the last lock error (table, time)."""
+    return dict(_LOCK_STATS)
+
+
+def is_lock_error(exc: BaseException) -> bool:
+    return isinstance(exc, OperationalError) and "database is locked" in str(exc).lower()
+
+
+def _caller() -> str:
+    frames = traceback.extract_stack(limit=10)
+    for f in reversed(frames[:-3]):
+        name = f.filename.replace("\\", "/")
+        if "/sqlalchemy/" not in name and not name.endswith("/app/db.py"):
+            return f"{f.filename}:{f.lineno} in {f.name}"
+    return "?"
+
+
+def open_write_txns() -> list[dict]:
+    """Snapshot of every write transaction open right now (thread, age, caller)."""
+    now = time.monotonic()
+    with _write_txns_lock:
+        return [
+            {
+                "thread": t["thread"],
+                "age_seconds": round(now - t["started"], 1),
+                "caller": t["caller"],
+            }
+            for ref, t in _write_txns.values()
+            if ref() is not None
+        ]
+
+
+def _end_write_txn(conn) -> None:
+    info = conn.info.pop("write_txn", None)
+    with _write_txns_lock:
+        _write_txns.pop(id(conn), None)
+    if info is None:
+        return
+    held = time.monotonic() - info["started"]
+    if held > _LOCK_STATS["longest_write_txn_seconds"]:
+        _LOCK_STATS["longest_write_txn_seconds"] = round(held, 3)
+
+
+def _watch_write_txns() -> None:
+    while True:
+        time.sleep(1.0)
+        try:
+            now = time.monotonic()
+            with _write_txns_lock:
+                entries = [t for ref, t in _write_txns.values() if ref() is not None]
+            for t in entries:
+                held = now - t["started"]
+                if held >= WRITE_TXN_WARN_SECONDS and not t.get("warned"):
+                    t["warned"] = True
+                    logger.warning(
+                        "write txn held %.1fs by %s at %s",
+                        held,
+                        t["thread"],
+                        t["caller"],
+                    )
+        except Exception:  # the monitor never dies
+            logger.exception("write-txn monitor failed")
+
+
+def _instrument_locks(engine: Engine) -> None:
+    """Track each connection's write transaction (first INSERT/UPDATE/DELETE to
+    commit/rollback): warn on a long hold, and on ``database is locked`` log the
+    statement's table plus every write transaction still open."""
+
+    @event.listens_for(engine, "before_cursor_execute")
+    def _first_write(conn, cursor, statement, parameters, context, executemany) -> None:
+        if "write_txn" in conn.info or not _WRITE_RE.match(statement):
+            return
+        conn.info["write_txn"] = {
+            "thread": threading.current_thread().name,
+            "caller": _caller(),
+            "started": time.monotonic(),
+        }
+        with _write_txns_lock:
+            _write_txns[id(conn)] = (weakref.ref(conn), conn.info["write_txn"])
+
+    for name in ("commit", "rollback"):
+        event.listen(engine, name, lambda conn: _end_write_txn(conn))
+
+    @event.listens_for(engine, "checkin")
+    def _on_checkin(dbapi_conn, _record) -> None:
+        # Fairies returned to the pool without commit/rollback leave a stale
+        # entry; drop any whose fairy is gone.
+        with _write_txns_lock:
+            stale = [k for k, (ref, _info) in _write_txns.items() if ref() is None]
+            for k in stale:
+                del _write_txns[k]
+
+    @event.listens_for(engine, "handle_error")
+    def _on_error(ctx) -> None:
+        exc = ctx.original_exception or ctx.sqlalchemy_exception
+        if exc is None or "database is locked" not in str(exc).lower():
+            return
+        match = _TABLE_RE.search(ctx.statement or "")
+        table = match.group(1) if match else None
+        _LOCK_STATS["lock_errors_since_start"] += 1
+        _LOCK_STATS["last_lock_error"] = {
+            "table": table,
+            "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        logger.warning(
+            "database is locked on %s; open write txns: %s; statement: %s",
+            table or "?",
+            open_write_txns(),
+            (ctx.statement or "")[:200],
+        )
+
+    global _monitor_started
+    with _write_txns_lock:
+        if not _monitor_started:
+            _monitor_started = True
+            threading.Thread(
+                target=_watch_write_txns, name="db-write-txn-monitor", daemon=True
+            ).start()
+
+
+def retry_locked[T](fn: Callable[..., T], *args, retries: int = 3, **kwargs) -> T:
+    """Run ``fn``; on ``database is locked`` retry with jittered backoff (0.5, 1, 2 s,
+    ``retries`` tries). For short idempotent writes only — never a whole worker pass
+    or a call that spans a network/LLM call."""
+    delays = (0.5, 1.0, 2.0)
+    for attempt in range(retries + 1):
+        try:
+            return fn(*args, **kwargs)
+        except OperationalError as exc:
+            if not is_lock_error(exc) or attempt >= retries:
+                raise
+            _LOCK_STATS["lock_retries_since_start"] += 1
+            delay = delays[min(attempt, len(delays) - 1)] * (0.5 + random.random())
+            name = getattr(fn, "__qualname__", repr(fn))
+            logger.info(
+                "database is locked; retrying %s in %.1fs (try %d of %d)",
+                name,
+                delay,
+                attempt + 2,
+                retries + 1,
+            )
+            time.sleep(delay)
+    raise AssertionError("unreachable")  # pragma: no cover
+
 
 def make_engine(database_url: str, **kwargs) -> Engine:
     url = make_url(database_url)
@@ -24,6 +208,8 @@ def make_engine(database_url: str, **kwargs) -> Engine:
             Path(url.database).parent.mkdir(parents=True, exist_ok=True)
     engine = create_engine(database_url, connect_args=connect_args, **kwargs)
     apply_sqlite_pragmas(engine)
+    if url.get_backend_name() == "sqlite" and INSTRUMENT_LOCKS:
+        _instrument_locks(engine)
     return engine
 
 

@@ -23,6 +23,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app import telemetry
+from app.db import retry_locked
 from app.labels import publisher_of, via_of
 from app.llm.client import LLMClient
 from app.models import (
@@ -532,7 +533,7 @@ class PerspectiveService:
                 reason=reason,
             )
         )
-        session.commit()
+        retry_locked(session.commit)
 
     def latest(self, session: Session, story_id: int) -> StorySummary | None:
         """The newest perspectives row for the story (the route reads this)."""

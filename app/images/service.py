@@ -99,42 +99,51 @@ class ImageWorker:
 
     # --- one URL --------------------------------------------------------------------------
 
-    async def asset(
-        self, client: httpx.AsyncClient, session: Session, url: str, kind: str, result
-    ) -> ImageAsset:
+    async def asset(self, client: httpx.AsyncClient, url: str, kind: str, result) -> ImageAsset:
+        """Look up or claim the ``ImageAsset`` row in a short transaction, then fetch
+        and render with no write transaction open, then record the outcome in a
+        second short transaction — a network fetch or a Pillow render can take
+        seconds and must never hold SQLite's write lock."""
         # The key is deterministic (sha256 of the URL), so a stored row for this image
         # is found by URL or key before we try to insert.
         key = image_key(url)
-        row = session.scalar(
-            select(ImageAsset).where(or_(ImageAsset.url == url, ImageAsset.key == key))
-        )
         now = self.now()
-        if row is not None:
-            stale = row.status == "failed" and now - row.checked_at >= RETRY_FAILED_AFTER
-            uncached = row.status == "ok" and self.config.cache and not row.cached_bytes
-            if not stale and not uncached:
-                result.cache_hits += 1
-                return row
-        else:
-            # INSERT OR IGNORE, not session.add: autoflush is off, so a pending row is
-            # invisible to the SELECTs above — the same URL requested twice in one run
-            # would insert twice and die on UNIQUE(images.key). An immediate insert
-            # keeps lookups honest, and a row stored by another worker between our
-            # SELECT and our INSERT is a cache hit, not a failure.
-            stored = session.execute(
-                sqlite_insert(ImageAsset)
-                .values(url=url, key=key, kind=kind, status="failed")
-                .on_conflict_do_nothing()
-            )
+        with self.session_factory() as session:
             row = session.scalar(
                 select(ImageAsset).where(or_(ImageAsset.url == url, ImageAsset.key == key))
             )
-            if not stored.rowcount:
-                result.cache_hits += 1
-                logger.debug("image %s already stored (key %s)", url, key)
-                return row or ImageAsset(url=url, key=key, kind=kind, status="failed")
+            if row is not None:
+                stale = row.status == "failed" and now - row.checked_at >= RETRY_FAILED_AFTER
+                uncached = row.status == "ok" and self.config.cache and not row.cached_bytes
+                if not stale and not uncached:
+                    result.cache_hits += 1
+                    session.expunge(row)
+                    return row
+            else:
+                # INSERT OR IGNORE, not session.add: autoflush is off, so a pending row
+                # is invisible to the SELECTs above — the same URL requested twice in
+                # one run would insert twice and die on UNIQUE(images.key). An
+                # immediate insert keeps lookups honest, and a row stored by another
+                # worker between our SELECT and our INSERT is a cache hit, not a
+                # failure.
+                stored = session.execute(
+                    sqlite_insert(ImageAsset)
+                    .values(url=url, key=key, kind=kind, status="failed")
+                    .on_conflict_do_nothing()
+                )
+                row = session.scalar(
+                    select(ImageAsset).where(or_(ImageAsset.url == url, ImageAsset.key == key))
+                )
+                if not stored.rowcount:
+                    result.cache_hits += 1
+                    logger.debug("image %s already stored (key %s)", url, key)
+                    found = row or ImageAsset(url=url, key=key, kind=kind, status="failed")
+                    session.expunge_all()
+                    return found
+            session.commit()
         icon = kind == "icon"
         result.fetched += 1
+        tints: tuple[str | None, str | None] = (None, None)
         try:
             got = await fetch_image(
                 client,
@@ -151,62 +160,100 @@ class ImageWorker:
                 render_webp, got.data, width, max_pixels=self.config.max_pixels, square=icon
             )
             if icon:
-                row.tint, row.tint_dark = icon_tints(got.data, self.config.max_pixels)
+                tints = icon_tints(got.data, self.config.max_pixels)
+            cached_bytes = self.cache.put(key, webp) if self.config.cache else None
         except Rejected as exc:
-            row.status = "failed" if exc.failed else "rejected"
-            row.reason = exc.reason
-            row.checked_at = now
+            outcome = {
+                "status": "failed" if exc.failed else "rejected",
+                "reason": exc.reason,
+            }
             result.rejected += 1
             result.reasons[exc.reason] = result.reasons.get(exc.reason, 0) + 1
-            return row
         except Exception as exc:  # undecodable in a way Pillow did not classify
             logger.info("image %s unusable: %s", url, exc)
-            row.status, row.reason, row.checked_at = "rejected", "undecodable", now
+            outcome = {"status": "rejected", "reason": "undecodable"}
             result.rejected += 1
             result.reasons["undecodable"] = result.reasons.get("undecodable", 0) + 1
+        else:
+            outcome = {
+                "status": "ok",
+                "reason": None,
+                "content_type": got.content_type,
+                "width": got.width,
+                "height": got.height,
+                "bytes": len(got.data),
+                "cached_bytes": cached_bytes,
+                "last_access_at": now if cached_bytes else None,
+                "tint": tints[0],
+                "tint_dark": tints[1],
+            }
+            result.ok += 1
+        with self.session_factory() as session:
+            row = session.scalar(
+                select(ImageAsset).where(or_(ImageAsset.url == url, ImageAsset.key == key))
+            )
+            if row is None:  # deleted between our claim and this update: store it again
+                row = ImageAsset(url=url, key=key, kind=kind)
+                session.add(row)
+            row.checked_at = now
+            for field, value in outcome.items():
+                if value is not None or field in ("status", "reason", "last_access_at"):
+                    setattr(row, field, value)
+            session.commit()
+            session.expunge(row)
             return row
-        row.status, row.reason = "ok", None
-        row.content_type, row.width, row.height = got.content_type, got.width, got.height
-        row.bytes, row.checked_at = len(got.data), now
-        if self.config.cache:
-            row.cached_bytes = self.cache.put(row.key, webp)
-            row.last_access_at = now
-        result.ok += 1
-        return row
 
     # --- one article ----------------------------------------------------------------------
 
-    async def check_article(
-        self, client: httpx.AsyncClient, session: Session, article: Article, result
-    ) -> None:
+    async def check_article(self, client: httpx.AsyncClient, article_id: int, result) -> None:
+        """One article's images (resumable via ``image_checked_at``): reads and the
+        final ``image_source``/``image_checked_at`` write are each a short
+        transaction — no write transaction spans a fetch or a render."""
+        with self.session_factory() as session:
+            article = session.get(Article, article_id)
+            if article is None:
+                return
+            image_url, page_image_url, icon_url, article_url = (
+                article.image_url,
+                article.page_image_url,
+                article.icon_url,
+                article.url,
+            )
         feed = page = None
-        if article.image_url:
-            feed = await self.asset(client, session, article.image_url, "photo", result)
-        if article.page_image_url and article.page_image_url != article.image_url:
-            page = await self.asset(client, session, article.page_image_url, "photo", result)
+        if image_url:
+            feed = await self.asset(client, image_url, "photo", result)
+        if page_image_url and page_image_url != image_url:
+            page = await self.asset(client, page_image_url, "photo", result)
         feed_ok = feed is not None and feed.status == "ok"
         page_ok = page is not None and page.status == "ok"
         tiny = feed_ok and (feed.width or 0) < self.config.tiny_feed_width
         if page_ok and (not feed_ok or (tiny and (page.width or 0) > (feed.width or 0))):
-            article.image_source = ImageSource.PAGE.value
+            source = ImageSource.PAGE.value
         elif feed_ok:
-            article.image_source = ImageSource.FEED.value
+            source = ImageSource.FEED.value
         else:
-            article.image_source = ImageSource.NONE.value
-        await self.check_icon(client, session, article, result)
-        article.image_checked_at = self.now()
+            source = ImageSource.NONE.value
+        await self.check_icon(client, icon_url, article_url, result)
+        with self.session_factory() as session:
+            article = session.get(Article, article_id)
+            if article is not None:
+                article.image_source = source
+                article.image_checked_at = self.now()
+                session.commit()  # resumable: each finished article is kept
 
-    async def check_icon(self, client, session: Session, article: Article, result) -> None:
+    async def check_icon(self, client, icon_url: str | None, article_url: str, result) -> None:
         """First usable icon among the page's declared one and the domain defaults."""
-        for url in ([article.icon_url] if article.icon_url else []) + domain_icon_urls(article.url):
-            if (await self.asset(client, session, url, "icon", result)).status == "ok":
+        for url in ([icon_url] if icon_url else []) + domain_icon_urls(article_url):
+            if (await self.asset(client, url, "icon", result)).status == "ok":
                 return
 
-    def _mark_generic(self, session: Session, urls: set[str]) -> None:
-        generic = generic_urls(session, urls, self.config.generic_threshold)
-        if generic:
-            for row in session.scalars(select(ImageAsset).where(ImageAsset.url.in_(generic))):
-                row.generic = True
+    def _mark_generic(self, urls: set[str]) -> None:
+        with self.session_factory() as session:
+            generic = generic_urls(session, urls, self.config.generic_threshold)
+            if generic:
+                for row in session.scalars(select(ImageAsset).where(ImageAsset.url.in_(generic))):
+                    row.generic = True
+            session.commit()
 
     # --- runs -----------------------------------------------------------------------------
 
@@ -239,34 +286,48 @@ class ImageWorker:
         if not self._lock.acquire(blocking=False):
             return ImageRunResult(status="busy")
         try:
+            # Snapshot the queue in a short read, then check articles one by one; every
+            # write is its own short transaction inside check_article / _mark_generic /
+            # evict / on_changed, so no write transaction spans a fetch or a render.
             with self.session_factory() as session:
                 articles = articles_of(session)
-                urls: set[str] = set()
-                story_ids: set[int] = set()
-                async with self._client() as client:
-                    for i, article in enumerate(articles):
-                        if backfill and i:
-                            await self.sleep(self.backfill_delay)
-                        if backfill and article.page_scanned_at is None and self.pages is not None:
-                            found = await self.pages(article.url)
-                            if found is not None:
-                                article.page_image_url = found.image
-                                article.icon_url = found.icon
-                            article.page_scanned_at = self.now()
-                        await self.check_article(client, session, article, result)
-                        session.commit()  # resumable: each finished article is kept
-                        result.checked += 1
-                        urls.update(u for u in (article.image_url, article.page_image_url) if u)
-                        if article.story_id:
-                            story_ids.add(article.story_id)
-                self._mark_generic(session, urls)
-                self.evict(session)
-                if story_ids and self.on_changed is not None:
+                rows = [
+                    (a.id, a.url, a.image_url, a.page_image_url, a.page_scanned_at, a.story_id)
+                    for a in articles
+                ]
+            urls: set[str] = set()
+            story_ids: set[int] = set()
+            async with self._client() as client:
+                for i, row_info in enumerate(rows):
+                    article_id, url, image_url, page_image_url, page_scanned_at, story_id = row_info
+                    if backfill and i:
+                        await self.sleep(self.backfill_delay)
+                    if backfill and page_scanned_at is None and self.pages is not None:
+                        found = await self.pages(url)
+                        with self.session_factory() as session:
+                            article = session.get(Article, article_id)
+                            if article is not None:
+                                if found is not None:
+                                    article.page_image_url = found.image
+                                    article.icon_url = found.icon
+                                    page_image_url = found.image
+                                article.page_scanned_at = self.now()
+                                session.commit()
+                    await self.check_article(client, article_id, result)
+                    result.checked += 1
+                    urls.update(u for u in (image_url, page_image_url) if u)
+                    if story_id:
+                        story_ids.add(story_id)
+            self._mark_generic(urls)
+            self.evict()
+            if story_ids and self.on_changed is not None:
+                with self.session_factory() as session:
                     self.on_changed(session, sorted(story_ids))
-                    result.stories = len(story_ids)
-                session.commit()
-                if backfill:
-                    since = self.now() - timedelta(days=self.config.backfill_days)
+                    session.commit()
+                result.stories = len(story_ids)
+            if backfill:
+                since = self.now() - timedelta(days=self.config.backfill_days)
+                with self.session_factory() as session:
                     result.remaining = session.scalar(
                         select(func.count()).select_from(self._backfill_query(since).subquery())
                     )
@@ -309,8 +370,16 @@ class ImageWorker:
 
     # --- cache ----------------------------------------------------------------------------
 
-    def evict(self, session: Session) -> int:
+    def evict(self, session: Session | None = None) -> int:
         """Drop least-recently-used cached files until the cache fits ``max_mb``."""
+        if session is not None:
+            return self._evict(session)
+        with self.session_factory() as session:
+            evicted = self._evict(session)
+            session.commit()
+            return evicted
+
+    def _evict(self, session: Session) -> int:
         total = session.scalar(select(func.coalesce(func.sum(ImageAsset.cached_bytes), 0)))
         evicted = 0
         if total <= self.cache.max_bytes:

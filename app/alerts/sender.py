@@ -17,6 +17,7 @@ from app.alerts import repo
 from app.alerts.channels import ChannelError, deliver
 from app.alerts.engine import local_time
 from app.config import AlertsConfig, AppConfig
+from app.db import retry_locked
 from app.models import (
     AlertChannelRecord,
     Notification,
@@ -139,7 +140,7 @@ class AlertSender:
                 delay = min(self.max_backoff_seconds, self.backoff_seconds * 2 ** (n.attempts - 1))
                 n.next_attempt_at = now + timedelta(seconds=delay)
             n.updated_at = now
-            session.commit()
+            retry_locked(session.commit)
             logger.warning(
                 "notification %d via %s failed (attempt %d): %s",
                 n.id,
@@ -157,7 +158,7 @@ class AlertSender:
         )
         n.last_error = None
         channel.last_sent_at = now
-        session.commit()
+        retry_locked(session.commit)
         return "sent"
 
     def retry(self, notification_id: int) -> bool:
@@ -171,7 +172,7 @@ class AlertSender:
             ):
                 return False
             n.status, n.attempts, n.next_attempt_at = NotificationStatus.QUEUED, 0, self.clock()
-            session.commit()
+            retry_locked(session.commit)
         self.kick()
         return True
 
@@ -208,7 +209,7 @@ class AlertSender:
                 updated_at=now,
             )
             session.add(n)
-            session.commit()
+            retry_locked(session.commit)
             self._send_one(session, n, now, final=True)
             session.refresh(n)
             session.expunge(n)

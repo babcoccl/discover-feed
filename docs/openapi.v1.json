@@ -958,6 +958,17 @@
           }
         ],
         "properties": {
+          "last_cluster_duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Cluster Duration Ms"
+          },
           "last_error": {
             "anyOf": [
               {
@@ -982,6 +993,30 @@
             ],
             "title": "Last Error At"
           },
+          "last_images_duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Images Duration Ms"
+          },
+          "last_lock_error": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Last 'database is locked' error (``table`` and ``at``).",
+            "title": "Last Lock Error"
+          },
           "last_pass_at": {
             "anyOf": [
               {
@@ -994,6 +1029,17 @@
             ],
             "description": "When the worker last emptied the pending queue (this process).",
             "title": "Last Pass At"
+          },
+          "last_report_duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Report Duration Ms"
           },
           "last_stage_event_at": {
             "anyOf": [
@@ -1033,6 +1079,24 @@
             ],
             "title": "Last Watchdog At"
           },
+          "lock_errors_since_start": {
+            "default": 0,
+            "description": "SQLite 'database is locked' errors since process start.",
+            "title": "Lock Errors Since Start",
+            "type": "integer"
+          },
+          "lock_retries_since_start": {
+            "default": 0,
+            "description": "Writes retried by ``db.retry_locked`` since process start.",
+            "title": "Lock Retries Since Start",
+            "type": "integer"
+          },
+          "longest_write_txn_seconds": {
+            "default": 0.0,
+            "description": "Longest write transaction observed since process start.",
+            "title": "Longest Write Txn Seconds",
+            "type": "number"
+          },
           "pending": {
             "description": "Stories admitted and waiting for a search.",
             "title": "Pending",
@@ -1063,6 +1127,18 @@
             "description": "The scheduled job ran within three of its intervals (`DISCOVER_ENRICH_INTERVAL_SECONDS`).",
             "title": "Sweep Recent",
             "type": "boolean"
+          },
+          "telemetry_dropped_rows": {
+            "default": 0,
+            "description": "Telemetry rows dropped because the write queue ran full.",
+            "title": "Telemetry Dropped Rows",
+            "type": "integer"
+          },
+          "telemetry_queued": {
+            "default": 0,
+            "description": "Telemetry rows queued for write.",
+            "title": "Telemetry Queued",
+            "type": "integer"
           },
           "thread_alive": {
             "description": "The enrichment worker thread is running now.",

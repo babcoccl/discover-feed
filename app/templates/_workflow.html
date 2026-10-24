@@ -67,6 +67,13 @@
     <div><div class="text-xs text-slate-500">Scheduled job</div>{{ _when(ew.last_sweep_at) }}{% if ew.last_sweep_at and not ew.sweep_recent %} <span class="text-xs font-medium text-amber-700 dark:text-amber-400">overdue</span>{% endif %}</div>
     <div><div class="text-xs text-slate-500">Watchdog</div>{{ _when(ew.last_watchdog_at) }}{% if ew.watchdog_restarts %} <span class="text-xs text-slate-500">· {{ ew.watchdog_restarts }} restarts</span>{% endif %}</div>
     <div class="col-span-2"><div class="text-xs text-slate-500">Last error</div>{% if ew.last_error %}<span class="break-words text-rose-700 dark:text-rose-400" title="{{ ew.last_error }}">{{ ew.last_error | truncate(140) }}</span> <span class="text-xs text-slate-500">{{ _when(ew.last_error_at) }}</span>{% else %}<span class="text-slate-400">none</span>{% endif %}</div>
+    <div><div class="text-xs text-slate-500">DB lock errors</div><span class="font-medium tabular-nums">{{ ew.lock_errors_since_start or 0 }}</span>{% if ew.last_lock_error %} <span class="text-xs text-slate-500" title="{{ ew.last_lock_error.at }}">on {{ ew.last_lock_error.table or "?" }}</span>{% endif %}</div>
+    <div><div class="text-xs text-slate-500">Lock retries</div><span class="font-medium tabular-nums">{{ ew.lock_retries_since_start or 0 }}</span></div>
+    <div><div class="text-xs text-slate-500">Longest write txn</div><span class="font-medium tabular-nums">{{ "%.1f" % (ew.longest_write_txn_seconds or 0) }}s</span></div>
+    <div><div class="text-xs text-slate-500">Telemetry queue</div><span class="font-medium tabular-nums">{{ ew.telemetry_queued or 0 }}</span>{% if ew.telemetry_dropped_rows %} <span class="text-xs font-medium text-amber-700 dark:text-amber-400">· {{ ew.telemetry_dropped_rows }} dropped</span>{% endif %}</div>
+    {% if ew.last_report_duration_ms is not none or ew.last_images_duration_ms is not none or ew.last_cluster_duration_ms is not none %}
+    <div class="col-span-2"><div class="text-xs text-slate-500">Last stage durations</div><span class="tabular-nums">{% for name, v in (("report", ew.last_report_duration_ms), ("images", ew.last_images_duration_ms), ("cluster", ew.last_cluster_duration_ms)) %}{% if v is not none %}{{ name }} {{ ms(v) }}{% if not loop.last %} · {% endif %}{% endif %}{% endfor %}</span></div>
+    {% endif %}
   </div>
 </section>
 {% endif %}
