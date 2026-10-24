@@ -30,6 +30,7 @@ from app.alerts.match import matched_keywords
 from app.cluster.base import Clusterer, StoryDoc
 from app.cluster.service import doc
 from app.config import AlertsConfig, AppConfig
+from app.db import retry_locked
 from app.events import record_alert
 from app.labels import label, publisher_of, via_of
 from app.models import (
@@ -337,7 +338,7 @@ class AlertEngine:
                 },
             )
         try:
-            session.commit()
+            retry_locked(session.commit)
         except IntegrityError:  # another process fired first
             session.rollback()
             return None
@@ -441,7 +442,7 @@ class AlertEngine:
                         AlertFiring.rule_id.in_(rule_ids), AlertFiring.created_at < cutoff
                     )
                 )
-            session.commit()
+            retry_locked(session.commit)
         if digests and self.on_queued is not None:
             self.on_queued()
         return {"digests": digests, "pruned": pruned}

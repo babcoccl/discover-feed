@@ -1,6 +1,7 @@
 """Batched telemetry writer: callers enqueue rows; a daemon thread flushes them in
-short transactions so the LLM hot path never waits on a DB write, and a DB failure
-is logged once and dropped — it can never break a worker or an LLM call."""
+short transactions so the LLM hot path never waits on a DB write. A flush failure
+(e.g. ``database is locked``) re-queues the batch and retries with backoff instead
+of dropping it; the queue is bounded so a dead DB cannot fill memory."""
 
 import logging
 import queue
@@ -12,10 +13,30 @@ logger = logging.getLogger(__name__)
 
 BATCH = 200
 FLUSH_SECONDS = 1.0
+MAX_QUEUED = 5000
+"""Rows kept queued at most; the oldest are dropped past it (``dropped_rows``)."""
+MAX_BACKOFF_SECONDS = 30.0
 
 _queue: "queue.Queue[tuple[str, dict[str, Any], Any]]" = queue.Queue()
 _session_factory = None
 _warned = threading.local()
+_dropped_rows = 0
+
+
+def dropped_rows() -> int:
+    """Rows dropped because the queue ran full (a DB that stayed unwritable)."""
+    return _dropped_rows
+
+
+def _drop_oldest() -> None:
+    """Enforce MAX_QUEUED after an enqueue, dropping from the front (the oldest)."""
+    global _dropped_rows
+    while _queue.qsize() > MAX_QUEUED:
+        try:
+            _queue.get_nowait()
+            _dropped_rows += 1
+        except queue.Empty:
+            break
 
 
 def configure(session_factory) -> None:
@@ -30,6 +51,7 @@ def submit(kind: str, values: dict[str, Any]) -> None:
         # bind the destination now: if configure() is called again before the
         # daemon drains this item it still lands in the DB it was queued for
         _queue.put_nowait((kind, values, _session_factory))
+        _drop_oldest()
     except Exception as exc:
         _warn("submit", exc)
 
@@ -102,6 +124,7 @@ def _flush_once() -> int:
     for kind, values, factory in items:
         by_factory.setdefault(factory, []).append((kind, values))
     written = 0
+    failed = False
     for factory, group in by_factory.items():
         if factory is None:
             continue
@@ -112,16 +135,26 @@ def _flush_once() -> int:
             written += len(group)
         except Exception as exc:
             _warn("flush", exc)
-    return written
+            for kind, values in group:  # never drop a batch silently
+                _queue.put((kind, values, factory))
+            _drop_oldest()
+            failed = True
+    return -1 if failed else written
 
 
 def _loop() -> None:
+    backoff = FLUSH_SECONDS
     while True:
         try:
             if _queue.empty():
+                backoff = FLUSH_SECONDS
                 time.sleep(FLUSH_SECONDS)
                 continue
-            _flush_once()
+            if _flush_once() < 0:
+                time.sleep(backoff)
+                backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
+            else:
+                backoff = FLUSH_SECONDS
         except Exception as exc:  # the writer thread must never die silently
             _warn("loop", exc)
             time.sleep(FLUSH_SECONDS)

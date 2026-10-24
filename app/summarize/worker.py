@@ -15,6 +15,7 @@ from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.orm import sessionmaker
 
 from app import profiles as repo
+from app.db import retry_locked
 from app.lifecycle import PRE_CLUSTER
 from app.llm.client import INFLIGHT
 from app.models import (
@@ -117,17 +118,21 @@ class SummaryWorker:
         (Retry / Regenerate); otherwise clears any backoff so the next run tries it."""
         ids = sorted(set(story_ids))
         now = self.clock()
-        with self.session_factory() as session:
-            for story_id in ids:
-                job = session.get(SummaryJob, (story_id, kind))
-                if job is None:
-                    session.add(
-                        SummaryJob(story_id=story_id, kind=kind, queued_at=now, force=force)
-                    )
-                else:
-                    job.force = job.force or force
-                    job.attempts, job.next_attempt_at = 0, None
-            session.commit()
+
+        def write() -> None:
+            with self.session_factory() as session:
+                for story_id in ids:
+                    job = session.get(SummaryJob, (story_id, kind))
+                    if job is None:
+                        session.add(
+                            SummaryJob(story_id=story_id, kind=kind, queued_at=now, force=force)
+                        )
+                    else:
+                        job.force = job.force or force
+                        job.attempts, job.next_attempt_at = 0, None
+                session.commit()
+
+        retry_locked(write)
         return len(ids)
 
     def enqueue_all(self, *, force: bool = False, kind: str = "both") -> int:
@@ -404,34 +409,38 @@ class SummaryWorker:
             outcome = SummaryOutcome(
                 story_id=story_id, kind=kind, status="failed", reason=f"error: {exc}"
             )
-        with self.session_factory() as session:
-            job = session.get(SummaryJob, (story_id, kind))
-            retry = outcome.status == "failed"
-            if retry and kind == SummaryKind.BRIEF:
-                self._record_failure(outcome.reason)
-            elif retry:
-                # Report/follow-up failures never pause the worker: briefs keep coming.
-                self.state.last_error = f"{kind}: {outcome.reason}"
-                self.state.last_error_at = self.clock()
-                retry = attempts + 1 < REPORT_RETRY_LIMIT
-            else:
-                self.state.consecutive_failures = 0
-            if retry:
-                if job is None:
-                    job = SummaryJob(story_id=story_id, kind=kind, queued_at=self.clock())
-                    session.add(job)
-                job.force = job.force or force  # a Retry stays forced across backoff
-                job.attempts = attempts + 1
-                job.last_error = outcome.reason
-                delay = min(2**job.attempts, MAX_RETRY_MINUTES)
-                job.next_attempt_at = self.clock() + timedelta(minutes=delay)
-            elif job is not None:
-                session.execute(
-                    delete(SummaryJob).where(
-                        SummaryJob.story_id == story_id, SummaryJob.kind == kind
+
+        def write() -> None:
+            with self.session_factory() as session:
+                job = session.get(SummaryJob, (story_id, kind))
+                if retry:
+                    if job is None:
+                        job = SummaryJob(story_id=story_id, kind=kind, queued_at=self.clock())
+                        session.add(job)
+                    job.force = job.force or force  # a Retry stays forced across backoff
+                    job.attempts = attempts + 1
+                    job.last_error = outcome.reason
+                    delay = min(2**job.attempts, MAX_RETRY_MINUTES)
+                    job.next_attempt_at = self.clock() + timedelta(minutes=delay)
+                elif job is not None:
+                    session.execute(
+                        delete(SummaryJob).where(
+                            SummaryJob.story_id == story_id, SummaryJob.kind == kind
+                        )
                     )
-                )
-            session.commit()
+                session.commit()
+
+        retry = outcome.status == "failed"
+        if retry and kind == SummaryKind.BRIEF:
+            self._record_failure(outcome.reason)
+        elif retry:
+            # Report/follow-up failures never pause the worker: briefs keep coming.
+            self.state.last_error = f"{kind}: {outcome.reason}"
+            self.state.last_error_at = self.clock()
+            retry = attempts + 1 < REPORT_RETRY_LIMIT
+        else:
+            self.state.consecutive_failures = 0
+        retry_locked(write)
         return outcome
 
     def followup_candidates(self, session, limit: int = 20) -> list[int]:
@@ -506,21 +515,30 @@ class SummaryWorker:
                 outcome = await self.perspectives.run_story(story_id=story_id)
                 ev.detail.update(status=outcome.status, reason=outcome.reason)
         except Exception as exc:  # endpoint failure: retry with backoff, like a report
+            error = str(exc)
+
+            def write_backoff() -> None:
+                with self.session_factory() as session:
+                    job = session.get(SummaryJob, (story_id, kind))
+                    if job is None:
+                        job = SummaryJob(story_id=story_id, kind=kind)
+                        session.add(job)
+                    job.attempts += 1
+                    job.next_attempt_at = self.clock() + timedelta(minutes=min(2**job.attempts, 60))
+                    job.last_error = error
+                    session.commit()
+
+            retry_locked(write_backoff)
+            return SummaryOutcome(story_id=story_id, kind=kind, status="failed", reason=error)
+
+        def write_done() -> None:
             with self.session_factory() as session:
                 job = session.get(SummaryJob, (story_id, kind))
-                if job is None:
-                    job = SummaryJob(story_id=story_id, kind=kind)
-                    session.add(job)
-                job.attempts += 1
-                job.next_attempt_at = self.clock() + timedelta(minutes=min(2**job.attempts, 60))
-                job.last_error = str(exc)
-                session.commit()
-            return SummaryOutcome(story_id=story_id, kind=kind, status="failed", reason=str(exc))
-        with self.session_factory() as session:
-            job = session.get(SummaryJob, (story_id, kind))
-            if job is not None:
-                session.delete(job)
-                session.commit()
+                if job is not None:
+                    session.delete(job)
+                    session.commit()
+
+        retry_locked(write_done)
         return SummaryOutcome(
             story_id=story_id,
             kind=kind,

@@ -553,9 +553,12 @@ def test_insert_race_with_another_worker_is_a_cache_hit(session_factory, tmp_pat
         )
         other.commit()
     w = worker(session_factory, tmp_path, server)
-    with session_factory() as session:
+    calls = {"n": 0}
+    real_factory = w.session_factory
+
+    def factory():
+        session = real_factory()
         real_scalar = session.scalar
-        calls = {"n": 0}
 
         def flaky(statement, *args, **kwargs):
             calls["n"] += 1
@@ -564,14 +567,16 @@ def test_insert_race_with_another_worker_is_a_cache_hit(session_factory, tmp_pat
             return real_scalar(statement, *args, **kwargs)
 
         session.scalar = flaky
-        result = ImageRunResult()
+        return session
 
-        async def go():
-            async with httpx.AsyncClient(transport=server.transport()) as client:
-                return await w.asset(client, session, url, "photo", result)
+    w.session_factory = factory
+    result = ImageRunResult()
 
-        result_row = asyncio.run(go())
-        session.commit()
+    async def go():
+        async with httpx.AsyncClient(transport=server.transport()) as client:
+            return await w.asset(client, url, "photo", result)
+
+    result_row = asyncio.run(go())
     assert result.cache_hits == 1 and result.fetched == 0  # cache hit, not a fetch/failure
     assert result_row is not None and result_row.url == url and result_row.status == "ok"
     with session_factory() as session:

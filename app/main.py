@@ -217,6 +217,8 @@ def create_app(
             summarizer=None,
             policy=app.state.summaries.policy,
         )
+        if app.state.pipeline.enricher is not None:
+            app.state.pipeline.enricher.requeue_lock_failures()
         app.state.llm_health = await check_endpoint(
             summarizer_role(app.state.config, settings), transport=llm_transport
         )

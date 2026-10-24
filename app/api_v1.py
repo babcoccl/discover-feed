@@ -1032,6 +1032,26 @@ class EnrichStatusV1(BaseModel):
     )
     last_watchdog_at: datetime | None
     watchdog_restarts: int = Field(description="Worker restarts by the watchdog.")
+    lock_errors_since_start: int = Field(
+        default=0, description="SQLite 'database is locked' errors since process start."
+    )
+    lock_retries_since_start: int = Field(
+        default=0, description="Writes retried by ``db.retry_locked`` since process start."
+    )
+    longest_write_txn_seconds: float = Field(
+        default=0.0, description="Longest write transaction observed since process start."
+    )
+    last_lock_error: dict | None = Field(
+        default=None,
+        description="Last 'database is locked' error (``table`` and ``at``).",
+    )
+    telemetry_dropped_rows: int = Field(
+        default=0, description="Telemetry rows dropped because the write queue ran full."
+    )
+    telemetry_queued: int = Field(default=0, description="Telemetry rows queued for write.")
+    last_report_duration_ms: int | None = None
+    last_images_duration_ms: int | None = None
+    last_cluster_duration_ms: int | None = None
 
 
 def enrich_status(app) -> dict | None:

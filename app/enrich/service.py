@@ -24,6 +24,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import AppConfig, EnrichmentConfig, LLMRole
+from app.db import is_lock_error, lock_stats, retry_locked
 from app.enrich.domains import SOCIAL, canonical_domain, registrable_domain
 from app.enrich.fetch import CandidateFetcher, FetchedPage
 from app.enrich.filters import (
@@ -413,14 +414,17 @@ class Enricher:
             return
         from app.ingest import usage_periods
 
-        with self.session_factory() as session:
-            day, _ = usage_periods(self.now())
-            row = session.get(SourceUsage, (DEEP_USAGE, day))
-            if row is None:
-                row = SourceUsage(source_id=DEEP_USAGE, period=day, requests=0)
-                session.add(row)
-            row.requests = (row.requests or 0) + count
-            session.commit()
+        def record() -> None:
+            with self.session_factory() as session:
+                day, _ = usage_periods(self.now())
+                row = session.get(SourceUsage, (DEEP_USAGE, day))
+                if row is None:
+                    row = SourceUsage(source_id=DEEP_USAGE, period=day, requests=0)
+                    session.add(row)
+                row.requests = (row.requests or 0) + count
+                session.commit()
+
+        retry_locked(record)
 
     def publishers(self, session: Session, story_id: int) -> int:
         """Distinct publishers on the story: registrable domains, with editions of the
@@ -539,6 +543,21 @@ class Enricher:
             last_event = session.scalar(
                 select(func.max(StageEvent.started_at)).where(StageEvent.stage == "enrich")
             )
+            durations = {}
+            for stage in ("report", "images", "cluster"):
+                last = session.scalar(
+                    select(StageEvent)
+                    .where(StageEvent.stage == stage, StageEvent.finished_at.is_not(None))
+                    .order_by(StageEvent.id.desc())
+                    .limit(1)
+                )
+                durations[f"last_{stage}_duration_ms"] = (
+                    int((last.finished_at - last.started_at).total_seconds() * 1000)
+                    if last is not None and last.started_at and last.finished_at
+                    else None
+                )
+        from app.telemetry import writer as telemetry_writer
+
         primary = self.config.providers[0].name if self.config.providers else None
         health = self.search.health.get(primary) if primary else None
         return {
@@ -557,6 +576,10 @@ class Enricher:
             "last_sweep_at": self.last_sweep_at,
             "last_watchdog_at": self.last_watchdog_at,
             "watchdog_restarts": self.watchdog_restarts,
+            **lock_stats(),
+            "telemetry_dropped_rows": telemetry_writer.dropped_rows(),
+            "telemetry_queued": telemetry_writer.pending(),
+            **durations,
         }
 
     def capacity(self, session: Session) -> int:
@@ -626,6 +649,34 @@ class Enricher:
                     story.enrich_wait_until = now
             session.commit()
         if stories:
+            self.start()
+        return len(stories)
+
+    def requeue_lock_failures(self) -> int:
+        """Startup repair: passes that died on ``database is locked`` or a
+        CancelledError were marked ``failed`` by older code; they are contention
+        victims, retried on the normal backoff — never failures."""
+        now = self.now()
+        cutoff = now - timedelta(hours=self.config.max_age_hours)
+        with self.session_factory() as session:
+            stories = session.scalars(
+                select(Story).where(
+                    Story.enrich_status == "failed",
+                    Story.state != StoryState.MERGED.value,
+                    Story.last_updated_at >= cutoff,
+                    or_(
+                        Story.enrich_reason.contains("database is locked"),
+                        Story.enrich_reason.contains("CancelledError"),
+                    ),
+                )
+            ).all()
+            for story in stories:
+                story.enrich_status, story.enrich_next_attempt_at = "retry", now
+                if story.enrich_wait_until is None:
+                    story.enrich_wait_until = now
+            session.commit()
+        if stories:
+            logger.info("enrichment: requeued %d lock/cancel failures", len(stories))
             self.start()
         return len(stories)
 
@@ -787,9 +838,21 @@ class Enricher:
                     added=result.added,
                     dry_run=dry_run,
                 )
+        except asyncio.CancelledError:
+            # a cancelled pass is not a failure: retry on the normal backoff
+            logger.info("enrichment of story %s cancelled", story_id)
+            result.status, result.reason = "retry", "cancelled"
+            if not dry_run:
+                self._finish(result)
+            raise
         except Exception as exc:
-            logger.exception("enrichment of story %s failed", story_id)
-            result.status, result.reason = "failed", f"{type(exc).__name__}: {exc}"[:500]
+            if is_lock_error(exc):
+                # "database is locked" is contention, not a bad story: retry, never "failed"
+                logger.warning("enrichment of story %s hit a locked database", story_id)
+                result.status, result.reason = "retry", "locked"
+            else:
+                logger.exception("enrichment of story %s failed", story_id)
+                result.status, result.reason = "failed", f"{type(exc).__name__}: {exc}"[:500]
             if not dry_run:
                 self._finish(result)
         return result
@@ -1285,6 +1348,9 @@ class Enricher:
         )
 
     def _finish(self, result: StoryEnrichment, *, anchor_id: int | None = None) -> None:
+        retry_locked(self._finish_once, result, anchor_id=anchor_id)
+
+    def _finish_once(self, result: StoryEnrichment, *, anchor_id: int | None = None) -> None:
         now = self.now()
         run_id = uuid.uuid4().hex
         with self.session_factory() as session:

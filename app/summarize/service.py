@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app import profiles as repo
 from app import telemetry
 from app.config import StructuredOutput, SummariesConfig
+from app.db import retry_locked
 from app.llm import ChatResult, LLMBadResponse, LLMClient, LLMError, LLMHTTPError
 from app.models import (
     GenerationAttempt,
@@ -611,20 +612,32 @@ class Summarizer:
         attempts: Sequence[dict[str, Any]] = (),
         members: Sequence[dict[str, Any]] = (),
     ) -> None:
-        with session_factory() as session:
-            if attempts:
+        # Two short write transactions: a single txn spanning the attempts insert, the
+        # summary insert and the view rebuild held SQLite's write lock long enough to
+        # starve every other writer (``database is locked``).
+        def record() -> None:
+            if not attempts:
+                return
+            with session_factory() as session:
                 record_attempts(session, story_id, attempts, members)
-            latest = session.scalar(
-                select(func.max(StorySummary.version)).where(StorySummary.story_id == story_id)
-            )
-            row.story_id = story_id
-            row.version = (latest or 0) + 1
-            row.created_at = self.clock()
-            session.add(row)
-            if self.on_save is not None:  # the story's view, in the same transaction
-                session.flush()
-                self.on_save(session, story_id)
-            session.commit()
+                session.commit()
+
+        def store() -> None:
+            with session_factory() as session:
+                latest = session.scalar(
+                    select(func.max(StorySummary.version)).where(StorySummary.story_id == story_id)
+                )
+                row.story_id = story_id
+                row.version = (latest or 0) + 1
+                row.created_at = self.clock()
+                session.add(row)
+                if self.on_save is not None:  # the story's view, in the same transaction
+                    session.flush()
+                    self.on_save(session, story_id)
+                session.commit()
+
+        retry_locked(record)
+        retry_locked(store)
 
 
 _ATTEMPT_COLUMNS = {c.name for c in GenerationAttempt.__table__.columns} - {"id", "story_id"}

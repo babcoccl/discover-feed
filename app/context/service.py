@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import ContextConfig, ContextQueryMode, EnrichmentConfig, LLMRole
 from app.context.angles import FACT_CHECK_LABEL
+from app.db import retry_locked
 from app.enrich.domains import canonical_domain
 from app.enrich.filters import StoryContext
 from app.enrich.query import story_terms
@@ -1366,14 +1367,22 @@ class ContextFinder:
     def _count_requests(self, name: str, requests: int) -> None:
         if not requests:
             return
-        with self.session_factory() as session:
-            for period in usage_periods(self.now()):
-                row = session.get(SourceUsage, (f"context:{name}", period)) or SourceUsage(
-                    source_id=f"context:{name}", period=period, requests=0, reads=0, spend_usd=0.0
-                )
-                row.requests = (row.requests or 0) + requests
-                session.add(row)
-            session.commit()
+
+        def record() -> None:
+            with self.session_factory() as session:
+                for period in usage_periods(self.now()):
+                    row = session.get(SourceUsage, (f"context:{name}", period)) or SourceUsage(
+                        source_id=f"context:{name}",
+                        period=period,
+                        requests=0,
+                        reads=0,
+                        spend_usd=0.0,
+                    )
+                    row.requests = (row.requests or 0) + requests
+                    session.add(row)
+                session.commit()
+
+        retry_locked(record)
 
     # --- finish / stats -----------------------------------------------------------------
 
@@ -1426,6 +1435,12 @@ class ContextFinder:
         now = self.now()
         run_id = uuid.uuid4().hex
         self._save_trace(result, run_id, now)
+        retry_locked(self._finish_once, result, run_id, anchor_id=anchor_id)
+
+    def _finish_once(
+        self, result: ContextResult, run_id: str, *, anchor_id: int | None = None
+    ) -> None:
+        now = self.now()
         with self.session_factory() as session:
             story = session.get(Story, result.story_id)
             if story is None or story.state == StoryState.MERGED:

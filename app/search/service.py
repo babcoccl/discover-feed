@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from app.config import SearchProviderConfig
+from app.db import retry_locked
 from app.ingest import USER_AGENT, usage_periods
 from app.models import SearchCacheEntry, SearchProviderState, SourceUsage, utcnow
 from app.search.base import (
@@ -153,6 +154,9 @@ class SearchService:
     def _with_state(self, name: str, change: Callable[[SearchProviderState], object]):
         """Run ``change`` on the provider's row inside one write transaction (the no-op
         UPDATE takes SQLite's write lock first, so two processes cannot interleave)."""
+        return retry_locked(self._with_state_once, name, change)
+
+    def _with_state_once(self, name: str, change: Callable[[SearchProviderState], object]):
         for attempt in range(2):
             try:
                 with self.session_factory() as session:
@@ -207,9 +211,17 @@ class SearchService:
         self._with_state(name, set_until)
 
     def _record(self, name: str, error: str | None) -> None:
+        if error is None:
+            # hot path: a clean pass must not pay for a write transaction when the
+            # row is already clean
+            row = self.state(name)
+            if row is not None and (row.consecutive_errors or 0) == 0 and row.last_error is None:
+                return
+
         def change(row: SearchProviderState) -> None:
             if error is None:
                 row.consecutive_errors = 0
+                row.last_error = None
             else:
                 row.consecutive_errors = (row.consecutive_errors or 0) + 1
                 row.last_error = error[:500]
@@ -430,6 +442,13 @@ class SearchService:
     def _save_usage(self, source_id: str, quota: Quota) -> None:
         if not (quota.new_requests or quota.new_reads):
             return
+        retry_locked(self._save_usage_once, source_id, quota)
+        quota.requests_today += quota.new_requests
+        quota.spend_month_usd = quota.spent_usd
+        quota.new_requests = quota.new_reads = 0
+        quota.new_spend_usd = 0.0
+
+    def _save_usage_once(self, source_id: str, quota: Quota) -> None:
         with self.session_factory() as session:
             for period in usage_periods(self.now()):
                 row = session.get(SourceUsage, (source_id, period)) or SourceUsage(
@@ -440,10 +459,6 @@ class SearchService:
                 row.spend_usd = round((row.spend_usd or 0.0) + quota.new_spend_usd, 6)
                 session.add(row)
             session.commit()
-        quota.requests_today += quota.new_requests
-        quota.spend_month_usd = quota.spent_usd
-        quota.new_requests = quota.new_reads = 0
-        quota.new_spend_usd = 0.0
 
     def _cached(
         self, key: str, cache_hours: float, empty_cache_minutes: float = 10
@@ -460,11 +475,18 @@ class SearchService:
             return [SearchHit.from_dict(h) for h in row.hits or []]
 
     def _store(self, key: str, name: str, query: str, hits: list[SearchHit]) -> None:
-        with self.session_factory() as session:
-            row = session.get(SearchCacheEntry, key) or SearchCacheEntry(key=key, provider=name)
-            row.query, row.hits, row.created_at = query, [h.to_dict() for h in hits], self.now()
-            session.add(row)
-            session.commit()
+        def store() -> None:
+            with self.session_factory() as session:
+                row = session.get(SearchCacheEntry, key) or SearchCacheEntry(key=key, provider=name)
+                row.query, row.hits, row.created_at = (
+                    query,
+                    [h.to_dict() for h in hits],
+                    self.now(),
+                )
+                session.add(row)
+                session.commit()
+
+        retry_locked(store)
 
     def prune_cache(self, max_age_hours: float = 48) -> int:
         with self.session_factory() as session:
