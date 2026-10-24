@@ -207,6 +207,96 @@ def flow_overview(session, *, hours: float = 24) -> list[dict[str, Any]]:
     return _cached(("flow", hours), build)
 
 
+# --- pipeline visualizer --------------------------------------------------------------------
+
+PIPELINE_STAGES = (
+    "ingest",
+    "extract",
+    "cluster",
+    "enrich",
+    "brief",
+    "report",
+    "followups",
+    "perspectives",
+    "context",
+    "publish_gate",
+    "images",
+    "alerts",
+)
+"""The strip order for the visualizer; unknown stages trail at the end."""
+
+RECENT_EVENTS = 30
+
+
+def pipeline_viz(session, *, hours: float = 24) -> dict[str, Any]:
+    """Live strip data: one node per pipeline stage (fixed order, even with no
+    events) plus the last ``RECENT_EVENTS`` stage events, running first."""
+
+    def build():
+        flow = {row["stage"]: row for row in flow_overview(session, hours=hours)}
+        known = list(PIPELINE_STAGES)
+        extras = sorted(set(flow) - set(known))
+
+        def node(name: str) -> dict[str, Any]:
+            row = flow.get(name)
+            if row is None:
+                row = {
+                    "stage": name,
+                    "waiting": 0,
+                    "in_progress": 0,
+                    "done": 0,
+                    "failed": 0,
+                    "median_ms": None,
+                    "p95_ms": None,
+                    "oldest_wait_at": None,
+                    "top_reason": None,
+                    "reasons": [],
+                }
+            if row["failed"]:
+                state = "failed"
+            elif row["in_progress"]:
+                state = "running"
+            elif row["waiting"]:
+                state = "stalled"
+            elif row["done"]:
+                state = "ok"
+            else:
+                state = "idle"
+            return {**row, "state": state}
+
+        stages = [node(n) for n in known + extras]
+        events = list(
+            session.scalars(
+                select(StageEvent)
+                .order_by(
+                    (StageEvent.status == "running").desc(),
+                    StageEvent.started_at.desc(),
+                )
+                .limit(RECENT_EVENTS)
+            )
+        )
+        recent = []
+        for e in events:
+            detail = e.detail or {}
+            duration_ms = None
+            if e.finished_at and e.started_at:
+                duration_ms = int((e.finished_at - e.started_at).total_seconds() * 1000)
+            recent.append(
+                {
+                    "stage": e.stage,
+                    "status": telemetry.canonical_status(e.status),
+                    "started_at": e.started_at,
+                    "finished_at": e.finished_at,
+                    "duration_ms": duration_ms,
+                    "story_id": e.story_id,
+                    "reason": detail.get("reason") or detail.get("error"),
+                }
+            )
+        return {"stages": stages, "recent": recent, "now": datetime.now(UTC)}
+
+    return _cached(("viz", hours), build)
+
+
 # --- LLM usage ------------------------------------------------------------------------------
 
 

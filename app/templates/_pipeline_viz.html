@@ -1,0 +1,82 @@
+{# Pipeline visualizer: live stage strip + recent activity lane. #}
+{%- macro ms(v) -%}
+{%- if v is none -%}—{%- elif v >= 60000 -%}{{ (v / 60000) | round(1) }}m{%- elif v >= 1000 -%}{{ (v / 1000) | round(1) }}s{%- else -%}{{ v | int }}ms{%- endif -%}
+{%- endmacro -%}
+{%- set viz_peak = viz.stages | map(attribute="p95_ms") | select | max | default(1) %}
+<section class="mb-6" id="pipeline-viz">
+  <div class="mb-2 flex items-baseline justify-between">
+    <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Pipeline · live</h2>
+    <span class="flex items-center gap-3 text-xs text-slate-400">
+      <span><span class="inline-block h-2 w-2 rounded-full bg-emerald-500"></span> ok/idle</span>
+      <span><span class="inline-block h-2 w-2 rounded-full bg-amber-500"></span> running</span>
+      <span><span class="inline-block h-2 w-2 rounded-full border-2 border-amber-500"></span> stalled</span>
+      <span><span class="inline-block h-2 w-2 rounded-full bg-rose-500"></span> failed</span>
+      <span><span class="inline-block h-2 w-2 rounded-full bg-slate-300 dark:bg-slate-600"></span> no activity</span>
+    </span>
+  </div>
+  <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white px-3 py-3 dark:border-slate-800 dark:bg-slate-900">
+    <ol class="flex min-w-max items-stretch gap-2">
+      {% for s in viz.stages %}
+      {% set dot = {"running": "bg-amber-500", "failed": "bg-rose-500", "ok": "bg-emerald-500", "idle": "bg-slate-300 dark:bg-slate-600"}[s.state] %}
+      <li class="flex w-40 shrink-0 flex-col rounded-lg border px-3 py-2
+        {%- if s.state == 'failed' %} border-rose-300 dark:border-rose-800
+        {%- elif s.state == 'running' %} border-amber-300 dark:border-amber-800
+        {%- elif s.state == 'stalled' %} border-amber-300 dark:border-amber-800
+        {%- else %} border-slate-200 dark:border-slate-800{% endif %}">
+        <div class="flex items-center gap-1.5">
+          {% if s.state == 'stalled' %}
+          <span class="inline-block h-2.5 w-2.5 shrink-0 rounded-full border-2 border-amber-500" title="stalled: waiting, nothing running"></span>
+          {% else %}
+          <span class="inline-block h-2.5 w-2.5 shrink-0 rounded-full {{ dot }}{% if s.state == 'running' %} animate-pulse{% endif %}"></span>
+          {% endif %}
+          <span class="truncate text-sm font-medium" title="{{ s.stage }}">{{ s.stage }}</span>
+        </div>
+        <div class="mt-1 flex gap-2 text-xs tabular-nums text-slate-500 dark:text-slate-400">
+          <span title="waiting">w{{ s.waiting }}</span>
+          <span title="in progress"{% if s.in_progress %} class="font-semibold text-amber-600 dark:text-amber-400"{% endif %}>r{{ s.in_progress }}</span>
+          <span title="done">✓{{ s.done }}</span>
+          <span title="failed"{% if s.failed %} class="font-semibold text-rose-600 dark:text-rose-400"{% endif %}>✗{{ s.failed }}</span>
+        </div>
+        <div class="mt-1 flex items-center gap-1" title="median {{ ms(s.median_ms) }} · p95 {{ ms(s.p95_ms) }}">
+          <svg class="h-1.5 w-16" viewBox="0 0 100 4" preserveAspectRatio="none" aria-hidden="true">
+            <rect x="0" y="0" width="100" height="4" rx="1" class="fill-slate-200 dark:fill-slate-700"></rect>
+            <rect x="0" y="0" width="{{ (100 * (s.p95_ms or 0) / (viz_peak or 1)) | round(1) }}" height="4" rx="1"
+                  class="{% if s.state == 'failed' %}fill-rose-400{% elif s.state in ('running', 'stalled') %}fill-amber-400{% else %}fill-sky-400{% endif %}"></rect>
+          </svg>
+          <span class="text-[10px] tabular-nums text-slate-400">{{ ms(s.p95_ms) }}</span>
+        </div>
+        {% if s.oldest_wait_at %}
+        <div class="mt-0.5 text-[10px] {% if (viz.now - s.oldest_wait_at).total_seconds() > 3600 %}font-semibold text-rose-600 dark:text-rose-400{% else %}text-slate-400{% endif %}">
+          oldest wait {{ s.oldest_wait_at | reltime }}
+        </div>
+        {% endif %}
+        {% if s.top_reason %}
+        <div class="mt-0.5 truncate text-[10px] text-slate-400" title="{{ s.top_reason }}">{{ s.top_reason | truncate(40) }}</div>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ol>
+  </div>
+  <div class="mt-2 overflow-x-auto rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-800 dark:bg-slate-900">
+    <h3 class="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Recent activity</h3>
+    {% if viz.recent %}
+    <ol class="divide-y divide-slate-100 text-xs dark:divide-slate-800">
+      {% for e in viz.recent %}
+      {% set edot = {"running": "bg-amber-500", "failed": "bg-rose-500", "ok": "bg-emerald-500", "skipped": "bg-slate-400"}[e.status] | default("bg-slate-400") %}
+      <li class="flex items-center gap-2 py-1">
+        <span class="inline-block h-2 w-2 shrink-0 rounded-full {{ edot }}" title="{{ e.status }}"></span>
+        <span class="w-24 shrink-0 font-medium">{{ e.stage }}</span>
+        <span class="w-14 shrink-0 tabular-nums text-slate-500">{{ ms(e.duration_ms) }}</span>
+        {% if e.story_id %}
+        <a class="shrink-0 text-sky-700 hover:underline dark:text-sky-400" href="/p/{{ profile.slug }}/settings/workflow/story/{{ e.story_id }}">story {{ e.story_id }}</a>
+        {% endif %}
+        {% if e.reason %}<span class="truncate text-slate-400" title="{{ e.reason }}">{{ e.reason | truncate(40) }}</span>{% endif %}
+        <time class="ml-auto shrink-0 text-slate-400" datetime="{{ e.started_at.isoformat() }}">{{ e.started_at | reltime }}</time>
+      </li>
+      {% endfor %}
+    </ol>
+    {% else %}
+    <p class="py-2 text-xs text-slate-400">No stage events yet.</p>
+    {% endif %}
+  </div>
+</section>
