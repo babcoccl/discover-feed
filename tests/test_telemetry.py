@@ -502,12 +502,8 @@ def test_pipeline_viz_order_and_recent(telemetry_on):
     from app.telemetry import queries
 
     t0 = datetime.now(UTC)
-    telemetry.emit_stage(
-        "alerts", story_id=1, started_at=t0, finished_at=t0 + timedelta(seconds=1)
-    )
-    telemetry.emit_stage(
-        "ingest", story_id=1, started_at=t0 + timedelta(seconds=1), finished_at=t0
-    )
+    telemetry.emit_stage("alerts", story_id=1, started_at=t0, finished_at=t0 + timedelta(seconds=1))
+    telemetry.emit_stage("ingest", story_id=1, started_at=t0 + timedelta(seconds=1), finished_at=t0)
     telemetry.emit_stage(
         "cluster", story_id=1, started_at=t0 - timedelta(minutes=5), status="running"
     )
@@ -547,8 +543,6 @@ def test_pipeline_viz_page_and_viz_param(admin_client):
     assert viz.status_code == 200
     assert 'id="pipeline-viz"' in viz.text
     assert "Pipeline flow" not in viz.text  # only the visualizer
-    panel = admin_client.get(
-        "/p/personal-reader/settings/workflow/panel?viz=1", headers=head
-    )
+    panel = admin_client.get("/p/personal-reader/settings/workflow/panel?viz=1", headers=head)
     assert panel.status_code == 200
     assert 'id="pipeline-viz"' in panel.text and "Pipeline flow" not in panel.text
