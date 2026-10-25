@@ -1,6 +1,7 @@
 """Per-story step log: db_events capture, ``queries.story_log`` merging/filtering,
 the text export, the inspector UI section and the new llm_calls columns."""
 
+import re
 import sqlite3
 import threading
 import time
@@ -139,6 +140,29 @@ def test_handle_error_emits_lock_error(tmp_path: Path, telemetry_on, monkeypatch
     assert row.holder_caller and row.holder_thread
     for col in row.__table__.columns:
         assert "INSERT INTO" not in str(getattr(row, col.name) or ""), col.name
+
+
+def test_slow_write_warning_and_event_carry_the_real_caller(
+    telemetry_on, monkeypatch, caplog
+) -> None:
+    """A write txn held past the warn threshold logs and emits ``file:line:func``
+    of the holder — never ``?``."""
+    monkeypatch.setattr(db, "WRITE_TXN_WARN_SECONDS", 0)
+    session = telemetry_on()
+    session.add(Story(first_seen_at=T0, last_updated_at=T0))
+    session.flush()
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if any("write txn held" in r.getMessage() for r in caplog.records):
+            break
+        time.sleep(0.05)
+    session.commit()
+    warnings = [r.getMessage() for r in caplog.records if "write txn held" in r.getMessage()]
+    assert warnings
+    assert " at ?" not in warnings[0] and "<unknown>" not in warnings[0]
+    assert re.search(r"test_story_log\.py:\d+:test_slow_write_warning", warnings[0]), warnings[0]
+    rows = [r for r in _db_events(telemetry_on) if r.kind == "slow_write"]
+    assert rows and re.search(r"test_story_log\.py:\d+:test_slow_write", rows[0].caller)
 
 
 def test_db_events_are_rate_limited(telemetry_on) -> None:

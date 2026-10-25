@@ -2,6 +2,7 @@
 transaction splits in Summarizer/ImageWorker/enrich and the telemetry re-queue."""
 
 import asyncio
+import re
 import sqlite3
 import threading
 import time
@@ -117,6 +118,24 @@ def test_instrumentation_tracks_and_clears_write_txns(session_factory) -> None:
     assert len(open_txns) == 1 and open_txns[0]["caller"]
     session.commit()
     assert db.open_write_txns() == []
+
+
+def test_write_txn_caller_names_the_calling_function(session_factory) -> None:
+    """The tracked caller is ``file:line:func`` of the function that opened the
+    write transaction — not ``?``."""
+    session = session_factory()
+
+    def _do_the_write() -> None:
+        session.add(Story(first_seen_at=T0, last_updated_at=T0))
+        session.flush()
+
+    _do_the_write()
+    open_txns = db.open_write_txns()
+    session.commit()
+    assert len(open_txns) == 1
+    caller = open_txns[0]["caller"]
+    assert caller not in ("?", "<unknown>")
+    assert re.fullmatch(r".*test_db_locks\.py:\d+:_do_the_write", caller)
 
 
 # --- Summarizer._save: two transactions --------------------------------------------------

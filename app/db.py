@@ -62,12 +62,23 @@ def is_lock_error(exc: BaseException) -> bool:
 
 
 def _caller() -> str:
-    frames = traceback.extract_stack(limit=10)
-    for f in reversed(frames[:-3]):
-        name = f.filename.replace("\\", "/")
-        if "/sqlalchemy/" not in name and not name.endswith("/app/db.py"):
-            return f"{f.filename}:{f.lineno} in {f.name}"
-    return "?"
+    """First frame outside app/db.py and SQLAlchemy, formatted
+    ``app/<path>.py:<line>:<func>`` (e.g. ``app/telemetry/writer.py:88:_flush_once``).
+
+    The stack is walked untruncated: SQLAlchemy's event dispatch alone is deeper
+    than any small ``limit=`` and would leave only db.py/sqlalchemy frames, which
+    is how callers degraded to ``?``."""
+    for f in reversed(traceback.extract_stack()):
+        name = (f.filename or "").replace("\\", "/")
+        if (
+            not name.endswith(".py")  # also skips "<sqlalchemy generated ...>"
+            or name.endswith("/app/db.py")
+            or "/sqlalchemy/" in name
+        ):
+            continue
+        path = name[name.rindex("/app/") + 1 :] if "/app/" in name else name
+        return f"{path}:{f.lineno}:{f.name}"
+    return "<unknown>"
 
 
 def open_write_txns() -> list[dict]:
@@ -93,17 +104,6 @@ def _current_story() -> int | None:
         return telemetry.current_story()
     except Exception:
         return None
-
-
-def _short_caller() -> str:
-    """A compact ``app/<pkg>/<file>.py:<func>`` label for db_events rows."""
-    frames = traceback.extract_stack(limit=12)
-    for f in reversed(frames[:-3]):
-        name = f.filename.replace("\\", "/")
-        if "/sqlalchemy/" not in name and not name.endswith("/app/db.py"):
-            tail = name[name.rindex("/app/") + 1 :] if "/app/" in name else f.filename
-            return f"{tail}:{f.name}"
-    return "?"
 
 
 def _statement_meta(statement: str | None) -> tuple[str | None, str | None]:
@@ -238,7 +238,7 @@ def _instrument_locks(engine: Engine) -> None:
             table_name=_table,
             op=op,
             thread=threading.current_thread().name,
-            caller=_short_caller(),
+            caller=_caller(),
             **_holder_fields(),
         )
 
@@ -269,7 +269,7 @@ def retry_locked[T](fn: Callable[..., T], *args, retries: int = 3, **kwargs) -> 
                 "table_name": table,
                 "op": op,
                 "thread": threading.current_thread().name,
-                "caller": _short_caller(),
+                "caller": _caller(),
                 "attempt": attempt + 1,
                 "waited_ms": int((time.monotonic() - started) * 1000),
                 **_holder_fields(),
@@ -296,7 +296,7 @@ def retry_locked[T](fn: Callable[..., T], *args, retries: int = 3, **kwargs) -> 
                 outcome="ok_after_retry",
                 story_id=_current_story(),
                 thread=threading.current_thread().name,
-                caller=_short_caller(),
+                caller=_caller(),
                 attempt=attempt + 1,
                 waited_ms=int((time.monotonic() - started) * 1000),
             )
