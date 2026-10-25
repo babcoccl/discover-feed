@@ -47,6 +47,9 @@ class Citation:
     """The URL's domain, the primary label (documents from before it: derived on load)."""
     via: str | None = None
     """``Hacker News`` when the source is an aggregator (secondary label)."""
+    origin: str = "feed"
+    """``feed`` | ``enrichment`` — resolved on load from the members' origin by
+    ``article_id`` (never stored in the view document)."""
 
     @property
     def label(self) -> str:
@@ -61,6 +64,24 @@ class Point:
     @property
     def marked(self) -> str:
         return self.text + (" " + "".join(f"[{c.index}]" for c in self.citations)).rstrip()
+
+    @property
+    def web_citations(self) -> list[Citation]:
+        return [c for c in self.citations if c.origin == "enrichment"]
+
+    @property
+    def feed_citations(self) -> list[Citation]:
+        return [c for c in self.citations if c.origin != "enrichment"]
+
+    @property
+    def provenance(self) -> str:
+        """``web``: every citation is a web-search source; ``mixed``: it cites both
+        kinds; ``feed``: only feed sources, or nothing at all (uncited)."""
+        if self.citations and all(c.origin == "enrichment" for c in self.citations):
+            return "web"
+        if self.web_citations:
+            return "mixed"
+        return "feed"
 
 
 @dataclass(frozen=True)
@@ -174,6 +195,31 @@ class Member:
         return self.origin == "enrichment"
 
 
+@dataclass(frozen=True)
+class EnrichmentSummary:
+    """Where a story's web-search members show up in its brief and report."""
+
+    web_member_count: int
+    """Enrichment members that are numbered/citable (link-only members excluded)."""
+    web_publishers: list[str]
+    """Distinct publisher labels of those members, in member order."""
+    brief_points: dict[str, int]
+    """``{web, mixed, feed, total}`` over the brief's lead + bullets."""
+    report_points: dict[str, int]
+    """``{web, mixed, feed, total}`` over the report's paragraphs."""
+    cited_in: dict[int, list[str]]
+    """Displayed citation index (the Sources list) -> where it is cited
+    (``lead``, ``bullet 2``, ``report ¶3``), web citations only."""
+
+
+def _point_counts(points: Sequence[Point]) -> dict[str, int]:
+    counts = {"web": 0, "mixed": 0, "feed": 0}
+    for p in points:
+        counts[p.provenance] += 1
+    counts["total"] = len(points)
+    return counts
+
+
 @dataclass
 class PublishedStory:
     """A published story as one profile sees it (``members`` from its sources only)."""
@@ -243,11 +289,51 @@ class PublishedStory:
             ),
         }
 
+    @property
+    def enrichment(self) -> EnrichmentSummary | None:
+        """Provenance summary, or None unless the story has at least one numbered
+        (non-link-only) web-search member."""
+        web = [m for m in self.members if m.found_by_search and not m.link_only]
+        if not web:
+            return None
+        numbered = (
+            self.report.citations
+            if self.report is not None and self.report.citations
+            else (self.brief.citations if self.brief is not None else [])
+        )
+        index_of = {c.article_id: c.index for c in numbered}
+        cited_in: dict[int, list[str]] = {}
 
-def _citations(items: Sequence[dict]) -> list[Citation]:
+        def record(point: Point, place: str) -> None:
+            for c in point.citations:
+                if c.origin != "enrichment":
+                    continue
+                places = cited_in.setdefault(index_of.get(c.article_id, c.index), [])
+                if place not in places:
+                    places.append(place)
+
+        if self.brief is not None:
+            for point in self.brief.lead:
+                record(point, "lead")
+            for i, point in enumerate(self.brief.bullets, 1):
+                record(point, f"bullet {i}")
+        if self.report is not None:
+            for i, point in enumerate(self.report.paragraphs, 1):
+                record(point, f"report ¶{i}")
+        return EnrichmentSummary(
+            web_member_count=len(web),
+            web_publishers=list(dict.fromkeys(m.publisher or m.source for m in web)),
+            brief_points=_point_counts(self.brief.sentences if self.brief else []),
+            report_points=_point_counts(self.report.paragraphs if self.report else []),
+            cited_in=cited_in,
+        )
+
+
+def _citations(items: Sequence[dict], origins: dict[int, str]) -> list[Citation]:
     out = []
     for c in items:
         c = {**c, "publisher": c.get("publisher") or publisher_of(c["url"], c["source"])}
+        c["origin"] = origins.get(c["article_id"], "feed")
         out.append(Citation(**c))
     return out
 
@@ -260,10 +346,10 @@ def _points(items: Sequence[dict], citations: list[Citation]) -> list[Point]:
     ]
 
 
-def _brief(doc: dict | None) -> Brief | None:
+def _brief(doc: dict | None, origins: dict[int, str]) -> Brief | None:
     if not doc:
         return None
-    citations = _citations(doc.get("citations", []))
+    citations = _citations(doc.get("citations", []), origins)
     return Brief(
         lead=_points(doc.get("lead", []), citations),
         bullets=_points(doc.get("bullets", []), citations),
@@ -277,10 +363,10 @@ def _brief(doc: dict | None) -> Brief | None:
     )
 
 
-def _report(doc: dict | None) -> Report | None:
+def _report(doc: dict | None, origins: dict[int, str]) -> Report | None:
     if not doc:
         return None
-    citations = _citations(doc.get("citations", []))
+    citations = _citations(doc.get("citations", []), origins)
     return Report(
         state=doc["state"],
         reason=doc.get("reason"),
@@ -330,6 +416,7 @@ def load(view: StoryView, source_ids: Sequence[str] | None = None) -> PublishedS
         visible = [m for m in members if m in visible or m.found_by_search]
     if not visible:
         return None
+    origins = {m.id: m.origin for m in visible}
     lead = next((m for m in visible if not m.found_by_search), visible[0])
     rep = next((m for m in visible if m.id == doc.get("representative_id")), lead)
     image = doc.get("image")
@@ -348,8 +435,8 @@ def load(view: StoryView, source_ids: Sequence[str] | None = None) -> PublishedS
         image_url=image.get("url"),
         image=image,
         logo=doc.get("logo"),
-        brief=_brief(doc.get("brief")),
-        report=_report(doc.get("report")),
+        brief=_brief(doc.get("brief"), origins),
+        report=_report(doc.get("report"), origins),
         model=doc.get("model", ""),
         generated_at=_dt(doc.get("generated_at")),
         published_at=view.published_at,
@@ -369,6 +456,33 @@ def published_story(
 ) -> PublishedStory | None:
     row = session.execute(_published(session).where(Story.id == story_id)).first()
     return load(row.StoryView, source_ids) if row else None
+
+
+def pre_enrichment_brief(session: Session, story: PublishedStory) -> PublishedStory | None:
+    """The newest earlier view whose brief cites no web-search member — the "brief
+    before enrichment" comparison on the story page. Origins are resolved from that
+    version's own members; snippet fallback briefs don't qualify. None when the story
+    has no enrichment members or no qualifying earlier version."""
+    if story.enrichment is None:
+        return None
+    earlier = session.scalars(
+        select(StoryView)
+        .where(StoryView.story_id == story.story_id, StoryView.version < story.version)
+        .order_by(StoryView.version.desc())
+    )
+    for view in earlier:
+        doc = view.doc or {}
+        brief = doc.get("brief")
+        if not brief or brief.get("style") == "snippet":
+            continue
+        origins = {m.get("id"): m.get("origin") or "feed" for m in doc.get("members", [])}
+        cited = brief.get("citations") or []
+        if any(origins.get(c.get("article_id"), "feed") == "enrichment" for c in cited):
+            continue
+        loaded = load(view)
+        if loaded is not None and loaded.brief is not None:
+            return loaded
+    return None
 
 
 def resolve(session: Session, story_id: int) -> int | None:

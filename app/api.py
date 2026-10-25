@@ -127,11 +127,21 @@ class CitationOut(BaseModel):
         description="The aggregator feed it came through (`Hacker News`), shown as "
         '"via ..."; null for a publisher\'s own feed.',
     )
+    origin: Literal["feed", "enrichment"] = Field(
+        default="feed",
+        description="`feed`: a configured source; `enrichment`: found by web search for "
+        "this story.",
+    )
 
 
 class SummarySentenceOut(BaseModel):
     text: str
     citations: list[int] = Field(description="Indexes [n] of the sources this sentence cites.")
+    provenance: Literal["feed", "mixed", "web"] = Field(
+        default="feed",
+        description="`web`: every citation is an enrichment source; `mixed`: both kinds; "
+        "`feed`: feed sources only or uncited.",
+    )
 
 
 class SummaryOut(BaseModel):
@@ -148,6 +158,11 @@ class SummaryOut(BaseModel):
 class CitedTextOut(BaseModel):
     text: str
     citations: list[CitationOut] = Field(description="The sources this text cites.")
+    provenance: Literal["feed", "mixed", "web"] = Field(
+        default="feed",
+        description="`web`: every citation is an enrichment source; `mixed`: both kinds; "
+        "`feed`: feed sources only or uncited.",
+    )
 
 
 class BriefOut(BaseModel):
@@ -198,11 +213,16 @@ def _citation_out(c) -> CitationOut:
         url=c.url,
         publisher=c.publisher or c.source,
         via=c.via,
+        origin=c.origin if c.origin in ("feed", "enrichment") else "feed",
     )
 
 
 def _cited_out(point: views.Point) -> CitedTextOut:
-    return CitedTextOut(text=point.text, citations=[_citation_out(c) for c in point.citations])
+    return CitedTextOut(
+        text=point.text,
+        citations=[_citation_out(c) for c in point.citations],
+        provenance=point.provenance,
+    )
 
 
 def _brief_out(view: views.Brief | None) -> BriefOut | None:
@@ -246,7 +266,11 @@ def _summary_out(view: views.Brief | None) -> SummaryOut | None:
         text=view.marked_text,
         citations=[_citation_out(c) for c in view.citations],
         sentences=[
-            SummarySentenceOut(text=s.text, citations=[c.index for c in s.citations])
+            SummarySentenceOut(
+                text=s.text,
+                citations=[c.index for c in s.citations],
+                provenance=s.provenance,
+            )
             for s in view.sentences
         ],
         basis=view.basis,

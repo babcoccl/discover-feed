@@ -1,17 +1,33 @@
 {#- Generated text: each point followed by its [n] markers, linked to the cited article's raw URL. -#}
-{%- macro markers(citations) -%}
-{%- for c in citations %}<a href="{{ c.url }}" target="_blank" rel="noopener noreferrer" data-citation="{{ c.index }}" title="[{{ c.index }}] {{ c.publisher or c.source }}{% if c.via %} via {{ c.via }}{% endif %}: {{ c.headline }}" class="ml-0.5 align-super text-[0.7em] font-semibold text-sky-700 hover:underline dark:text-sky-400">[{{ c.index }}]</a>{% endfor -%}
+{#- ``provenance`` (opt-in): marks which points/sources came from web-search enrichment.
+    Pass it only on the story page of a story that has enrichment members — anything else
+    renders exactly as before. Citation styling for enrichment chips lives in story.html's
+    provenance <style> block, gated on [data-web-highlight="on"] so the page toggle needs
+    no server round trip. -#}
+{%- macro web_dot() -%}<span data-web-dot class="mr-px inline-block align-[-0.08em]" aria-hidden="true"><svg viewBox="0 0 12 12" class="h-[0.85em] w-[0.85em]" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"><circle cx="6" cy="6" r="4.7"/><path d="M1.3 6h9.4"/><path d="M6 1.3c2 2.6 2 6.8 0 9.4"/><path d="M6 1.3c-2 2.6-2 6.8 0 9.4"/></svg></span>{%- endmacro -%}
+
+{%- macro markers(citations, provenance=False) -%}
+{%- for c in citations %}<a href="{{ c.url }}" target="_blank" rel="noopener noreferrer" data-citation="{{ c.index }}"{% if provenance %} data-origin="{{ c.origin }}"{% endif %} title="[{{ c.index }}] {{ c.publisher or c.source }}{% if c.via %} via {{ c.via }}{% endif %}: {{ c.headline }}{% if provenance and c.origin == "enrichment" %} (found via web search){% endif %}" class="ml-0.5 align-super text-[0.7em] font-semibold text-sky-700 hover:underline dark:text-sky-400">{% if provenance and c.origin == "enrichment" %}{{ web_dot() }}{% endif %}[{{ c.index }}]</a>{% endfor -%}
 {%- endmacro -%}
 
-{%- macro point_text(point) -%}{{ point.text }}{{ markers(point.citations) }}{%- endmacro -%}
+{%- macro web_tag() -%}<span data-web-tag class="mr-1 inline-flex items-center rounded bg-amber-200 px-1 py-px align-[0.1em] text-[0.6rem] font-semibold uppercase tracking-wide text-amber-900 dark:bg-amber-900/60 dark:text-amber-200">web</span>{%- endmacro -%}
 
-{%- macro lead_text(brief) -%}
-{%- for sentence in brief.lead -%}{{ point_text(sentence) }}{% if not loop.last %} {% endif %}{%- endfor -%}
+{%- macro point_text(point, provenance=False) -%}
+{%- if provenance -%}
+{%- set prov = point.provenance -%}
+<span data-provenance="{{ prov }}"{% if prov == "web" %} aria-label="Added from web search" title="Added from web search. Based on the sources this sentence cites; it shows what the model cited, not a word-level diff."{% elif prov == "mixed" %} aria-label="Confirmed by web search" title="Confirmed by web search. Based on the sources this sentence cites; it shows what the model cited, not a word-level diff."{% endif %}>{% if prov == "web" %}{{ web_tag() }}{% endif %}{{ point.text }}{{ markers(point.citations, True) }}</span>
+{%- else -%}
+{{ point.text }}{{ markers(point.citations) }}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro lead_text(brief, provenance=False) -%}
+{%- for sentence in brief.lead -%}{{ point_text(sentence, provenance) }}{% if not loop.last %} {% endif %}{%- endfor -%}
 {%- endmacro -%}
 
 {#- Phase 4 name, kept for templates that still use it. -#}
-{%- macro summary_text(summary) -%}
-{%- for sentence in summary.sentences -%}{{ point_text(sentence) }}{% if not loop.last %} {% endif %}{%- endfor -%}
+{%- macro summary_text(summary, provenance=False) -%}
+{%- for sentence in summary.sentences -%}{{ point_text(sentence, provenance) }}{% if not loop.last %} {% endif %}{%- endfor -%}
 {%- endmacro -%}
 
 {%- macro summary_byline(summary) -%}
