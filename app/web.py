@@ -365,6 +365,7 @@ def story_page(
             **_report_context(request, story),
             **_chat_context(request, session, story.story_id, p),
             **_perspectives_context(request, session, story.story_id, profile),
+            prior=views.pre_enrichment_brief(session, story),
             context_items=context_items,
             context_detail=(detail_row.content_json if detail_row is not None else None),
             can_block=is_admin(request) and _enricher(request) is not None,
@@ -461,6 +462,7 @@ def _report_context(request: Request, story, state: str | None = None) -> dict:
         "report_state": state or (report.state if report is not None else "off"),
         "can_regenerate": _worker(request) is not None,
         "p": request.query_params.get("p"),
+        "enrichment": story.enrichment if story is not None else None,
     }
 
 

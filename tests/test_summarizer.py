@@ -372,6 +372,7 @@ def test_api_summary_shape_and_citation_urls(demo_client) -> None:
             "url",
             "publisher",
             "via",
+            "origin",
         }
         assert citation["url"] in members  # the raw Article.url
         assert members[citation["url"]]["source"] == citation["source"]

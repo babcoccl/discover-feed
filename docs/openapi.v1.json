@@ -636,6 +636,16 @@
             "title": "Index",
             "type": "integer"
           },
+          "origin": {
+            "default": "feed",
+            "description": "`feed`: a configured source; `enrichment`: found by web search for this story.",
+            "enum": [
+              "feed",
+              "enrichment"
+            ],
+            "title": "Origin",
+            "type": "string"
+          },
           "publisher": {
             "default": "",
             "description": "The primary label: the article URL's domain (e.g. `ai.meta.com`).",
@@ -682,6 +692,17 @@
             },
             "title": "Citations",
             "type": "array"
+          },
+          "provenance": {
+            "default": "feed",
+            "description": "`web`: every citation is an enrichment source; `mixed`: both kinds; `feed`: feed sources only or uncited.",
+            "enum": [
+              "feed",
+              "mixed",
+              "web"
+            ],
+            "title": "Provenance",
+            "type": "string"
           },
           "text": {
             "title": "Text",
