@@ -1,0 +1,41 @@
+---
+import { getCollection } from 'astro:content';
+import Base from '../../layouts/Base.astro';
+import { CHAPTERS } from '../../lib/prs';
+
+const posts = (await getCollection('posts', ({ data }) => !data.draft))
+  .sort((a, b) => a.data.pubDate.getTime() - b.data.pubDate.getTime());
+const tags = [...new Set(posts.flatMap((p) => p.data.tags))].sort();
+---
+<Base title="All posts" description="Every post in the discover-feed build log, by chapter and tag.">
+  <h1>Archive</h1>
+
+  <nav aria-label="Filter by chapter">
+    <p class="chapter-label">Chapters</p>
+    <div class="filters">
+      {CHAPTERS.map((c) => <a class="tag" href={`/chapters/${c.n}`}>Ch {c.n}: {c.title}</a>)}
+    </div>
+  </nav>
+
+  {tags.length > 0 && (
+    <nav aria-label="Filter by tag">
+      <p class="chapter-label">Tags</p>
+      <div class="filters">
+        {tags.map((t) => <a class="tag" href={`/tags/${t}`}>{t}</a>)}
+      </div>
+    </nav>
+  )}
+
+  <ul class="post-list">
+    {posts.map((post) => (
+      <li>
+        <a class="post-title" href={`/posts/${post.id}`}>{post.data.title}</a>
+        <p class="post-meta">
+          {post.data.chapter ? <>Chapter {post.data.chapter} · </> : null}
+          {post.data.pubDate.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' })}
+        </p>
+        <p>{post.data.description}</p>
+      </li>
+    ))}
+  </ul>
+</Base>

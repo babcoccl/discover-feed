@@ -1,0 +1,52 @@
+---
+import '../styles/global.css';
+
+interface Props {
+  title: string;
+  description?: string;
+}
+
+const { title, description = 'A candid engineering log of building a personal news aggregator with a coding agent.' } = Astro.props;
+const canonical = new URL(Astro.url.pathname, Astro.site);
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    <link rel="alternate" type="application/rss+xml" title="discover-feed build log" href="/rss.xml" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>📰</text></svg>" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header">
+      <div class="container">
+        <a class="site-title" href="/">discover-feed build log</a>
+        <nav class="site-nav" aria-label="Main">
+          <a href="/posts">Posts</a>
+          <a href="/timeline">Timeline</a>
+          <a href="/about">About</a>
+          <a href={Astro.site ? 'https://github.com/babcoccl/discover-feed' : '#'} rel="noopener">Repo</a>
+        </nav>
+      </div>
+    </header>
+    <main id="main">
+      <div class="container">
+        <slot />
+      </div>
+    </main>
+    <footer class="site-footer">
+      <div class="container">
+        <p>
+          Built with <a href="https://astro.build" rel="noopener">Astro</a>.
+          Every claim traces to merged pull requests in
+          <a href="https://github.com/babcoccl/discover-feed" rel="noopener">babcoccl/discover-feed</a>
+          or the author's own notes.
+        </p>
+      </div>
+    </footer>
+  </body>
+</html>

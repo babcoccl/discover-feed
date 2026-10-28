@@ -1,0 +1,34 @@
+---
+import { prsFor, prUrl, fmtDate } from '../lib/prs';
+
+interface Props {
+  prs: number[];
+}
+
+const rows = prsFor(Astro.props.prs);
+---
+{rows.length > 0 && (
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">PR</th>
+        <th scope="col">Title</th>
+        <th scope="col">Merged</th>
+        <th scope="col">Changes</th>
+      </tr>
+    </thead>
+    <tbody>
+      {rows.map((p) => (
+        <tr>
+          <td class="num"><a href={prUrl(p.number)} rel="noopener">#{p.number}</a></td>
+          <td>
+            {p.title}
+            {!p.merged && <> <span class="badge-unmerged">not merged</span></>}
+          </td>
+          <td class="num">{p.merged ? fmtDate(p.merged_at) : '—'}</td>
+          <td class="num">+{p.additions} / −{p.deletions}</td>
+        </tr>
+      ))}
+    </tbody>
+  </table>
+)}

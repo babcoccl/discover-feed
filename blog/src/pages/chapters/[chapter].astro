@@ -1,0 +1,26 @@
+---
+import { getCollection } from 'astro:content';
+import Base from '../../layouts/Base.astro';
+import { CHAPTERS } from '../../lib/prs';
+
+export function getStaticPaths() {
+  return CHAPTERS.map((c) => ({ params: { chapter: String(c.n) }, props: { chapter: c } }));
+}
+
+const { chapter } = Astro.props;
+const posts = (await getCollection('posts', ({ data }) => !data.draft && data.chapter === chapter.n))
+  .sort((a, b) => a.data.pubDate.getTime() - b.data.pubDate.getTime());
+---
+<Base title={`Chapter ${chapter.n}: ${chapter.title}`} description={`Posts in chapter ${chapter.n} of the discover-feed build log.`}>
+  <p class="post-meta"><a href="/posts">← Archive</a></p>
+  <h1>Chapter {chapter.n}: {chapter.title}</h1>
+  <p class="post-meta">{chapter.dates}</p>
+  <ul class="post-list">
+    {posts.map((post) => (
+      <li>
+        <a class="post-title" href={`/posts/${post.id}`}>{post.data.title}</a>
+        <p>{post.data.description}</p>
+      </li>
+    ))}
+  </ul>
+</Base>
