@@ -1,11 +1,19 @@
 ---
 import Base from '../layouts/Base.astro';
+import BuiltByDevin from '../components/BuiltByDevin.astro';
 import { stats } from '../lib/prs';
 
 const s = stats();
 ---
 <Base title="About" description="What this site is and how the numbers in it were produced.">
   <h1>About</h1>
+  <p>
+    <BuiltByDevin />
+  </p>
+  <p>
+    Most of discover-feed was built through Devin sessions; this site tells that
+    story — see the <a href="/timeline">timeline</a>.
+  </p>
   <p>
     This is the build log of
     <a href="https://github.com/babcoccl/discover-feed" rel="noopener">discover-feed</a>,
