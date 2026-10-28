@@ -1,5 +1,7 @@
 # discover-feed
 
+[![Built by Devin](https://raw.githubusercontent.com/club-cog/built-by-devin/main/badges/built-by-devin.svg)](https://devin.ai)
+
 A personal "Discover-style" news feed: profiles with topics, sources, keywords,
 alert rules and an OpenAI-compatible LLM endpoint. It ingests RSS/Atom and API
 sources, clusters articles into stories, enriches them with web search, and
