@@ -1,5 +1,6 @@
 ---
 import '../styles/global.css';
+import BuiltByDevin from '../components/BuiltByDevin.astro';
 
 interface Props {
   title: string;
@@ -46,6 +47,7 @@ const canonical = new URL(Astro.url.pathname, Astro.site);
           <a href="https://github.com/babcoccl/discover-feed" rel="noopener">babcoccl/discover-feed</a>
           or the author's own notes.
         </p>
+        <p><BuiltByDevin /></p>
       </div>
     </footer>
   </body>
