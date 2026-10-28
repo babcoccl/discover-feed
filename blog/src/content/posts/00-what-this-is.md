@@ -1,5 +1,5 @@
 ---
-title: "What this is and how it was built"
+title: "How I built an open source News Discovery and Summarization feed, with Devin.ai, for $200"
 description: "A personal news aggregator written almost entirely by a coding agent — 44 pull requests in 18 days. This site is the engineering log."
 pubDate: 2026-10-26T10:00:00Z
 prs: []
