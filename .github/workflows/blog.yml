@@ -1,0 +1,28 @@
+name: blog
+
+on:
+  pull_request:
+    paths:
+      - 'blog/**'
+      - '.github/workflows/blog.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: blog
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: blog/.node-version
+          cache: npm
+          cache-dependency-path: blog/package-lock.json
+
+      - run: npm ci
+      - run: npx astro check
+      - run: npm run build
+      - name: Leak scan (secrets, private IPs, raw PR data in dist/)
+        run: npm run scan

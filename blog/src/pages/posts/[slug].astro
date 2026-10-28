@@ -1,0 +1,37 @@
+---
+import { getCollection, render } from 'astro:content';
+import Base from '../../layouts/Base.astro';
+import PrTable from '../../components/PrTable.astro';
+import { CHAPTERS } from '../../lib/prs';
+
+export async function getStaticPaths() {
+  const posts = await getCollection('posts', ({ data }) => !data.draft);
+  return posts.map((post) => ({ params: { slug: post.id }, props: { post } }));
+}
+
+const { post } = Astro.props;
+const { Content } = await render(post);
+const chapter = post.data.chapter ? CHAPTERS.find((c) => c.n === post.data.chapter) : undefined;
+---
+<Base title={post.data.title} description={post.data.description}>
+  <article class="prose">
+    <p class="post-meta">
+      {chapter ? <><a href={`/chapters/${chapter.n}`}>Chapter {chapter.n}: {chapter.title}</a> · </> : null}
+      Published {post.data.pubDate.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' })}
+      {post.data.updatedDate ? <> · Updated {post.data.updatedDate.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' })}</> : null}
+    </p>
+    <h1>{post.data.title}</h1>
+    <Content />
+    {post.data.prs.length > 0 && (
+      <section aria-label="Pull requests covered in this post">
+        <h2>Pull requests</h2>
+        <PrTable prs={post.data.prs} />
+      </section>
+    )}
+    {post.data.tags.length > 0 && (
+      <p>
+        {post.data.tags.map((t) => <a class="tag" href={`/tags/${t}`}>{t}</a>)}
+      </p>
+    )}
+  </article>
+</Base>

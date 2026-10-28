@@ -1,0 +1,46 @@
+---
+import Base from '../layouts/Base.astro';
+import { allPrs, prUrl, fmtDate, prChapter, CHAPTERS } from '../lib/prs';
+
+const byChapter = new Map<number, typeof allPrs>();
+for (const c of CHAPTERS) byChapter.set(c.n, []);
+for (const pr of allPrs) {
+  byChapter.get(prChapter(pr.number))!.push(pr);
+}
+for (const list of byChapter.values()) {
+  list.sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
+}
+---
+<Base title="Timeline" description="Every pull request that built discover-feed, grouped by chapter in date order.">
+  <h1>Timeline</h1>
+  <p>All {allPrs.length} pull requests in date order. Generated from committed build data.</p>
+
+  {CHAPTERS.map((c) => (
+    <section>
+      <h2 id={`ch${c.n}`}>Chapter {c.n}: {c.title} <span class="post-meta">({c.dates})</span></h2>
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">PR</th>
+            <th scope="col">Title</th>
+            <th scope="col">Merged</th>
+            <th scope="col">Changes</th>
+          </tr>
+        </thead>
+        <tbody>
+          {byChapter.get(c.n)!.map((p) => (
+            <tr>
+              <td class="num"><a href={prUrl(p.number)} rel="noopener">#{p.number}</a></td>
+              <td>
+                {p.title}
+                {!p.merged && <> <span class="badge-unmerged">not merged</span></>}
+              </td>
+              <td class="num">{p.merged ? fmtDate(p.merged_at) : '—'}</td>
+              <td class="num">+{p.additions} / −{p.deletions}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  ))}
+</Base>

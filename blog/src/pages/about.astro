@@ -1,0 +1,37 @@
+---
+import Base from '../layouts/Base.astro';
+import { stats } from '../lib/prs';
+
+const s = stats();
+---
+<Base title="About" description="What this site is and how the numbers in it were produced.">
+  <h1>About</h1>
+  <p>
+    This is the build log of
+    <a href="https://github.com/babcoccl/discover-feed" rel="noopener">discover-feed</a>,
+    a personal "Discover-style" news reader: profiles with topics and sources, RSS/Atom
+    and API ingestion, article clustering into stories, LLM-written briefs and reports,
+    web-search enrichment, alerts, and a public API. The stack is Python 3.12, FastAPI,
+    SQLAlchemy + SQLite, APScheduler, Jinja2 + HTMX + Tailwind, with a local
+    OpenAI-compatible LLM (Qwen3.5 9B on llama.cpp).
+  </p>
+  <p>
+    Almost the entire application was written by Devin, a coding agent, across
+    {s.total} pull requests over {s.days} days — {s.merged} merged for
+    +{s.additions.toLocaleString('en-US')} / −{s.deletions.toLocaleString('en-US')} lines.
+    Each session was driven by a written spec: a context paragraph, numbered tasks,
+    acceptance criteria and non-goals, ending with "open a PR and stop."
+  </p>
+  <p>
+    This site is itself a Devin session's output: Astro, static output, generated
+    timeline from the repository's PR metadata, hosted on Cloudflare Pages. Everything
+    stated in a post traces to a merged PR (linked by number), a file in the repo, or
+    the author's explicit notes. Nothing here publishes session transcripts, private
+    addresses, or credentials — a leak scan runs in CI on every change to
+    <code>blog/</code>.
+  </p>
+  <p>
+    Tone on purpose: candid engineering log, not marketing. Where something failed,
+    the post says so and cites the fix.
+  </p>
+</Base>

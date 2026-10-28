@@ -1,0 +1,51 @@
+---
+import { getCollection } from 'astro:content';
+import Base from '../layouts/Base.astro';
+import { stats, CHAPTERS } from '../lib/prs';
+
+const posts = (await getCollection('posts', ({ data }) => !data.draft))
+  .sort((a, b) => b.data.pubDate.getTime() - a.data.pubDate.getTime());
+const s = stats();
+
+const fmt = (n: number) => n.toLocaleString('en-US');
+---
+<Base title="discover-feed build log" description="How a personal news aggregator got built in 44 pull requests over 18 days, one Devin session at a time.">
+  <h1>Building a news aggregator, one agent session at a time</h1>
+  <p>
+    Between October 7 and October 25, 2026, {s.total} pull requests built
+    <a href="https://github.com/babcoccl/discover-feed" rel="noopener">discover-feed</a>:
+    a personal Discover-style news reader in FastAPI, SQLite and HTMX, fed by RSS and
+    API sources, summarized by a local LLM, enriched by web search. Nearly every line
+    was written by a coding agent working from written specs. This is the engineering
+    log of how it went — what shipped, what broke, and what we learned.
+  </p>
+
+  <div class="stats-strip" role="region" aria-label="Build statistics">
+    <div class="stat"><div class="num">{s.total}</div><div class="lbl">pull requests</div></div>
+    <div class="stat"><div class="num">{s.merged}</div><div class="lbl">merged</div></div>
+    <div class="stat"><div class="num">{s.days}</div><div class="lbl">days</div></div>
+    <div class="stat"><div class="num">+{fmt(s.additions)}</div><div class="lbl">lines added</div></div>
+    <div class="stat"><div class="num">−{fmt(s.deletions)}</div><div class="lbl">lines removed</div></div>
+  </div>
+
+  <h2>Latest posts</h2>
+  <ul class="post-list">
+    {posts.map((post) => (
+      <li>
+        <a class="post-title" href={`/posts/${post.id}`}>{post.data.title}</a>
+        <p class="post-meta">
+          {post.data.chapter ? <>Chapter {post.data.chapter} · </> : null}
+          {post.data.pubDate.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' })}
+        </p>
+        <p>{post.data.description}</p>
+      </li>
+    ))}
+  </ul>
+
+  <h2>Chapters</h2>
+  <ol>
+    {CHAPTERS.map((c) => (
+      <li><a href={`/chapters/${c.n}`}>{c.title}</a> <span class="post-meta">({c.dates})</span></li>
+    ))}
+  </ol>
+</Base>
